@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "An Electron application with Svelte and TypeScript",
   "main": "./out/main/index.js",
-  "author": "example.com",
+  "author": "Griffin Page",
   "homepage": "https://electron-vite.org",
   "scripts": {
     "format": "prettier --plugin prettier-plugin-svelte --write .",
@@ -18,12 +18,18 @@
     "build:unpack": "npm run build && electron-builder --dir",
     "build:win": "npm run build && electron-builder --win",
     "build:mac": "npm run build && electron-builder --mac",
-    "build:linux": "npm run build && electron-builder --linux"
+    "build:linux": "npm run build && electron-builder --linux",
+    "backend:setup": "pip install -r backend/requirements.txt",
+    "backend:start": "cd backend && python app.py"
   },
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.2",
     "@electron-toolkit/utils": "^4.0.0",
-    "electron-updater": "^6.3.9"
+    "electron-updater": "^6.3.9",
+    "cytoscape": "^3.30.2",
+    "cytoscape-fcose": "^2.2.0",
+    "cytoscape-cxtmenu": "^3.5.0",
+    "cytoscape-expand-collapse": "^4.1.0"
   },
   "devDependencies": {
     "@electron-toolkit/eslint-config-prettier": "^3.0.0",
