@@ -13,12 +13,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Import your existing modules
-from util.util import load_audio, crop_audio
-from util.platform import get_torch_device_type
-from dance_diffusion.api import RequestHandler, Request, RequestType, ModelType
-from diffusion_library.sampler import SamplerType
-from diffusion_library.scheduler import SchedulerType
-from kgui.ddkg import DDKnowledgeGraph
+from param_graph.util import load_audio
+from param_graph.graph import ParameterGraph
 
 app = Flask(__name__)
 CORS(app)
@@ -28,14 +24,10 @@ PROJECT_DIR = Path("projects")
 PROJECT_DIR.mkdir(exist_ok=True)
 
 # Global state
-device_type_accelerator = get_torch_device_type()
+device_type_accelerator = "cpu"
 device_accelerator = torch.device(device_type_accelerator)
-request_handler = RequestHandler(
-    device_accelerator, 
-    optimize_memory_use=False, 
-    use_autocast=True
-)
-ddkg: Optional[DDKnowledgeGraph] = None
+
+gen_graph: Optional[ParameterGraph] = None
 
 # Argument type mappings
 ARG_TYPES = {
@@ -72,7 +64,7 @@ def health_check():
     return jsonify({
         "status": "healthy",
         "device": str(device_accelerator),
-        "project_loaded": ddkg is not None
+        "project_loaded": param_graph is not None
     })
 
 # --------------------
@@ -82,7 +74,7 @@ def health_check():
 @app.route("/load", methods=["POST"])
 def load_project():
     """Load a project"""
-    global ddkg
+    global param_graph
     
     try:
         data = request.get_json()
@@ -100,7 +92,7 @@ def load_project():
             # Create new project
             project_path.mkdir(parents=True, exist_ok=True)
         
-        ddkg = DDKnowledgeGraph(str(project_path))
+        param_graph = ParameterGraph(str(project_path))
         
         return jsonify({
             "message": f"Project loaded: {project_name}",
@@ -115,10 +107,10 @@ def load_project():
 @app.route("/project", methods=["GET"])
 def get_project():
     """Get current project info"""
-    if ddkg is not None:
+    if param_graph is not None:
         return jsonify({
             "message": "success",
-            "project_name": ddkg.root.name,
+            "project_name": param_graph.root.name,
             "success": True
         })
     else:
@@ -152,11 +144,11 @@ def list_projects():
 @app.route("/graph", methods=["GET"])
 def get_graph():
     """Get graph data in batch mode"""
-    if ddkg is None:
+    if param_graph is None:
         return jsonify({"error": "No project loaded"}), 400
     
     try:
-        graph_data = ddkg.to_json(mode='batch')
+        graph_data = param_graph.to_json(mode='batch')
         return jsonify({
             "message": "success",
             "graph_data": graph_data,
@@ -169,13 +161,13 @@ def get_graph():
 @app.route("/graph-tsne", methods=["GET"])
 def get_tsne_graph():
     """Get graph data in cluster mode"""
-    if ddkg is None:
+    if param_graph is None:
         return jsonify({"error": "No project loaded"}), 400
     
     try:
         # Update t-SNE embeddings if needed
-        ddkg.update_tsne()
-        graph_data = ddkg.to_json(mode='cluster')
+        param_graph.update_tsne()
+        graph_data = param_graph.to_json(mode='cluster')
         return jsonify({
             "message": "success",
             "graph_data": graph_data,
@@ -192,7 +184,7 @@ def get_tsne_graph():
 @app.route("/import-model", methods=["POST"])
 def import_model():
     """Import a model"""
-    if ddkg is None:
+    if param_graph is None:
         return jsonify({"error": "No project loaded"}), 400
     
     try:
@@ -203,8 +195,8 @@ def import_model():
             return jsonify({"error": "model_path is required"}), 400
         
         # Import the model
-        ddkg.import_model(model_path)
-        ddkg.save()
+        param_graph.import_model(model_path)
+        param_graph.save()
         
         return jsonify({
             "message": "Model imported successfully",
@@ -218,7 +210,7 @@ def import_model():
 @app.route("/generate", methods=["POST"])
 def generate():
     """Generate audio"""
-    if ddkg is None:
+    if param_graph is None:
         return jsonify({"error": "No project loaded"}), 400
     
     try:
@@ -236,6 +228,7 @@ def generate():
         if not model_name:
             return jsonify({"error": "model_name is required"}), 400
         
+        '''
         # Create generation request
         generation_request = Request(
             request_type=RequestType.GENERATION,
@@ -253,7 +246,7 @@ def generate():
         
         # Log results to knowledge graph
         for i, result in enumerate(results):
-            ddkg.log_inference(
+            param_graph.log_inference(
                 mode='generation',
                 model_name=model_name,
                 seed=seed + i if seed else None,
@@ -264,13 +257,14 @@ def generate():
                 chunk_size=chunk_size
             )
         
-        ddkg.save()
+        param_graph.save()
         
         return jsonify({
             "message": "Generation completed",
             "samples_generated": len(results),
             "success": True
         })
+        '''
         
     except Exception as e:
         logger.error(f"Generation failed: {e}")
@@ -279,7 +273,7 @@ def generate():
 @app.route("/variation", methods=["POST"])
 def variation():
     """Create audio variation"""
-    if ddkg is None:
+    if param_graph is None:
         return jsonify({"error": "No project loaded"}), 400
     
     try:
@@ -298,10 +292,10 @@ def variation():
             return jsonify({"error": "source_name is required"}), 400
         
         # Load source audio
-        source_path = ddkg.get_path_from_name(source_name, relative=False)
+        source_path = param_graph.get_path_from_name(source_name, relative=False)
         source_audio = load_audio(device_accelerator, str(source_path), 48000)
         
-        # Create variation request
+        '''# Create variation request
         variation_request = Request(
             request_type=RequestType.VARIATION,
             model_path=model_name or "default",
@@ -318,7 +312,7 @@ def variation():
         
         # Log results to knowledge graph
         for i, result in enumerate(results):
-            ddkg.log_inference(
+            param_graph.log_inference(
                 mode='variation',
                 model_name=model_name or "default",
                 source_name=source_name,
@@ -330,13 +324,13 @@ def variation():
                 batch_size=batch_size
             )
         
-        ddkg.save()
+        param_graph.save()
         
         return jsonify({
             "message": "Variation completed",
             "samples_generated": len(results),
             "success": True
-        })
+        })'''
         
     except Exception as e:
         logger.error(f"Variation failed: {e}")
@@ -349,7 +343,7 @@ def variation():
 @app.route("/add-external-source", methods=["POST"])
 def add_external_source():
     """Add external audio source"""
-    if ddkg is None:
+    if param_graph is None:
         return jsonify({"error": "No project loaded"}), 400
     
     try:
@@ -360,8 +354,8 @@ def add_external_source():
             return jsonify({"error": "source_path is required"}), 400
         
         # Add external source
-        ddkg.add_external_source(source_path)
-        ddkg.save()
+        param_graph.add_external_source(source_path)
+        param_graph.save()
         
         return jsonify({
             "message": "External source added successfully",
@@ -375,7 +369,7 @@ def add_external_source():
 @app.route("/rescan-source", methods=["POST"])
 def rescan_source():
     """Rescan external source"""
-    if ddkg is None:
+    if param_graph is None:
         return jsonify({"error": "No project loaded"}), 400
     
     try:
@@ -386,8 +380,8 @@ def rescan_source():
             return jsonify({"error": "source_name is required"}), 400
         
         # Rescan external source
-        ddkg.scan_external_source(source_name)
-        ddkg.save()
+        param_graph.scan_external_source(source_name)
+        param_graph.save()
         
         return jsonify({
             "message": "Source rescanned successfully",
@@ -405,11 +399,11 @@ def rescan_source():
 @app.route("/audio/<path:filename>", methods=["GET"])
 def serve_audio(filename):
     """Serve audio files"""
-    if ddkg is None:
+    if param_graph is None:
         return jsonify({"error": "No project loaded"}), 400
     
     try:
-        audio_path = ddkg.get_path_from_name(filename, relative=False)
+        audio_path = param_graph.get_path_from_name(filename, relative=False)
         if not audio_path or not Path(audio_path).exists():
             return jsonify({"error": "Audio file not found"}), 404
         
@@ -422,7 +416,7 @@ def serve_audio(filename):
 @app.route("/export", methods=["POST"])
 def export_audio():
     """Export audio files"""
-    if ddkg is None:
+    if param_graph is None:
         return jsonify({"error": "No project loaded"}), 400
     
     try:
@@ -435,9 +429,9 @@ def export_audio():
         
         # Export audio files
         if len(names) == 1:
-            export_path = ddkg.export_single(names[0], export_name)
+            export_path = param_graph.export_single(names[0], export_name)
         else:
-            export_path = ddkg.export_batch(names, export_name)
+            export_path = param_graph.export_batch(names, export_name)
         
         return jsonify({
             "message": "Export completed",
@@ -456,7 +450,7 @@ def export_audio():
 @app.route("/update-element", methods=["POST"])
 def update_element():
     """Update element attributes"""
-    if ddkg is None:
+    if param_graph is None:
         return jsonify({"error": "No project loaded"}), 400
     
     try:
@@ -468,8 +462,8 @@ def update_element():
             return jsonify({"error": "name is required"}), 400
         
         # Update element
-        ddkg.update_element(element_name, attributes)
-        ddkg.save()
+        param_graph.update_element(element_name, attributes)
+        param_graph.save()
         
         return jsonify({
             "message": "Element updated successfully",

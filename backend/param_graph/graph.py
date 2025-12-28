@@ -10,7 +10,7 @@ from .util import *
 
 DEFAULT_SR = 48000
 
-class DDKnowledgeGraph:
+class ParameterGraph:
     def __init__(self, data_path, backend=None, relative=True) -> None:
         self.root = Path(data_path)
         self.export_target = export

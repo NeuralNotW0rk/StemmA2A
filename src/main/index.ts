@@ -12,7 +12,7 @@ let pythonBackend: ChildProcess | null = null
 function startPythonBackend(): Promise<void> {
   return new Promise((resolve, reject) => {
     // Start the Flask backend server
-    pythonBackend = spawn('python', ['backend/app.py'], {
+    pythonBackend = spawn('python', ['StemmA2A/backend/app.py'], {
       cwd: join(__dirname, '../../..'),
       stdio: ['inherit', 'inherit', 'inherit']
     })

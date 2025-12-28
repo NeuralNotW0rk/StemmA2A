@@ -2,7 +2,7 @@ import os
 import torchaudio
 
 # subdirectories
-data_file = "ddkg.json"
+data_file = "evkg.json"
 model_dir = "models"
 audio_dir = "audio"
 backups = "backup"
