@@ -19,8 +19,7 @@
     "build:win": "npm run build && electron-builder --win",
     "build:mac": "npm run build && electron-builder --mac",
     "build:linux": "npm run build && electron-builder --linux",
-    "backend:setup": "python -m venv backend/.venv && backend\\.venv\\Scripts\\python.exe -m pip install --upgrade pip && backend\\.venv\\Scripts\\pip.exe install -r backend/requirements.txt",
-    "backend:configure": "node scripts/configure-backend.js"
+    "backend:setup": "py -m venv backend/.venv && backend\\.venv\\Scripts\\python.exe -m pip install --upgrade pip && backend\\.venv\\Scripts\\pip.exe install -r backend/requirements.txt"
   },
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.2",

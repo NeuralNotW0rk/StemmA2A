@@ -25,17 +25,24 @@ function startPythonBackend(): Promise<void> {
       stdio: ['pipe', 'pipe', 'pipe'] // Use pipes to capture output
     });
 
-    pythonBackend.stdout?.on('data', (data) => {
-      console.log(`Python Backend: ${data}`);
-      // Resolve the promise when the backend indicates it's ready
-      if (data.toString().includes('Running on http://127.0.0.1:5000')) {
+    let backendReady = false;
+    const handleData = (data: Buffer) => {
+      const message = data.toString();
+      if (!backendReady && message.includes('Running on http://127.0.0.1:5000')) {
+        backendReady = true;
         console.log('Python backend started');
         resolve();
       }
+    }
+
+    pythonBackend.stdout?.on('data', (data) => {
+      console.log(`Python Backend: ${data}`);
+      handleData(data)
     });
 
     pythonBackend.stderr?.on('data', (data) => {
       console.error(`Python Backend Error: ${data}`);
+      handleData(data)
     });
 
     pythonBackend.on('error', (error) => {
@@ -119,7 +126,7 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('loadProjectAndGetData', async (_event, projectPath) => {
     // 1. Load the project
-    const postData = JSON.stringify({ path: projectPath })
+    const postData = JSON.stringify({ project_path: projectPath })
     const postOptions = {
       hostname: '127.0.0.1',
       port: 5000,
