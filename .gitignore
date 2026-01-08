@@ -5,3 +5,6 @@ out
 .eslintcache
 *.log*
 *.pyc
+
+# Python virtual environment
+backend/.venv

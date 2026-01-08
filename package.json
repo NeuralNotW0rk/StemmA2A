@@ -19,8 +19,8 @@
     "build:win": "npm run build && electron-builder --win",
     "build:mac": "npm run build && electron-builder --mac",
     "build:linux": "npm run build && electron-builder --linux",
-    "backend:setup": "pip install -r backend/requirements.txt",
-    "backend:start": "cd backend && python app.py"
+    "backend:setup": "python -m venv backend/.venv && backend\\.venv\\Scripts\\python.exe -m pip install --upgrade pip && backend\\.venv\\Scripts\\pip.exe install -r backend/requirements.txt",
+    "backend:configure": "node scripts/configure-backend.js"
   },
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.2",
@@ -29,7 +29,8 @@
     "cytoscape": "^3.30.2",
     "cytoscape-fcose": "^2.2.0",
     "cytoscape-cxtmenu": "^3.5.0",
-    "cytoscape-expand-collapse": "^4.1.0"
+    "cytoscape-expand-collapse": "^4.1.0",
+    "electron-store": "^8.1.0"
   },
   "devDependencies": {
     "@electron-toolkit/eslint-config-prettier": "^3.0.0",

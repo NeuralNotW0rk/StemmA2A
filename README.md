@@ -8,6 +8,21 @@ An Electron application with Svelte and TypeScript
 
 ## Project Setup
 
+### Backend Setup
+
+1. **Configure Compute Backend**:
+   Before installing the dependencies, you need to configure the compute backend for PyTorch. Run the following command:
+   ```bash
+   $ npm run backend:configure
+   ```
+   This will guide you through selecting the appropriate backend for your hardware (e.g., CPU, CUDA).
+
+2. **Install Dependencies**:
+   After configuring the backend, you can set up the Python environment and install the dependencies:
+   ```bash
+   $ npm run backend:setup
+   ```
+
 ### Install
 
 ```bash

@@ -1,26 +1,39 @@
 <script lang="ts">
-  import Versions from './components/Versions.svelte'
-  import electronLogo from './assets/electron.svg'
+  import AudioGraph from './components/AudioGraph.svelte'
+  import Toolbar from './components/Toolbar.svelte'
 
-  const ipcHandle = (): void => window.electron.ipcRenderer.send('ping')
+  let graphData: any = null
+  let currentProject: string | null = null
+
+  async function handleProjectLoad(event: CustomEvent<{ projectPath: string }>): Promise<void> {
+    const projectPath = event.detail.projectPath
+    try {
+      graphData = await window.api.loadProjectAndGetData(projectPath)
+      currentProject = projectPath
+      await window.api.addRecentProject(projectPath)
+    } catch (error) {
+      console.error('Failed to load project:', error)
+      // Optionally, show an error message to the user
+    }
+  }
 </script>
 
-<img alt="logo" class="logo" src={electronLogo} />
-<div class="creator">Powered by electron-vite</div>
-<div class="text">
-  Build an Electron app with
-  <span class="svelte">Svelte</span>
-  and
-  <span class="ts">TypeScript</span>
-</div>
-<p class="tip">Please try pressing <code>F12</code> to open the devTool</p>
-<div class="actions">
-  <div class="action">
-    <a href="https://electron-vite.org/" target="_blank" rel="noreferrer">Documentation</a>
-  </div>
-  <div class="action">
-    <!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions a11y-missing-attribute-->
-    <a target="_blank" rel="noreferrer" on:click={ipcHandle}>Send IPC</a>
-  </div>
-</div>
-<Versions />
+<main class="container">
+  <Toolbar on:projectLoad={handleProjectLoad} {currentProject} />
+  <AudioGraph {graphData} />
+</main>
+
+<style>
+  .container {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+  }
+
+  :global(body) {
+    overflow: hidden;
+    background-image: url('./assets/wavy-lines.svg');
+    background-size: cover;
+    user-select: none;
+  }
+</style>

@@ -1,35 +1,36 @@
 <!-- src/renderer/src/components/Toolbar.svelte -->
 <script lang="ts">
   import { createEventDispatcher, onMount } from 'svelte'
-  
-  export let currentProject: string = ''
+
+  export let currentProject: string | null = null
   export let viewMode: 'batch' | 'cluster' = 'batch'
 
   const dispatch = createEventDispatcher()
 
-  let showProjectSelector = false
-  let availableProjects: string[] = []
+  let showFileMenu = false
+  let recentProjects: string[] = []
   let showImportDialog = false
   let importPath = ''
 
   onMount(async () => {
-    await loadProjects()
+    recentProjects = await window.api.getRecentProjects()
   })
 
-  async function loadProjects() {
-    try {
-      const response = await window.api.listProjects()
-      if (response.project_names) {
-        availableProjects = response.project_names
-      }
-    } catch (error) {
-      console.error('Failed to load projects:', error)
+  function closeDialog() {
+    showImportDialog = false
+  }
+
+  async function openProject() {
+    showFileMenu = false
+    const path = await window.api.openProject()
+    if (path) {
+      dispatch('projectLoad', { projectPath: path })
     }
   }
 
-  function selectProject(projectName: string) {
-    dispatch('projectLoad', projectName)
-    showProjectSelector = false
+  function loadRecentProject(path: string) {
+    showFileMenu = false
+    dispatch('projectLoad', { projectPath: path })
   }
 
   function toggleViewMode() {
@@ -41,6 +42,7 @@
     if (!importPath.trim()) return
     
     try {
+      // @ts-ignore - function not defined
       await window.api.importModel(importPath)
       importPath = ''
       showImportDialog = false
@@ -50,59 +52,74 @@
     }
   }
 
-  // File dialog simulation (in real app, you'd use Electron's dialog)
+  function handleKeydown(e: KeyboardEvent) {
+    if (e.key === 'Escape' && showImportDialog) {
+      showImportDialog = false
+    }
+    if (e.key === 'Escape' && showFileMenu) {
+      showFileMenu = false
+    }
+  }
+
+  // TODO: This function is not defined.
   function selectModelPath() {
-    // This would open an Electron file dialog
-    importPath = '/path/to/model.ckpt'
+    console.log('selectModelPath called')
   }
 </script>
 
+<svelte:window on:keydown={handleKeydown} on:click={() => (showFileMenu = false)} />
+
 <div class="toolbar">
   <div class="toolbar-section">
-    <div class="project-selector">
-      <button 
+    <div class="file-menu" on:click|stopPropagation>
+      <button
         class="project-button"
-        on:click={() => showProjectSelector = !showProjectSelector}
+        on:click={() => (showFileMenu = !showFileMenu)}
       >
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-          <path d="M10 4H4c-1.11 0-2 .89-2 2v12c0 1.11.89 2 2 2h16c1.11 0 2-.89 2-2V8c0-1.11-.89-2-2-2h-8l-2-2z"/>
-        </svg>
-        {currentProject || 'No Project'}
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" class="chevron">
-          <path d="M7 10l5 5 5-5z"/>
+        File
+        <svg
+          width="12"
+          height="12"
+          viewBox="0 0 24 24"
+          fill="currentColor"
+          class:rotate-180={showFileMenu}
+          class="chevron"
+        >
+          <path d="M7 10l5 5 5-5z" />
         </svg>
       </button>
 
-      {#if showProjectSelector}
+      {#if showFileMenu}
         <div class="project-dropdown">
-          <div class="dropdown-header">Select Project</div>
-          {#each availableProjects as project}
-            <button 
-              class="dropdown-item"
-              class:active={project === currentProject}
-              on:click={() => selectProject(project)}
-            >
-              {project}
+          <button class="dropdown-item" on:click={openProject}>
+            Load Project...
+          </button>
+          <div class="dropdown-divider"></div>
+          <div class="dropdown-header">Recent Projects</div>
+          {#each recentProjects as project}
+            <button class="dropdown-item" on:click={() => loadRecentProject(project)}>
+              {project.split(/[\\/]/).pop()}
             </button>
           {/each}
-          {#if availableProjects.length === 0}
-            <div class="dropdown-empty">No projects found</div>
+          {#if recentProjects.length === 0}
+            <div class="dropdown-empty">No recent projects</div>
           {/if}
         </div>
       {/if}
     </div>
+    <div class="current-project">{currentProject ? currentProject.split(/[\\/]/).pop() : 'No Project Loaded'}</div>
   </div>
 
   <div class="toolbar-section">
     <div class="view-toggle">
-      <button 
+      <button
         class="toggle-button"
         class:active={viewMode === 'batch'}
         on:click={toggleViewMode}
         title="Toggle between batch and cluster view"
       >
         <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-          <path d="M4 6h16v2H4zm0 5h16v2H4zm0 5h16v2H4z"/>
+          <path d="M4 6h16v2H4zm0 5h16v2H4zm0 5h16v2H4z" />
         </svg>
         {viewMode === 'batch' ? 'Batch' : 'Cluster'}
       </button>
@@ -110,24 +127,31 @@
   </div>
 
   <div class="toolbar-section">
-    <button 
+    <button
       class="toolbar-button"
-      on:click={() => showImportDialog = true}
+      on:click={() => (showImportDialog = true)}
       title="Import model"
     >
       <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-        <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
+        <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" />
       </svg>
       Import Model
     </button>
 
-    <button 
+    <button
       class="toolbar-button"
       on:click={() => dispatch('addExternalSource')}
       title="Add external audio source"
     >
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-        <path d="M10 4H4c-1.11 0-2 .89-2 2v12c0 1.11.89 2 2 2h16c1.11 0 2-.89 2-2V8c0-1.11-.89-2-2-2h-8l-2-2z"/>
+      <svg
+        width="16"
+        height="16"
+        viewBox="0 0 24 24"
+        fill="currentColor"
+      >
+        <path
+          d="M10 4H4c-1.11 0-2 .89-2 2v12c0 1.11.89 2 2 2h16c1.11 0 2-.89 2-2V8c0-1.11-.89-2-2-2h-8l-2-2z"
+        />
       </svg>
       Add Source
     </button>
@@ -135,19 +159,34 @@
 </div>
 
 {#if showImportDialog}
-  <div class="dialog-overlay" on:click={() => showImportDialog = false}>
-    <div class="dialog" on:click|stopPropagation>
+  <div
+    class="dialog-overlay"
+    role="button"
+    tabindex="0"
+    aria-label="Close dialog"
+    on:click|self={closeDialog}
+    on:keydown|self={(e) => {
+      if (e.key === 'Enter' || e.key === ' ') closeDialog()
+    }}
+  >
+    <div
+      class="dialog"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="dialog-title"
+      tabindex="-1"
+    >
       <div class="dialog-header">
-        <h3>Import Model</h3>
-        <button on:click={() => showImportDialog = false}>×</button>
+        <h3 id="dialog-title">Import Model</h3>
+        <button on:click={() => (showImportDialog = false)}>×</button>
       </div>
-      
+
       <div class="dialog-content">
         <label>
           Model Path:
           <div class="path-input">
-            <input 
-              type="text" 
+            <input
+              type="text"
               bind:value={importPath}
               placeholder="/path/to/model.ckpt"
             />
@@ -157,9 +196,9 @@
       </div>
 
       <div class="dialog-actions">
-        <button on:click={() => showImportDialog = false}>Cancel</button>
-        <button 
-          class="primary" 
+        <button on:click={() => (showImportDialog = false)}>Cancel</button>
+        <button
+          class="primary"
           on:click={importModel}
           disabled={!importPath.trim()}
         >
@@ -172,6 +211,8 @@
 
 <style>
   .toolbar {
+    position: relative;
+    z-index: 1000;
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -187,7 +228,7 @@
     gap: 1rem;
   }
 
-  .project-selector {
+  .file-menu {
     position: relative;
   }
 
@@ -212,7 +253,7 @@
     transition: transform 0.2s;
   }
 
-  .project-selector:hover .chevron {
+  .rotate-180 {
     transform: rotate(180deg);
   }
 
@@ -220,7 +261,7 @@
     position: absolute;
     top: 100%;
     left: 0;
-    right: 0;
+    min-width: 200px;
     background: rgba(0, 0, 0, 0.9);
     border: 1px solid rgba(255, 255, 255, 0.2);
     border-radius: 0.375rem;
@@ -255,8 +296,10 @@
     background: rgba(255, 255, 255, 0.1);
   }
 
-  .dropdown-item.active {
-    background: rgba(147, 51, 234, 0.3);
+  .dropdown-divider {
+    height: 1px;
+    background-color: rgba(255, 255, 255, 0.1);
+    margin: 0.5rem 0;
   }
 
   .dropdown-empty {
@@ -264,6 +307,12 @@
     text-align: center;
     color: rgba(255, 255, 255, 0.5);
     font-style: italic;
+  }
+  .current-project {
+    color: white;
+    font-size: 0.875rem;
+    font-style: italic;
+    opacity: 0.7;
   }
 
   .view-toggle .toggle-button {

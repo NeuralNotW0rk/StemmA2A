@@ -6,6 +6,10 @@
   import cxtmenu from 'cytoscape-cxtmenu'
   import expandCollapse from 'cytoscape-expand-collapse'
 
+  import reorganizeLayoutIcon from '../assets/reorganize-layout-icon.svg'
+  import fitToScreenIcon from '../assets/fit-to-screen-icon.svg'
+  import centerViewIcon from '../assets/center-view-icon.svg'
+
   export let graphData: any = null
 
   const dispatch = createEventDispatcher()
@@ -363,22 +367,16 @@
   <div bind:this={graphContainer} class="graph-container"></div>
   
   <div class="graph-controls">
-    <button on:click={applyLayout} title="Reorganize layout">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-        <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
-      </svg>
+    <button on:click={applyLayout} title="Reorganize layout" aria-label="Reorganize layout">
+      <img src={reorganizeLayoutIcon} alt="Reorganize Layout" />
     </button>
     
-    <button on:click={() => cy?.fit()} title="Fit to screen">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-        <path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/>
-      </svg>
+    <button on:click={() => cy?.fit()} title="Fit to screen" aria-label="Fit to screen">
+      <img src={fitToScreenIcon} alt="Fit to Screen" />
     </button>
     
-    <button on:click={() => cy?.center()} title="Center view">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-        <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
-      </svg>
+    <button on:click={() => cy?.center()} title="Center view" aria-label="Center view">
+      <img src={centerViewIcon} alt="Center View" />
     </button>
   </div>
 
@@ -404,9 +402,9 @@
 
 <style>
   .graph-wrapper {
-    position: relative;
     width: 100%;
-    height: 100%;
+    flex-grow: 1;
+    min-height: 0;
     background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
   }
 
@@ -439,12 +437,18 @@
     cursor: pointer;
     transition: all 0.2s;
     backdrop-filter: blur(10px);
+    line-height: 0;
   }
 
   .graph-controls button:hover {
     background: rgba(0, 0, 0, 0.8);
     border-color: rgba(255, 255, 255, 0.3);
     transform: translateY(-1px);
+  }
+
+  .graph-controls button img {
+    width: 16px;
+    height: 16px;
   }
 
   .graph-legend {
