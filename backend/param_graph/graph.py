@@ -7,13 +7,14 @@ from time import time
 import networkx as nx
 
 from .util import *
+from .const import *
 
 DEFAULT_SR = 48000
 
 class ParameterGraph:
     def __init__(self, data_path, backend=None, relative=True) -> None:
         self.root = Path(data_path)
-        self.export_target = export
+        self.export_target = EXPORT_DIR
         self.backend = backend
         self.G = nx.DiGraph()
         self.project_name = None
@@ -35,18 +36,18 @@ class ParameterGraph:
     def load(self):
         check_dir(self.root)
 
-        if os.path.exists(self.root / data_file):
-            with open(self.root / data_file, 'r') as df:
-                data = json.load(df)
-                self.project_name = data['project_name']
-                self.export_target = Path(data['export_target'])
-                self.G = nx.cytoscape.cytoscape_graph(data['graph'])
+        with open(self.root / DICT_FILE, 'r') as df:
+            data = json.load(df)
+            self.project_name = data['project_name']
+            self.export_target = Path(data['export_target'])
+            self.G = nx.cytoscape.cytoscape_graph(data['graph'])
+        
 
     def save(self):
         os.system(
-            f'cp "{self.root / data_file}" "{check_dir(self.root / backups) / data_file}_{int(time())}"'
+            f'cp "{self.root / DICT_FILE}" "{check_dir(self.root / BACKIP_DIR) / DICT_FILE}_{int(time())}"'
         )
-        with open(self.root / data_file, 'w') as df:
+        with open(self.root / DICT_FILE, 'w') as df:
             data = {
                 'project_name': self.project_name,
                 'export_target': str(self.export_target),

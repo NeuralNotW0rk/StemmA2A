@@ -1,26 +1,46 @@
 <script lang="ts">
-  import AudioGraph from './components/AudioGraph.svelte'
+  import AudioGraph from './components/graph/ParameterGraph.svelte'
   import Toolbar from './components/Toolbar.svelte'
 
   let graphData: any = null
   let currentProject: string | null = null
+  let viewMode: 'batch' | 'cluster' = 'batch'
 
   async function handleProjectLoad(event: CustomEvent<{ projectPath: string }>): Promise<void> {
     const projectPath = event.detail.projectPath
     try {
-      graphData = await window.api.loadProjectAndGetData(projectPath)
+      await window.api.logMessage(`Loading project: ${projectPath}`)
+      await window.api.loadProject(projectPath)
+      graphData = await window.api.getGraphData(viewMode)
       currentProject = projectPath
       await window.api.addRecentProject(projectPath)
+      await window.api.logMessage(`Successfully loaded project: ${projectPath}`)
     } catch (error) {
       console.error('Failed to load project:', error)
+      await window.api.logMessage(`Failed to load project: ${projectPath}. Error: ${error}`)
       // Optionally, show an error message to the user
+    }
+  }
+
+  async function handleViewModeChange(event: CustomEvent<'batch' | 'cluster'>) {
+    viewMode = event.detail
+    try {
+      graphData = await window.api.getGraphData(viewMode)
+    } catch (error) {
+      console.error('Failed to get graph data:', error)
+      await window.api.logMessage(`Failed to get graph data for view mode ${viewMode}. Error: ${error}`)
     }
   }
 </script>
 
 <main class="container">
-  <Toolbar on:projectLoad={handleProjectLoad} {currentProject} />
-  <AudioGraph {graphData} />
+  <Toolbar
+    on:projectLoad={handleProjectLoad}
+    on:viewModeChange={handleViewModeChange}
+    {currentProject}
+    {viewMode}
+  />
+  <AudioGraph {graphData} {viewMode} />
 </main>
 
 <style>

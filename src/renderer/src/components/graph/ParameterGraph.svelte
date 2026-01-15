@@ -6,123 +6,21 @@
   import cxtmenu from 'cytoscape-cxtmenu'
   import expandCollapse from 'cytoscape-expand-collapse'
 
-  import reorganizeLayoutIcon from '../assets/reorganize-layout-icon.svg'
-  import fitToScreenIcon from '../assets/fit-to-screen-icon.svg'
-  import centerViewIcon from '../assets/center-view-icon.svg'
+  import reorganizeLayoutIcon from '../../assets/reorganize-layout-icon.svg'
+  import fitToScreenIcon from '../../assets/fit-to-screen-icon.svg'
+  import centerViewIcon from '../../assets/center-view-icon.svg'
+
+  import graphStyle from './Style.js'
+  import layoutConfig from './Layout.js'
+  import expandCollapseOptions from './Options.js'
 
   export let graphData: any = null
+  export let viewMode: 'batch' | 'cluster' = 'batch'
 
   const dispatch = createEventDispatcher()
-
   let graphContainer: HTMLElement
   let cy: cytoscape.Core | null = null
   let isInitialized = false
-
-  // Graph styling
-  const graphStyle = [
-    {
-      selector: 'node',
-      style: {
-        'label': 'data(label)',
-        'text-valign': 'center',
-        'text-halign': 'center',
-        'font-size': '12px',
-        'font-weight': 'bold',
-        'color': '#ffffff',
-        'text-outline-width': 2,
-        'text-outline-color': '#000000',
-        'text-wrap': 'wrap',
-        'text-max-width': '80px',
-        'width': 60,
-        'height': 60,
-        'overlay-padding': '4px'
-      }
-    },
-    {
-      selector: 'node[type="model"]',
-      style: {
-        'background-color': '#9333ea',
-        'shape': 'round-rectangle',
-        'width': 80,
-        'height': 50
-      }
-    },
-    {
-      selector: 'node[type="audio"]',
-      style: {
-        'background-color': '#06b6d4',
-        'shape': 'ellipse'
-      }
-    },
-    {
-      selector: 'node[type="batch"]',
-      style: {
-        'background-color': '#374151',
-        'shape': 'round-rectangle',
-        'width': 100,
-        'height': 60,
-        'border-width': 2,
-        'border-color': '#6b7280'
-      }
-    },
-    {
-      selector: 'node[type="external"]',
-      style: {
-        'background-color': '#059669',
-        'shape': 'round-diamond'
-      }
-    },
-    {
-      selector: 'node:selected',
-      style: {
-        'border-width': 3,
-        'border-color': '#f59e0b'
-      }
-    },
-    {
-      selector: 'edge',
-      style: {
-        'width': 2,
-        'line-color': '#6b7280',
-        'target-arrow-color': '#6b7280',
-        'target-arrow-shape': 'triangle',
-        'curve-style': 'bezier'
-      }
-    },
-    {
-      selector: 'edge[type="variation"]',
-      style: {
-        'line-style': 'dashed',
-        'line-color': '#06b6d4'
-      }
-    },
-    {
-      selector: 'edge[type="generation"]',
-      style: {
-        'line-color': '#9333ea'
-      }
-    }
-  ]
-
-  // Layout configuration
-  const layoutConfig = {
-    name: 'fcose',
-    quality: 'default',
-    randomize: false,
-    animate: true,
-    animationDuration: 1000,
-    fit: true,
-    padding: 30,
-    nodeDimensionsIncludeLabels: true,
-    uniformNodeDimensions: false,
-    packComponents: true,
-    nodeRepulsion: () => 8000,
-    idealEdgeLength: () => 200,
-    edgeElasticity: () => 0.1,
-    nestingFactor: 0.1,
-    numIter: 2500,
-    tile: true
-  }
 
   onMount(() => {
     initializeGraph()
@@ -152,10 +50,8 @@
 
     // Initialize expand/collapse
     cy.expandCollapse({
-      layoutBy: layoutConfig,
-      fisheye: false,
-      animate: true,
-      undoable: false
+      ...expandCollapseOptions,
+      layoutBy: layoutConfig
     })
 
     setupContextMenus()
@@ -310,9 +206,40 @@
     })
   }
 
-  function applyLayout() {
+  function applyLayout(randomize = false) {
     if (!cy) return
-    cy.layout(layoutConfig).run()
+    const scale = 500
+
+    var fixedNodeConstraint = []
+    if (viewMode === 'cluster') {
+      fixedNodeConstraint = cy.$('node[type="audio"]').map((ele) => {
+        return {
+          nodeId: ele.data('id'),
+          position: { x: ele.data('tsne_1') * scale, y: ele.data('tsne_2') * scale }
+        }
+      })
+    }
+
+    // Workaround tiling issues by temporarily removing audio source edges
+    var audioSourceEdges = cy.edges('[type="audio_source"]').remove()
+
+    // Create and run layout
+    var layout = cy.layout({
+      ...layoutConfig,
+      randomize,
+      fixedNodeConstraint,
+      tilingCompareBy: (nodeId1, nodeId2) => {
+        if (cy.$id(nodeId1).data('type') === 'audio' && cy.$id(nodeId2).data('type') === 'audio') {
+          return cy.$id(nodeId1).data('batch_index') - cy.$id(nodeId2).data('batch_index')
+        }
+        return 0
+      }
+    })
+    layout.run()
+
+    // Restore removed elements
+    audioSourceEdges.restore()
+    console.log('fCoSE applied')
   }
 
   function updateGraph() {
@@ -321,7 +248,7 @@
     try {
       // Store current positions
       const positions: { [key: string]: cytoscape.Position } = {}
-      cy.nodes().forEach(node => {
+      cy.nodes().forEach((node) => {
         positions[node.id()] = node.position()
       })
 
@@ -333,22 +260,22 @@
         cy.add(graphData.elements)
 
         // Restore positions for existing nodes
-        cy.nodes().forEach(node => {
+        cy.nodes().forEach((node) => {
           if (positions[node.id()]) {
             node.position(positions[node.id()])
           }
         })
 
         // Apply layout if significant changes
-        const needsLayout = Object.keys(positions).length === 0 || 
-                           cy.nodes().length !== Object.keys(positions).length
+        const needsLayout =
+          Object.keys(positions).length === 0 || cy.nodes().length !== Object.keys(positions).length
 
         if (needsLayout) {
           applyLayout()
         }
 
         // Setup batch expansion state
-        cy.nodes('[type="batch"]').forEach(node => {
+        cy.nodes('[type="batch"]').forEach((node) => {
           node.data('isExpanded', true)
         })
       }
@@ -361,20 +288,25 @@
   $: if (isInitialized && graphData) {
     updateGraph()
   }
+
+  // React to view mode changes
+  $: if (isInitialized && viewMode) {
+    applyLayout()
+  }
 </script>
 
 <div class="graph-wrapper">
   <div bind:this={graphContainer} class="graph-container"></div>
-  
+
   <div class="graph-controls">
     <button on:click={applyLayout} title="Reorganize layout" aria-label="Reorganize layout">
       <img src={reorganizeLayoutIcon} alt="Reorganize Layout" />
     </button>
-    
+
     <button on:click={() => cy?.fit()} title="Fit to screen" aria-label="Fit to screen">
       <img src={fitToScreenIcon} alt="Fit to Screen" />
     </button>
-    
+
     <button on:click={() => cy?.center()} title="Center view" aria-label="Center view">
       <img src={centerViewIcon} alt="Center View" />
     </button>

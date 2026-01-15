@@ -8,6 +8,7 @@
   const dispatch = createEventDispatcher()
 
   let showFileMenu = false
+  let fileMenuElement: HTMLElement
   let recentProjects: string[] = []
   let showImportDialog = false
   let importPath = ''
@@ -67,11 +68,18 @@
   }
 </script>
 
-<svelte:window on:keydown={handleKeydown} on:click={() => (showFileMenu = false)} />
+<svelte:window
+  on:keydown={handleKeydown}
+  on:click={(event) => {
+    if (fileMenuElement && !fileMenuElement.contains(event.target as Node)) {
+      showFileMenu = false
+    }
+  }}
+/>
 
 <div class="toolbar">
   <div class="toolbar-section">
-    <div class="file-menu" on:click|stopPropagation>
+    <div class="file-menu" bind:this={fileMenuElement}>
       <button
         class="project-button"
         on:click={() => (showFileMenu = !showFileMenu)}

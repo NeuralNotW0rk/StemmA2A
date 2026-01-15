@@ -1,13 +1,6 @@
 import os
 import torchaudio
 
-# subdirectories
-data_file = "evkg.json"
-model_dir = "models"
-audio_dir = "audio"
-backups = "backup"
-export = "export"
-
 
 def check_dir(dir):
     if not os.path.exists(dir):

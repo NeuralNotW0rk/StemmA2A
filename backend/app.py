@@ -65,6 +65,23 @@ def health_check():
     })
 
 # --------------------
+#  Logging
+# --------------------
+
+@app.route("/log_message", methods=["POST"])
+def log_message():
+    """Log a message from the frontend"""
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "Invalid JSON"}), 400
+    message = data.get("message")
+    if message:
+        logger.info(f"Frontend message: {message}")
+        return jsonify({"status": "success", "message": "Message logged"}), 200
+    else:
+        return jsonify({"status": "error", "message": "No message provided"}), 400
+
+# --------------------
 #  Project Management
 # --------------------
 
@@ -147,7 +164,7 @@ def get_tsne_graph():
         return jsonify({"error": "No project loaded"}), 400
     
     try:
-        param_graph.update_tsne()
+        # param_graph.update_tsne()
         graph_data = param_graph.to_json(mode='cluster')
         return jsonify({
             "message": "success",

@@ -5,6 +5,7 @@ interface API {
   getRecentProjects: () => Promise<string[]>
   addRecentProject: (projectPath: string) => Promise<void>
   loadProjectAndGetData: (projectPath: string) => Promise<any>
+  logMessage: (message: string) => Promise<any>
 }
 
 declare global {

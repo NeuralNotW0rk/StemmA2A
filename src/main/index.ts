@@ -2,9 +2,9 @@ import { app, shell, BrowserWindow, ipcMain, dialog } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
-import http from 'http'
 import Store from 'electron-store'
 import { spawn, ChildProcess } from 'child_process'
+import readline from 'readline'
 
 let pythonBackend: ChildProcess | null = null
 const store = new Store()
@@ -21,13 +21,12 @@ function startPythonBackend(): Promise<void> {
       ? join(app.getAppPath(), 'backend', 'app.py')
       : join(process.resourcesPath, 'backend', 'app.py');
 
-    pythonBackend = spawn(venvPath, [appPyPath], {
+    pythonBackend = spawn(venvPath, ['-u', appPyPath], {
       stdio: ['pipe', 'pipe', 'pipe'] // Use pipes to capture output
     });
 
     let backendReady = false;
-    const handleData = (data: Buffer) => {
-      const message = data.toString();
+    const handleMessage = (message: string) => {
       if (!backendReady && message.includes('Running on http://127.0.0.1:5000')) {
         backendReady = true;
         console.log('Python backend started');
@@ -35,14 +34,17 @@ function startPythonBackend(): Promise<void> {
       }
     }
 
-    pythonBackend.stdout?.on('data', (data) => {
-      console.log(`Python Backend: ${data}`);
-      handleData(data)
+    const stdoutReader = readline.createInterface({ input: pythonBackend.stdout! });
+    stdoutReader.on('line', (line) => {
+      console.log(`Python Backend: ${line}`);
+      handleMessage(line);
     });
 
-    pythonBackend.stderr?.on('data', (data) => {
-      console.error(`Python Backend Error: ${data}`);
-      handleData(data)
+    const stderrReader = readline.createInterface({ input: pythonBackend.stderr! });
+    stderrReader.on('line', (line) => {
+      // Log stderr as regular output, since Flask/Werkzeug logs INFO here
+      console.log(`Python Backend: ${line}`);
+      handleMessage(line);
     });
 
     pythonBackend.on('error', (error) => {
@@ -124,68 +126,68 @@ app.whenReady().then(async () => {
     store.set('recentProjects', recentProjects.slice(0, 10))
   })
 
-  ipcMain.handle('loadProjectAndGetData', async (_event, projectPath) => {
-    // 1. Load the project
-    const postData = JSON.stringify({ project_path: projectPath })
-    const postOptions = {
-      hostname: '127.0.0.1',
-      port: 5000,
-      path: '/load',
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(postData)
-      }
-    }
+  ipcMain.handle('logMessage', async (_event, message) => {
+    try {
+        const response = await fetch('http://127.0.0.1:5000/log_message', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ message: message })
+        });
 
-    const postRequest = new Promise<void>((resolve, reject) => {
-      const req = http.request(postOptions, (res) => {
-        if (res.statusCode === 200) {
-          resolve()
-        } else {
-          res.on('data', d => console.error(d.toString()))
-          reject(new Error(`Failed to load project. Status code: ${res.statusCode}`))
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`Failed to log message. Status: ${response.status}. Body: ${errorText}`);
         }
-      })
-      req.on('error', (e) => reject(e))
-      req.write(postData)
-      req.end()
-    })
 
-    await postRequest
+        return await response.json();
+    } catch (error) {
+        console.error('Main Process: /log_message request error:', error);
+        throw error;
+    }
+  });
 
-    // 2. Get the graph data
-    const getOptions = {
-      hostname: '127.0.0.1',
-      port: 5000,
-      path: '/graph',
-      method: 'GET'
+  ipcMain.handle('loadProject', async (_event, projectPath) => {
+    // 1. Load the project
+    const loadResponse = await fetch('http://127.0.0.1:5000/load', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ project_path: projectPath }),
+    });
+
+    console.log(`Main Process: /load status: ${loadResponse.status}`);
+    if (!loadResponse.ok) {
+        const errorText = await loadResponse.text();
+        console.error(`Main Process: /load error data: ${errorText}`)
+        throw new Error(`Failed to load project. Status code: ${loadResponse.status}`);
+    }
+  })
+
+  ipcMain.handle('getGraphData', async (_event, viewMode) => {
+    const endpoint = viewMode === 'cluster' ? '/graph-tsne' : '/graph';
+    console.log(`Main Process: getting ${endpoint}`);
+    const graphResponse = await fetch(`http://127.0.0.1:5000${endpoint}`);
+    console.log(`Main Process: ${endpoint} status: ${graphResponse.status}`);
+    if (!graphResponse.ok) {
+        const errorText = await graphResponse.text();
+        throw new Error(`Failed to get graph data from ${endpoint}. Status code: ${graphResponse.status}. Body: ${errorText}`);
     }
 
-    const getRequest = new Promise((resolve, reject) => {
-      const req = http.request(getOptions, (res) => {
-        let data = ''
-        res.on('data', (chunk) => {
-          data += chunk
-        })
-        res.on('end', () => {
-          if (res.statusCode === 200) {
-            try {
-              resolve(JSON.parse(data))
-            } catch (e) {
-              reject(new Error('Failed to parse graph data from backend.'))
-            }
-          } else {
-            reject(new Error(`Failed to get graph data. Status code: ${res.statusCode}`))
-          }
-        })
-      })
-      req.on('error', (e) => reject(e))
-      req.end()
-    })
-
-    return await getRequest
-  })
+    const graphDataText = await graphResponse.text();
+    console.log(`Main Process: ${endpoint} data received, parsing...`);
+    try {
+        const parsedData = JSON.parse(graphDataText);
+        console.log(`Main Process: ${endpoint} data parsed successfully.`);
+        return parsedData.graph_data;
+    } catch (e) {
+        console.error(`Main Process: ${endpoint} JSON parse error:`, e);
+        console.error('Main Process: Raw data was:', graphDataText);
+        throw new Error('Failed to parse graph data from backend.');
+    }
+  });
 
 
   // Default open or close DevTools by F12 in development

@@ -7,8 +7,11 @@ const api = {
   getRecentProjects: (): Promise<string[]> => ipcRenderer.invoke('getRecentProjects'),
   addRecentProject: (projectPath: string): Promise<void> =>
     ipcRenderer.invoke('addRecentProject', projectPath),
-  loadProjectAndGetData: (projectPath: string): Promise<any> =>
-    ipcRenderer.invoke('loadProjectAndGetData', projectPath)
+  loadProject: (projectPath: string): Promise<any> =>
+    ipcRenderer.invoke('loadProject', projectPath),
+  getGraphData: (viewMode: 'batch' | 'cluster'): Promise<any> =>
+    ipcRenderer.invoke('getGraphData', viewMode),
+  logMessage: (message: string): Promise<any> => ipcRenderer.invoke('logMessage', message)
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to

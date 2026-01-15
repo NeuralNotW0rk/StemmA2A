@@ -2,7 +2,7 @@ import torch
 import numpy as np
 import librosa as lr
 import networkx as nx
-
+from pathlib import Path
 from sklearn.manifold import TSNE
 
 from .util import *
@@ -20,16 +20,31 @@ def update_tsne(
     samples = []
     for node, data in self.G.nodes(data=True):
         if data['type'] == 'audio':
-            names.append(node)
+            try:
+                path_str = data.get('path')
+                if not path_str:
+                    print(f"Node {node} has no path, skipping.")
+                    continue
+                
+                audio_path = Path(path_str)
+                if not audio_path.is_absolute():
+                    audio_path = self.root / audio_path
 
-            sample_raw = load_audio(
-                'cpu', str(self.root / data['path']), sample_rate=sample_rate
-            )
-            sample = torch.zeros(sample_size)
-            cropped_size = min(sample_size, sample_raw.size(1))
-            sample[:cropped_size] += sample_raw[0, :cropped_size]
-            samples.append(sample.numpy())
+                sample_raw = load_audio(
+                    'cpu', str(audio_path), sample_rate=sample_rate
+                )
+                sample = torch.zeros(sample_size)
+                cropped_size = min(sample_size, sample_raw.size(1))
+                sample[:cropped_size] += sample_raw[0, :cropped_size]
+                samples.append(sample.numpy())
+                names.append(node)
+            except Exception as e:
+                print(f"Could not load audio for node {node}, skipping. Error: {e}")
 
+    if not samples:
+        print("No audio samples found or loaded. Skipping t-SNE calculation.")
+        return
+    
     samples = np.asarray(samples)
 
     # Handle if number of samples is smaller than perplexity
