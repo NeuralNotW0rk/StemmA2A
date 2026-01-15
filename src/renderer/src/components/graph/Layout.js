@@ -4,7 +4,7 @@ const defaultLayout = {
     // - 'draft' only applies spectral layout 
     // - 'default' improves the quality with incremental layout (fast cooling rate)
     // - 'proof' improves the quality with incremental layout (slow cooling rate) 
-    quality: 'proof',
+    quality: 'default',
     // Use random node positions at beginning of layout
     // if this is set to false, then quality option must be 'proof'
     randomize: false, 

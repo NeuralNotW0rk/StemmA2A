@@ -1,10 +1,12 @@
 <script lang="ts">
   import AudioGraph from './components/graph/ParameterGraph.svelte'
   import Toolbar from './components/Toolbar.svelte'
+  import GraphControls from './components/graph/GraphControls.svelte'
 
   let graphData: any = null
   let currentProject: string | null = null
   let viewMode: 'batch' | 'cluster' = 'batch'
+  let audioGraph: AudioGraph
 
   async function handleProjectLoad(event: CustomEvent<{ projectPath: string }>): Promise<void> {
     const projectPath = event.detail.projectPath
@@ -40,11 +42,17 @@
     {currentProject}
     {viewMode}
   />
-  <AudioGraph {graphData} {viewMode} />
+  <AudioGraph bind:this={audioGraph} {graphData} {viewMode} />
+  <GraphControls
+    on:reorganize={() => audioGraph.reorganizeLayout()}
+    on:fit={() => audioGraph.fitView()}
+    on:center={() => audioGraph.centerView()}
+  />
 </main>
 
 <style>
   .container {
+    position: relative;
     display: flex;
     flex-direction: column;
     height: 100vh;

@@ -206,41 +206,75 @@
     })
   }
 
-  function applyLayout(randomize = false) {
-    if (!cy) return
-    const scale = 500
+    function applyLayout(randomize = false) {
 
-    var fixedNodeConstraint = []
-    if (viewMode === 'cluster') {
-      fixedNodeConstraint = cy.$('node[type="audio"]').map((ele) => {
-        return {
-          nodeId: ele.data('id'),
-          position: { x: ele.data('tsne_1') * scale, y: ele.data('tsne_2') * scale }
-        }
-      })
-    }
+      if (!cy) return
 
-    // Workaround tiling issues by temporarily removing audio source edges
-    var audioSourceEdges = cy.edges('[type="audio_source"]').remove()
+      const scale = 500
 
-    // Create and run layout
-    var layout = cy.layout({
-      ...layoutConfig,
-      randomize,
-      fixedNodeConstraint,
-      tilingCompareBy: (nodeId1, nodeId2) => {
-        if (cy.$id(nodeId1).data('type') === 'audio' && cy.$id(nodeId2).data('type') === 'audio') {
-          return cy.$id(nodeId1).data('batch_index') - cy.$id(nodeId2).data('batch_index')
-        }
-        return 0
+  
+
+      var fixedNodeConstraint = []
+
+      if (viewMode === 'cluster') {
+
+        fixedNodeConstraint = cy.$('node[type="audio"]').map((ele) => {
+
+          return {
+
+            nodeId: ele.data('id'),
+
+            position: { x: ele.data('tsne_1') * scale, y: ele.data('tsne_2') * scale }
+
+          }
+
+        })
+
       }
-    })
-    layout.run()
 
-    // Restore removed elements
-    audioSourceEdges.restore()
-    console.log('fCoSE applied')
-  }
+  
+
+      // Workaround tiling issues by temporarily removing audio source edges
+
+      var audioSourceEdges = cy.edges('[type="audio_source"]').remove()
+
+  
+
+      // Create and run layout
+
+      var layout = cy.layout({
+
+        ...layoutConfig,
+
+        randomize,
+
+        fixedNodeConstraint,
+
+        tilingCompareBy: (nodeId1, nodeId2) => {
+
+          if (cy.$id(nodeId1).data('type') === 'audio' && cy.$id(nodeId2).data('type') === 'audio') {
+
+            return cy.$id(nodeId1).data('batch_index') - cy.$id(nodeId2).data('batch_index')
+
+          }
+
+          return 0
+
+        }
+
+      })
+
+      layout.run()
+
+  
+
+      // Restore removed elements
+
+      audioSourceEdges.restore()
+
+      console.log('fCoSE applied')
+
+    }
 
   function updateGraph() {
     if (!cy || !graphData) return
@@ -259,12 +293,14 @@
       if (graphData.elements) {
         cy.add(graphData.elements)
 
-        // Restore positions for existing nodes
-        cy.nodes().forEach((node) => {
-          if (positions[node.id()]) {
-            node.position(positions[node.id()])
-          }
-        })
+        // Restore positions for existing nodes, but only in 'batch' mode
+        if (viewMode === 'batch') {
+          cy.nodes().forEach((node) => {
+            if (positions[node.id()]) {
+              node.position(positions[node.id()])
+            }
+          })
+        }
 
         // Apply layout if significant changes
         const needsLayout =
@@ -289,28 +325,21 @@
     updateGraph()
   }
 
-  // React to view mode changes
-  $: if (isInitialized && viewMode) {
+  export function reorganizeLayout() {
     applyLayout()
+  }
+
+  export function fitView() {
+    cy?.fit()
+  }
+
+  export function centerView() {
+    cy?.center()
   }
 </script>
 
 <div class="graph-wrapper">
   <div bind:this={graphContainer} class="graph-container"></div>
-
-  <div class="graph-controls">
-    <button on:click={applyLayout} title="Reorganize layout" aria-label="Reorganize layout">
-      <img src={reorganizeLayoutIcon} alt="Reorganize Layout" />
-    </button>
-
-    <button on:click={() => cy?.fit()} title="Fit to screen" aria-label="Fit to screen">
-      <img src={fitToScreenIcon} alt="Fit to Screen" />
-    </button>
-
-    <button on:click={() => cy?.center()} title="Center view" aria-label="Center view">
-      <img src={centerViewIcon} alt="Center View" />
-    </button>
-  </div>
 
   <div class="graph-legend">
     <div class="legend-item">
@@ -334,6 +363,7 @@
 
 <style>
   .graph-wrapper {
+    position: relative;
     width: 100%;
     flex-grow: 1;
     min-height: 0;
@@ -348,39 +378,6 @@
 
   .graph-container:active {
     cursor: grabbing;
-  }
-
-  .graph-controls {
-    position: absolute;
-    top: 1rem;
-    right: 1rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-    z-index: 100;
-  }
-
-  .graph-controls button {
-    background: rgba(0, 0, 0, 0.7);
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    color: white;
-    padding: 0.5rem;
-    border-radius: 0.375rem;
-    cursor: pointer;
-    transition: all 0.2s;
-    backdrop-filter: blur(10px);
-    line-height: 0;
-  }
-
-  .graph-controls button:hover {
-    background: rgba(0, 0, 0, 0.8);
-    border-color: rgba(255, 255, 255, 0.3);
-    transform: translateY(-1px);
-  }
-
-  .graph-controls button img {
-    width: 16px;
-    height: 16px;
   }
 
   .graph-legend {
