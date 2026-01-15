@@ -313,6 +313,29 @@ def rescan_source():
 #  Audio Operations
 # --------------------
 
+@app.route("/audio-path/<path:filename>", methods=["GET"])
+def get_audio_path(filename):
+    """Get the absolute path of an audio file"""
+    logger.info(f"get_audio_path called with filename: {filename}")
+    if param_graph is None:
+        logger.error("get_audio_path: param_graph is None. No project loaded.")
+        return jsonify({"error": "No project loaded"}), 400
+    
+    try:
+        audio_path = param_graph.get_path_from_name(filename, relative=False)
+        logger.info(f"Path retrieved from graph: {audio_path}")
+
+        if not audio_path or not Path(audio_path).exists():
+            logger.warning(f"Audio file not found at path: {audio_path}")
+            return jsonify({"error": "Audio file not found"}), 404
+        
+        logger.info(f"Returning audio path: {audio_path}")
+        return jsonify({"path": str(audio_path)})
+        
+    except Exception as e:
+        logger.error(f"Failed to get audio path: {e}", exc_info=True)
+        return jsonify({"error": f"An unexpected error occurred in get_audio_path: {str(e)}"}), 500
+
 @app.route("/audio/<path:filename>", methods=["GET"])
 def serve_audio(filename):
     """Serve audio files"""
@@ -411,5 +434,6 @@ if __name__ == "__main__":
         host="127.0.0.1",
         port=5000,
         debug=True,
-        threaded=True
+        threaded=True,
+        use_reloader=False
     )

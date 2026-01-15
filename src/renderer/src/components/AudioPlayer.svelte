@@ -4,7 +4,6 @@
 
   export let src: string
   export let title: string = ''
-  export let isPlaying: boolean = false
 
   let audio: HTMLAudioElement
   let duration = 0
@@ -13,6 +12,7 @@
   let waveformData: number[] = []
   let canvas: HTMLCanvasElement
   let canvasContext: CanvasRenderingContext2D | null = null
+  let isPlaying = false
 
   onMount(() => {
     if (canvas) {
@@ -38,17 +38,15 @@
   }
 
   function handleEnded() {
-    isPlaying = false
     currentTime = 0
   }
 
   function togglePlayPause() {
-    if (isPlaying) {
-      audio.pause()
+    if (audio.paused) {
+      audio.play().catch((error) => console.error('Audio playback failed:', error))
     } else {
-      audio.play()
+      audio.pause()
     }
-    isPlaying = !isPlaying
   }
 
   function seek(event: MouseEvent) {
@@ -118,15 +116,6 @@
     audio.load()
   }
 
-  // React to isPlaying changes from parent
-  $: if (audio) {
-    if (isPlaying && audio.paused) {
-      audio.play()
-    } else if (!isPlaying && !audio.paused) {
-      audio.pause()
-    }
-  }
-
   // React to volume changes
   $: if (audio) {
     audio.volume = volume
@@ -168,7 +157,7 @@
       {/if}
     </button>
 
-    <div class="volume-control">
+    <div class="volume-.control">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
         <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/>
       </svg>
@@ -189,17 +178,25 @@
     on:loadedmetadata={handleLoadedMetadata}
     on:timeupdate={handleTimeUpdate}
     on:ended={handleEnded}
+    on:play={() => (isPlaying = true)}
+    on:pause={() => (isPlaying = false)}
     preload="metadata"
   ></audio>
 </div>
 
 <style>
   .audio-player {
+    position: fixed;
+    bottom: 1rem;
+    left: 1rem;
+    right: 1rem;
+    z-index: 1000;
     background: rgba(0, 0, 0, 0.3);
     border: 1px solid rgba(255, 255, 255, 0.1);
     border-radius: 0.5rem;
     padding: 1rem;
     color: white;
+    backdrop-filter: blur(10px);
   }
 
   .player-header {
@@ -322,4 +319,4 @@
     border-radius: 2px;
     border: none;
   }
-    
+</style>

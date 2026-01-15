@@ -63,8 +63,18 @@ class ParameterGraph:
             for node, data in self.G.nodes(data=True):
                 if data['type'] == 'audio':
                     C.add_node(node, **data)
-                    C.nodes[node].pop('parent')
+                    C.nodes[node].pop('parent', None)
             return nx.cytoscape.cytoscape_data(C)
+
+    def get_path_from_name(self, name: str, relative=False):
+        if self.G.has_node(name):
+            path_str = self.G.nodes[name].get('path')
+            if path_str:
+                path = Path(path_str)
+                if path.is_absolute():
+                    return str(path)
+                return str(self.root / path)
+        return None
 
     # Simple element attribute update
     def update_element(self, name: str, attrs: dict):

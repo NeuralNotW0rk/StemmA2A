@@ -1,5 +1,6 @@
 import { app, shell, BrowserWindow, ipcMain, dialog } from 'electron'
-import { join } from 'path'
+import { join, extname } from 'path'
+import { promises as fs } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import Store from 'electron-store'
@@ -76,7 +77,8 @@ function createWindow(): void {
     ...(process.platform === 'linux' ? { icon } : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
-      sandbox: false
+      sandbox: false,
+      webSecurity: true
     }
   })
 
@@ -124,6 +126,47 @@ app.whenReady().then(async () => {
     const recentProjects = (store.get('recentProjects', []) as string[]).filter(p => p !== projectPath)
     recentProjects.unshift(projectPath)
     store.set('recentProjects', recentProjects.slice(0, 10))
+  })
+
+  ipcMain.handle('getAudioFile', async (_event, filename) => {
+    try {
+      // 1. Get path from Python backend
+      const pathResponse = await fetch(`http://127.0.0.1:5000/audio-path/${filename}`)
+      if (!pathResponse.ok) {
+        const errorBody = await pathResponse.text()
+        throw new Error(
+          `Failed to get audio path from backend. Status: ${pathResponse.status}. Body: ${errorBody}`
+        )
+      }
+      const { path: audioPath } = await pathResponse.json()
+
+      // 2. Read file from filesystem
+      const fileBuffer = await fs.readFile(audioPath)
+
+      // 3. Determine MIME type
+      const extension = extname(audioPath).toLowerCase()
+      let mimeType = ''
+      if (extension === '.wav') {
+        mimeType = 'audio/wav'
+      } else if (extension === '.mp3') {
+        mimeType = 'audio/mpeg'
+      } else if (extension === '.ogg') {
+        mimeType = 'audio/ogg'
+      } else {
+        // Add more types if needed, or have a fallback
+        mimeType = 'application/octet-stream'
+      }
+
+      // 4. Create data URI
+      const base64Data = fileBuffer.toString('base64')
+      const dataUri = `data:${mimeType};base64,${base64Data}`
+      
+      return dataUri
+
+    } catch (error) {
+      console.error('Failed to get audio file:', error)
+      return null
+    }
   })
 
   ipcMain.handle('logMessage', async (_event, message) => {

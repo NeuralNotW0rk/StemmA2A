@@ -2,11 +2,14 @@
   import AudioGraph from './components/graph/ParameterGraph.svelte'
   import Toolbar from './components/Toolbar.svelte'
   import GraphControls from './components/graph/GraphControls.svelte'
+  import AudioPlayer from './components/AudioPlayer.svelte'
 
   let graphData: any = null
   let currentProject: string | null = null
   let viewMode: 'batch' | 'cluster' = 'batch'
   let audioGraph: AudioGraph
+  let audioSrc: string | null = null
+  let audioTitle: string | null = null
 
   async function handleProjectLoad(event: CustomEvent<{ projectPath: string }>): Promise<void> {
     const projectPath = event.detail.projectPath
@@ -33,6 +36,23 @@
       await window.api.logMessage(`Failed to get graph data for view mode ${viewMode}. Error: ${error}`)
     }
   }
+
+  async function handleAudioSelect(event: CustomEvent<any>) {
+    const audioData = event.detail
+    await window.api.logMessage(`Audio selected: ${audioData.name}`)
+    try {
+      const dataUri = await window.api.getAudioFile(audioData.name)
+      if (dataUri) {
+        audioSrc = dataUri
+        audioTitle = audioData.name
+      } else {
+        console.error('Failed to get audio data URI.')
+        // Optionally, show an error to the user
+      }
+    } catch (error) {
+      console.error('Error getting audio file:', error)
+    }
+  }
 </script>
 
 <main class="container">
@@ -42,12 +62,20 @@
     {currentProject}
     {viewMode}
   />
-  <AudioGraph bind:this={audioGraph} {graphData} {viewMode} />
+  <AudioGraph
+    bind:this={audioGraph}
+    {graphData}
+    {viewMode}
+    on:audioSelect={handleAudioSelect}
+  />
   <GraphControls
     on:reorganize={() => audioGraph.reorganizeLayout()}
     on:fit={() => audioGraph.fitView()}
     on:center={() => audioGraph.centerView()}
   />
+  {#if audioSrc}
+    <AudioPlayer src={audioSrc} title={audioTitle} />
+  {/if}
 </main>
 
 <style>

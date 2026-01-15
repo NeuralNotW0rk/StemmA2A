@@ -11,6 +11,8 @@ const api = {
     ipcRenderer.invoke('loadProject', projectPath),
   getGraphData: (viewMode: 'batch' | 'cluster'): Promise<any> =>
     ipcRenderer.invoke('getGraphData', viewMode),
+  getAudioFile: (filename: string): Promise<string | null> =>
+    ipcRenderer.invoke('getAudioFile', filename),
   logMessage: (message: string): Promise<any> => ipcRenderer.invoke('logMessage', message)
 }
 

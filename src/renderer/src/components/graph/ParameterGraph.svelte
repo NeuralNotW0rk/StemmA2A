@@ -5,11 +5,6 @@
   import fcose from 'cytoscape-fcose'
   import cxtmenu from 'cytoscape-cxtmenu'
   import expandCollapse from 'cytoscape-expand-collapse'
-
-  import reorganizeLayoutIcon from '../../assets/reorganize-layout-icon.svg'
-  import fitToScreenIcon from '../../assets/fit-to-screen-icon.svg'
-  import centerViewIcon from '../../assets/center-view-icon.svg'
-
   import graphStyle from './Style.js'
   import layoutConfig from './Layout.js'
   import expandCollapseOptions from './Options.js'
@@ -103,7 +98,7 @@
         },
         {
           content: 'Model Info',
-          select: (ele: any) => console.log('Model info:', ele.data())
+          select: (ele: any) => dispatch('modelSelect', ele.data())
         }
       ]
     })
@@ -183,6 +178,7 @@
 
     // Audio node selection
     cy.on('tap', 'node[type="audio"]', (evt) => {
+      console.log('Audio node tapped:', evt.target.data());
       const audioData = evt.target.data()
       dispatch('audioSelect', audioData)
     })
@@ -271,8 +267,6 @@
       // Restore removed elements
 
       audioSourceEdges.restore()
-
-      console.log('fCoSE applied')
 
     }
 
