@@ -1,178 +1,170 @@
 <!-- src/renderer/src/components/AudioPlayer.svelte -->
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte'
+  import { createEventDispatcher, onMount, onDestroy } from 'svelte'
 
   export let src: string
-  export let title: string = ''
+  export let label: string = ''
+
+  const dispatch = createEventDispatcher()
 
   let audio: HTMLAudioElement
   let duration = 0
   let currentTime = 0
   let volume = 0.8
-  let waveformData: number[] = []
-  let canvas: HTMLCanvasElement
-  let canvasContext: CanvasRenderingContext2D | null = null
   let isPlaying = false
-
-  onMount(() => {
-    if (canvas) {
-      canvasContext = canvas.getContext('2d')
-      generateWaveform()
-    }
-  })
-
-  onDestroy(() => {
-    if (audio) {
-      audio.pause()
-      audio.src = ''
-    }
-  })
+  let showVolume = false
+  let volumeControlElement: HTMLElement
+  let loadedSrc: string
 
   function handleLoadedMetadata() {
-    duration = audio.duration
+    if (audio) {
+      duration = audio.duration
+    }
   }
 
   function handleTimeUpdate() {
-    currentTime = audio.currentTime
-    drawWaveform()
+    if (audio) {
+      currentTime = audio.currentTime
+    }
   }
 
   function handleEnded() {
+    isPlaying = false
     currentTime = 0
   }
 
   function togglePlayPause() {
-    if (audio.paused) {
-      audio.play().catch((error) => console.error('Audio playback failed:', error))
-    } else {
+    if (!audio) return
+    if (isPlaying) {
       audio.pause()
+    } else {
+      audio.play().catch((error) => console.error('Audio playback failed:', error))
     }
   }
 
-  function seek(event: MouseEvent) {
-    if (!canvas || !duration) return
-    
-    const rect = canvas.getBoundingClientRect()
-    const x = event.clientX - rect.left
-    const percentage = x / rect.width
-    const newTime = percentage * duration
-    
-    audio.currentTime = newTime
-    currentTime = newTime
-  }
-
   function formatTime(time: number): string {
+    if (isNaN(time)) return '0:00'
     const minutes = Math.floor(time / 60)
     const seconds = Math.floor(time % 60)
     return `${minutes}:${seconds.toString().padStart(2, '0')}`
   }
 
-  function generateWaveform() {
-    // Generate mock waveform data for visualization
-    // In a real implementation, you'd analyze the audio file
-    waveformData = Array.from({ length: 200 }, () => Math.random() * 0.8 + 0.2)
-    drawWaveform()
+  function seek(event: MouseEvent) {
+    if (!audio || !duration) return
+    const progressBar = event.currentTarget as HTMLElement
+    const rect = progressBar.getBoundingClientRect()
+    const x = event.clientX - rect.left
+    const percentage = x / rect.width
+    const newTime = percentage * duration
+    audio.currentTime = newTime
   }
 
-  function drawWaveform() {
-    if (!canvasContext || !canvas) return
-
-    const { width, height } = canvas
-    canvasContext.clearRect(0, 0, width, height)
-
-    // Background
-    canvasContext.fillStyle = '#1e293b'
-    canvasContext.fillRect(0, 0, width, height)
-
-    // Waveform
-    const barWidth = width / waveformData.length
-    const progress = duration > 0 ? currentTime / duration : 0
-
-    waveformData.forEach((amplitude, index) => {
-      const x = index * barWidth
-      const barHeight = amplitude * height * 0.8
-      const y = (height - barHeight) / 2
-
-      // Determine color based on progress
-      const isPlayed = index / waveformData.length < progress
-      canvasContext.fillStyle = isPlayed ? '#9333ea' : '#475569'
-      
-      canvasContext.fillRect(x, y, barWidth - 1, barHeight)
-    })
-
-    // Progress indicator
-    const progressX = progress * width
-    canvasContext.strokeStyle = '#f59e0b'
-    canvasContext.lineWidth = 2
-    canvasContext.beginPath()
-    canvasContext.moveTo(progressX, 0)
-    canvasContext.lineTo(progressX, height)
-    canvasContext.stroke()
+  function handleKeyDown(event: KeyboardEvent) {
+    if (!audio || !duration) return
+    if (event.key === 'ArrowRight') {
+      audio.currentTime = Math.min(duration, audio.currentTime + 5)
+    } else if (event.key === 'ArrowLeft') {
+      audio.currentTime = Math.max(0, audio.currentTime - 5)
+    }
   }
 
-  // React to src changes
-  $: if (src && audio) {
+  function toggleVolume() {
+    showVolume = !showVolume
+  }
+
+  function handleClickOutside(event: MouseEvent) {
+    if (showVolume && volumeControlElement && !volumeControlElement.contains(event.target as Node)) {
+      showVolume = false
+    }
+  }
+
+  onMount(() => {
+    window.addEventListener('click', handleClickOutside)
+  })
+
+  onDestroy(() => {
+    window.removeEventListener('click', handleClickOutside)
+  })
+
+  $: if (audio && src && src !== loadedSrc) {
+    audio.pause()
     audio.src = src
     audio.load()
+    currentTime = 0
+    duration = 0
+    isPlaying = false
+    loadedSrc = src
+    // Play audio on selection
+    audio.play().catch((error) => console.error('Audio playback failed:', error))
   }
 
-  // React to volume changes
   $: if (audio) {
     audio.volume = volume
   }
 </script>
 
 <div class="audio-player">
-  <div class="player-header">
-    <h4>{title}</h4>
-    <div class="time-display">
-      {formatTime(currentTime)} / {formatTime(duration)}
-    </div>
-  </div>
-
-  <div class="waveform-container">
-    <canvas
-      bind:this={canvas}
-      width="400"
-      height="100"
-      on:click={seek}
-      class="waveform"
-    ></canvas>
-  </div>
-
-  <div class="player-controls">
-    <button 
-      class="play-button"
-      on:click={togglePlayPause}
-      title={isPlaying ? 'Pause' : 'Play'}
-    >
-      {#if isPlaying}
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-          <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>
-        </svg>
-      {:else}
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-          <path d="M8 5v14l11-7z"/>
-        </svg>
-      {/if}
-    </button>
-
-    <div class="volume-.control">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-        <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/>
+  <button class="play-button" on:click={togglePlayPause} aria-label={isPlaying ? 'Pause' : 'Play'}>
+    {#if isPlaying}
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
       </svg>
-      <input
-        type="range"
-        min="0"
-        max="1"
-        step="0.1"
-        bind:value={volume}
-        class="volume-slider"
-      />
+    {:else}
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M8 5v14l11-7z" />
+      </svg>
+    {/if}
+  </button>
+  <div class="player-content">
+    <div class="title-bar">
+      <h4 class="title">{label}</h4>
+      <div class="time-display">{formatTime(currentTime)} / {formatTime(duration)}</div>
+    </div>
+    <div
+      class="progress-bar"
+      role="slider"
+      aria-label="Audio progress"
+      aria-valuemin={0}
+      aria-valuemax={duration || 0}
+      aria-valuenow={currentTime}
+      tabindex="0"
+      on:click={seek}
+      on:keydown={handleKeyDown}
+    >
+      <div class="progress" style="width: {(currentTime / duration) * 100}%"></div>
     </div>
   </div>
+  <div class="volume-control" bind:this={volumeControlElement}>
+    <button class="volume-button" on:click|stopPropagation={toggleVolume} aria-label="Volume control">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+        <path
+          d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"
+        />
+      </svg>
+    </button>
+    {#if showVolume}
+      <div class="volume-slider-container">
+        <input
+          type="range"
+          min="0"
+          max="1"
+          step="0.05"
+          bind:value={volume}
+          class="volume-slider"
+          orient="vertical"
+        />
+      </div>
+    {/if}
+  </div>
 
-  <!-- Hidden audio element -->
+  <button class="close-button" on:click={() => dispatch('close')} aria-label="Close audio player">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+      <path
+        d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"
+      />
+    </svg>
+  </button>
+
   <audio
     bind:this={audio}
     on:loadedmetadata={handleLoadedMetadata}
@@ -180,143 +172,174 @@
     on:ended={handleEnded}
     on:play={() => (isPlaying = true)}
     on:pause={() => (isPlaying = false)}
-    preload="metadata"
+    preload="auto"
   ></audio>
 </div>
 
 <style>
   .audio-player {
-    position: fixed;
+    position: absolute;
+    z-index: 1001;
     bottom: 1rem;
-    left: 1rem;
-    right: 1rem;
-    z-index: 1000;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    width: 90%;
+    max-width: 500px;
     background: rgba(0, 0, 0, 0.3);
     border: 1px solid rgba(255, 255, 255, 0.1);
     border-radius: 0.5rem;
-    padding: 1rem;
+    padding: 0.5rem;
     color: white;
     backdrop-filter: blur(10px);
   }
 
-  .player-header {
+  .player-content {
+    flex-grow: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    overflow: hidden; /* Prevent content from overflowing */
+  }
+
+  .title-bar {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 1rem;
   }
 
-  .player-header h4 {
+  .title {
     margin: 0;
-    font-size: 1rem;
+    font-size: 0.875rem;
     font-weight: 600;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    flex: 1;
     margin-right: 1rem;
+    min-width: 0; /* Allow title to shrink */
   }
 
   .time-display {
-    font-size: 0.875rem;
+    font-size: 0.75rem;
     color: rgba(255, 255, 255, 0.7);
     font-family: 'JetBrains Mono', monospace;
+    white-space: nowrap;
   }
 
-  .waveform-container {
-    margin-bottom: 1rem;
-    border-radius: 0.375rem;
-    overflow: hidden;
-  }
-
-  .waveform {
-    width: 100%;
-    height: 100px;
+  .progress-bar {
+    height: 4px;
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 2px;
     cursor: pointer;
-    display: block;
   }
 
-  .player-controls {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
+  .progress {
+    height: 100%;
+    background: #9333ea;
+    border-radius: 2px;
   }
 
-  .play-button {
+  .play-button,
+  .close-button,
+  .volume-button {
     background: #9333ea;
     border: none;
     color: white;
-    width: 48px;
-    height: 48px;
+    width: 36px;
+    height: 36px;
     border-radius: 50%;
     display: flex;
     align-items: center;
     justify-content: center;
     cursor: pointer;
     transition: all 0.2s;
+    flex-shrink: 0;
   }
 
-  .play-button:hover {
+  .play-button:hover,
+  .close-button:hover,
+  .volume-button:hover {
     background: #7c3aed;
     transform: scale(1.05);
   }
 
-  .play-button:active {
+  .play-button:active,
+  .close-button:active,
+  .volume-button:active {
     transform: scale(0.95);
   }
 
-  .volume-control {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    flex: 1;
+  .close-button,
+  .volume-button {
+    background: rgba(255, 255, 255, 0.1);
   }
 
-  .volume-control svg {
-    color: rgba(255, 255, 255, 0.7);
+  .close-button:hover,
+  .volume-button:hover {
+    background: rgba(255, 255, 255, 0.2);
+  }
+
+  .volume-control {
+    position: relative;
+    display: flex;
+    align-items: center;
+  }
+
+  .volume-slider-container {
+    position: absolute;
+    bottom: calc(100% + 0.5rem);
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(10px);
+    border-radius: 0.5rem;
+    padding: 1rem 0.5rem;
+    display: flex;
+    justify-content: center;
+    align-items: center;
   }
 
   .volume-slider {
-    flex: 1;
+    -webkit-appearance: none;
+    appearance: none;
+    background: transparent;
+    cursor: pointer;
+    width: 100px; /* Length of the slider */
+    transform: rotate(-90deg);
+  }
+
+  /* Webkit (Chrome, Safari) */
+  .volume-slider::-webkit-slider-runnable-track {
     height: 4px;
     background: rgba(255, 255, 255, 0.2);
     border-radius: 2px;
-    outline: none;
-    cursor: pointer;
-    -webkit-appearance: none;
-    appearance: none;
   }
 
   .volume-slider::-webkit-slider-thumb {
-    width: 16px;
-    height: 16px;
+    -webkit-appearance: none;
+    appearance: none;
+    margin-top: -5px; /* (thumb height - track height) / 2 */
+    width: 14px;
+    height: 14px;
     background: #9333ea;
     border-radius: 50%;
     border: none;
-    cursor: pointer;
-    -webkit-appearance: none;
-    appearance: none;
+  }
+
+  /* Firefox */
+  .volume-slider::-moz-range-track {
+    height: 4px;
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 2px;
   }
 
   .volume-slider::-moz-range-thumb {
-    width: 16px;
-    height: 16px;
+    width: 14px;
+    height: 14px;
     background: #9333ea;
     border-radius: 50%;
-    border: none;
-    cursor: pointer;
-  }
-
-  .volume-slider::-webkit-slider-track {
-    background: rgba(255, 255, 255, 0.2);
-    height: 4px;
-    border-radius: 2px;
-  }
-
-  .volume-slider::-moz-range-track {
-    background: rgba(255, 255, 255, 0.2);
-    height: 4px;
-    border-radius: 2px;
     border: none;
   }
 </style>

@@ -1,4 +1,4 @@
-import { app, shell, BrowserWindow, ipcMain, dialog } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, dialog, protocol } from 'electron'
 import { join, extname } from 'path'
 import { promises as fs } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
@@ -107,6 +107,11 @@ app.whenReady().then(async () => {
   // Set app user model id for windows
   electronApp.setAppUserModelId('com.electron')
 
+  protocol.registerFileProtocol('audiop', (request, callback) => {
+    const url = request.url.substr(9) // strip 'audiop://'
+    callback({ path: decodeURIComponent(url) })
+  })
+
   ipcMain.handle('dialog:openProject', async () => {
     const { canceled, filePaths } = await dialog.showOpenDialog({
       properties: ['openDirectory']
@@ -140,28 +145,10 @@ app.whenReady().then(async () => {
       }
       const { path: audioPath } = await pathResponse.json()
 
-      // 2. Read file from filesystem
-      const fileBuffer = await fs.readFile(audioPath)
-
-      // 3. Determine MIME type
-      const extension = extname(audioPath).toLowerCase()
-      let mimeType = ''
-      if (extension === '.wav') {
-        mimeType = 'audio/wav'
-      } else if (extension === '.mp3') {
-        mimeType = 'audio/mpeg'
-      } else if (extension === '.ogg') {
-        mimeType = 'audio/ogg'
-      } else {
-        // Add more types if needed, or have a fallback
-        mimeType = 'application/octet-stream'
-      }
-
-      // 4. Create data URI
-      const base64Data = fileBuffer.toString('base64')
-      const dataUri = `data:${mimeType};base64,${base64Data}`
+      // 2. Create custom protocol URL
+      const audioUrl = `audiop://${encodeURIComponent(audioPath)}`
       
-      return dataUri
+      return audioUrl
 
     } catch (error) {
       console.error('Failed to get audio file:', error)

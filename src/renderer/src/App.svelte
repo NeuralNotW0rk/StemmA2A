@@ -41,12 +41,12 @@
     const audioData = event.detail
     await window.api.logMessage(`Audio selected: ${audioData.name}`)
     try {
-      const dataUri = await window.api.getAudioFile(audioData.name)
-      if (dataUri) {
-        audioSrc = dataUri
-        audioTitle = audioData.name
+      const dataUrl = await window.api.getAudioFile(audioData.name)
+      if (dataUrl) {
+        audioSrc = dataUrl
+        audioTitle = audioData.alias
       } else {
-        console.error('Failed to get audio data URI.')
+        console.error('Failed to get audio data URL.')
         // Optionally, show an error to the user
       }
     } catch (error) {
@@ -74,7 +74,7 @@
     on:center={() => audioGraph.centerView()}
   />
   {#if audioSrc}
-    <AudioPlayer src={audioSrc} title={audioTitle} />
+    <AudioPlayer src={audioSrc} title={audioTitle} on:close={() => (audioSrc = null)} />
   {/if}
 </main>
 
