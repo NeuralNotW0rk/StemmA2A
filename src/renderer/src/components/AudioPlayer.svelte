@@ -3,7 +3,7 @@
   import { createEventDispatcher, onMount, onDestroy } from 'svelte'
 
   export let src: string
-  export let label: string = ''
+  export let title: string = ''
 
   const dispatch = createEventDispatcher()
 
@@ -117,7 +117,7 @@
   </button>
   <div class="player-content">
     <div class="title-bar">
-      <h4 class="title">{label}</h4>
+      <h4 class="title">{title}</h4>
       <div class="time-display">{formatTime(currentTime)} / {formatTime(duration)}</div>
     </div>
     <div
