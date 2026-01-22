@@ -1,15 +1,16 @@
 <!-- src/renderer/src/components/AudioGraph.svelte -->
 <script lang="ts">
+  /* eslint-disable @typescript-eslint/no-explicit-any */
   import { onMount, onDestroy, createEventDispatcher } from 'svelte'
-  import cytoscape from 'cytoscape'
+  import cytoscape, { type EventObject, type NodeSingular } from 'cytoscape'
   import fcose from 'cytoscape-fcose'
   import cxtmenu from 'cytoscape-cxtmenu'
   import expandCollapse from 'cytoscape-expand-collapse'
-  import graphStyle from './Style.js'
-  import layoutConfig from './Layout.js'
-  import expandCollapseOptions from './Options.js'
+  import graphStyle, { modelColor, audioColor, batchColor, externalColor } from './Style'
+  import layoutConfig from './Layout'
+  import expandCollapseOptions from './Options'
 
-  export let graphData: any = null
+  export let graphData: { elements: cytoscape.ElementDefinition[] } | null = null
   export let viewMode: 'batch' | 'cluster' = 'batch'
 
   const dispatch = createEventDispatcher()
@@ -177,14 +178,14 @@
     if (!cy) return
 
     // Audio node selection
-    cy.on('tap', 'node[type="audio"]', (evt) => {
+    cy.on('tap', 'node[type="audio"]', (evt: EventObject) => {
       console.log('Audio node tapped:', evt.target.data())
       const audioData = evt.target.data()
       dispatch('audioSelect', audioData)
     })
 
     // Model node selection
-    cy.on('tap', 'node[type="model"]', (evt) => {
+    cy.on('tap', 'node[type="model"]', (evt: EventObject) => {
       const modelData = evt.target.data()
       dispatch('modelSelect', modelData)
     })
@@ -195,7 +196,7 @@
     })
 
     // Keyboard shortcuts
-    cy.on('keydown', (evt) => {
+    cy.on('keydown', (evt: any) => {
       if (evt.originalEvent.key === 'r') {
         applyLayout()
       }
@@ -207,44 +208,38 @@
 
     const scale = 500
 
-    var fixedNodeConstraint = []
+    let fixedNodeConstraint: { nodeId: string; position: { x: number; y: number } }[] = []
 
     if (viewMode === 'cluster') {
-      fixedNodeConstraint = cy.$('node[type="audio"]').map((ele) => {
+      fixedNodeConstraint = cy.$('node[type="audio"]').map((ele: NodeSingular) => {
         return {
           nodeId: ele.data('id'),
-
           position: { x: ele.data('tsne_1') * scale, y: ele.data('tsne_2') * scale }
         }
       })
     }
 
     // Workaround tiling issues by temporarily removing audio source edges
-
-    var audioSourceEdges = cy.edges('[type="audio_source"]').remove()
+    const audioSourceEdges = cy.edges('[type="audio_source"]').remove()
 
     // Create and run layout
-
-    var layout = cy.layout({
+    const layout = cy.layout({
       ...layoutConfig,
-
       randomize,
-
       fixedNodeConstraint,
-
-      tilingCompareBy: (nodeId1, nodeId2) => {
-        if (cy.$id(nodeId1).data('type') === 'audio' && cy.$id(nodeId2).data('type') === 'audio') {
+      tilingCompareBy: (nodeId1: string, nodeId2: string) => {
+        if (
+          cy?.$id(nodeId1).data('type') === 'audio' &&
+          cy?.$id(nodeId2).data('type') === 'audio'
+        ) {
           return cy.$id(nodeId1).data('batch_index') - cy.$id(nodeId2).data('batch_index')
         }
-
         return 0
       }
-    })
-
+    } as any)
     layout.run()
 
     // Restore removed elements
-
     audioSourceEdges.restore()
   }
 
@@ -254,7 +249,7 @@
     try {
       // Store current positions
       const positions: { [key: string]: cytoscape.Position } = {}
-      cy.nodes().forEach((node) => {
+      cy.nodes().forEach((node: NodeSingular) => {
         positions[node.id()] = node.position()
       })
 
@@ -267,7 +262,7 @@
 
         // Restore positions for existing nodes, but only in 'batch' mode
         if (viewMode === 'batch') {
-          cy.nodes().forEach((node) => {
+          cy.nodes().forEach((node: NodeSingular) => {
             if (positions[node.id()]) {
               node.position(positions[node.id()])
             }
@@ -283,7 +278,7 @@
         }
 
         // Setup batch expansion state
-        cy.nodes('[type="batch"]').forEach((node) => {
+        cy.nodes('[type="batch"]').forEach((node: NodeSingular) => {
           node.data('isExpanded', true)
         })
       }
@@ -315,19 +310,19 @@
 
   <div class="graph-legend">
     <div class="legend-item">
-      <div class="legend-color model"></div>
+      <div class="legend-color" style="background-color: {modelColor};"></div>
       <span>Models</span>
     </div>
     <div class="legend-item">
-      <div class="legend-color audio"></div>
+      <div class="legend-color" style="background-color: {audioColor};"></div>
       <span>Audio</span>
     </div>
     <div class="legend-item">
-      <div class="legend-color batch"></div>
+      <div class="legend-color" style="background-color: {batchColor};"></div>
       <span>Batches</span>
     </div>
     <div class="legend-item">
-      <div class="legend-color external"></div>
+      <div class="legend-color" style="background-color: {externalColor};"></div>
       <span>External</span>
     </div>
   </div>
@@ -379,22 +374,5 @@
     width: 12px;
     height: 12px;
     border-radius: 2px;
-  }
-
-  .legend-color.model {
-    background-color: #9333ea;
-  }
-
-  .legend-color.audio {
-    background-color: #06b6d4;
-  }
-
-  .legend-color.batch {
-    background-color: #374151;
-    border: 1px solid #6b7280;
-  }
-
-  .legend-color.external {
-    background-color: #059669;
   }
 </style>
