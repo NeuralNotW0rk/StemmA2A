@@ -27,7 +27,7 @@
     }
   })
 
-  function initializeGraph() {
+  function initializeGraph(): void {
     // Register extensions
     cytoscape.use(fcose)
     cytoscape.use(cxtmenu)
@@ -59,7 +59,7 @@
     }
   }
 
-  function setupContextMenus() {
+  function setupContextMenus(): void {
     if (!cy) return
 
     // Core context menu (right-click on empty space)
@@ -173,12 +173,12 @@
     })
   }
 
-  function setupEventListeners() {
+  function setupEventListeners(): void {
     if (!cy) return
 
     // Audio node selection
     cy.on('tap', 'node[type="audio"]', (evt) => {
-      console.log('Audio node tapped:', evt.target.data());
+      console.log('Audio node tapped:', evt.target.data())
       const audioData = evt.target.data()
       dispatch('audioSelect', audioData)
     })
@@ -202,75 +202,53 @@
     })
   }
 
-    function applyLayout(randomize = false) {
+  function applyLayout(randomize = false): void {
+    if (!cy) return
 
-      if (!cy) return
+    const scale = 500
 
-      const scale = 500
+    var fixedNodeConstraint = []
 
-  
+    if (viewMode === 'cluster') {
+      fixedNodeConstraint = cy.$('node[type="audio"]').map((ele) => {
+        return {
+          nodeId: ele.data('id'),
 
-      var fixedNodeConstraint = []
-
-      if (viewMode === 'cluster') {
-
-        fixedNodeConstraint = cy.$('node[type="audio"]').map((ele) => {
-
-          return {
-
-            nodeId: ele.data('id'),
-
-            position: { x: ele.data('tsne_1') * scale, y: ele.data('tsne_2') * scale }
-
-          }
-
-        })
-
-      }
-
-  
-
-      // Workaround tiling issues by temporarily removing audio source edges
-
-      var audioSourceEdges = cy.edges('[type="audio_source"]').remove()
-
-  
-
-      // Create and run layout
-
-      var layout = cy.layout({
-
-        ...layoutConfig,
-
-        randomize,
-
-        fixedNodeConstraint,
-
-        tilingCompareBy: (nodeId1, nodeId2) => {
-
-          if (cy.$id(nodeId1).data('type') === 'audio' && cy.$id(nodeId2).data('type') === 'audio') {
-
-            return cy.$id(nodeId1).data('batch_index') - cy.$id(nodeId2).data('batch_index')
-
-          }
-
-          return 0
-
+          position: { x: ele.data('tsne_1') * scale, y: ele.data('tsne_2') * scale }
         }
-
       })
-
-      layout.run()
-
-  
-
-      // Restore removed elements
-
-      audioSourceEdges.restore()
-
     }
 
-  function updateGraph() {
+    // Workaround tiling issues by temporarily removing audio source edges
+
+    var audioSourceEdges = cy.edges('[type="audio_source"]').remove()
+
+    // Create and run layout
+
+    var layout = cy.layout({
+      ...layoutConfig,
+
+      randomize,
+
+      fixedNodeConstraint,
+
+      tilingCompareBy: (nodeId1, nodeId2) => {
+        if (cy.$id(nodeId1).data('type') === 'audio' && cy.$id(nodeId2).data('type') === 'audio') {
+          return cy.$id(nodeId1).data('batch_index') - cy.$id(nodeId2).data('batch_index')
+        }
+
+        return 0
+      }
+    })
+
+    layout.run()
+
+    // Restore removed elements
+
+    audioSourceEdges.restore()
+  }
+
+  function updateGraph(): void {
     if (!cy || !graphData) return
 
     try {
@@ -319,15 +297,15 @@
     updateGraph()
   }
 
-  export function reorganizeLayout() {
+  export function reorganizeLayout(): void {
     applyLayout()
   }
 
-  export function fitView() {
+  export function fitView(): void {
     cy?.fit()
   }
 
-  export function centerView() {
+  export function centerView(): void {
     cy?.center()
   }
 </script>
