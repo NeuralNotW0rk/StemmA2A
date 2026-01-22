@@ -1,8 +1,9 @@
 <script lang="ts">
+  import { tick } from 'svelte'
   import AudioGraph from './components/graph/ParameterGraph.svelte'
   import Toolbar from './components/Toolbar.svelte'
-  import GraphControls from './components/graph/GraphControls.svelte'
   import AudioPlayer from './components/AudioPlayer.svelte'
+  import Sidebar from './components/Sidebar.svelte'
 
   let graphData: any = null
   let currentProject: string | null = null
@@ -10,6 +11,7 @@
   let audioGraph: AudioGraph
   let audioSrc: string | null = null
   let audioTitle: string | null = null
+  let selectedNodeData: Record<string, any> | null = null
 
   async function handleProjectLoad(event: CustomEvent<{ projectPath: string }>): Promise<void> {
     const projectPath = event.detail.projectPath
@@ -23,7 +25,6 @@
     } catch (error) {
       console.error('Failed to load project:', error)
       await window.api.logMessage(`Failed to load project: ${projectPath}. Error: ${error}`)
-      // Optionally, show an error message to the user
     }
   }
 
@@ -47,10 +48,24 @@
         audioTitle = audioData.alias
       } else {
         console.error('Failed to get audio data URL.')
-        // Optionally, show an error to the user
       }
     } catch (error) {
       console.error('Error getting audio file:', error)
+    }
+  }
+
+  function handleNodeSelect(event: CustomEvent<any>) {
+    selectedNodeData = event.detail
+    window.api.logMessage(`Node selected: ${selectedNodeData?.name || 'Unknown'}`)
+  }
+
+  async function refreshGraphData() {
+    try {
+      graphData = await window.api.getGraphData(viewMode)
+      await window.api.logMessage(`Graph data refreshed for view mode ${viewMode}`)
+    } catch (error) {
+      console.error('Failed to get graph data:', error)
+      await window.api.logMessage(`Failed to get graph data for view mode ${viewMode}. Error: ${error}`)
     }
   }
 </script>
@@ -59,19 +74,19 @@
   <Toolbar
     on:projectLoad={handleProjectLoad}
     on:viewModeChange={handleViewModeChange}
+    on:refresh={refreshGraphData}
     {currentProject}
     {viewMode}
   />
+  {#if selectedNodeData}
+    <Sidebar {selectedNodeData} on:close={() => (selectedNodeData = null)} />
+  {/if}
   <AudioGraph
     bind:this={audioGraph}
     {graphData}
     {viewMode}
     on:audioSelect={handleAudioSelect}
-  />
-  <GraphControls
-    on:reorganize={() => audioGraph.reorganizeLayout()}
-    on:fit={() => audioGraph.fitView()}
-    on:center={() => audioGraph.centerView()}
+    on:nodeSelect={handleNodeSelect}
   />
   {#if audioSrc}
     <AudioPlayer src={audioSrc} title={audioTitle} on:close={() => (audioSrc = null)} />

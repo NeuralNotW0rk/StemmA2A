@@ -6,9 +6,11 @@
   import fcose from 'cytoscape-fcose'
   import cxtmenu from 'cytoscape-cxtmenu'
   import expandCollapse from 'cytoscape-expand-collapse'
-  import graphStyle, { modelColor, audioColor, batchColor, externalColor } from './Style'
+  import graphStyle from './Style'
   import layoutConfig from './Layout'
   import expandCollapseOptions from './Options'
+  import GraphControls from './GraphControls.svelte'
+  import GraphLegend from './GraphLegend.svelte'
 
   export let graphData: { elements: cytoscape.ElementDefinition[] } | null = null
   export let viewMode: 'batch' | 'cluster' = 'batch'
@@ -62,29 +64,6 @@
 
   function setupContextMenus(): void {
     if (!cy) return
-
-    // Core context menu (right-click on empty space)
-    cy.cxtmenu({
-      selector: 'core',
-      commands: [
-        {
-          content: 'Tidy Layout',
-          select: () => applyLayout()
-        },
-        {
-          content: 'Import Model',
-          select: () => dispatch('importModel')
-        },
-        {
-          content: 'Add External Source',
-          select: () => dispatch('addExternalSource')
-        },
-        {
-          content: 'Refresh',
-          select: () => dispatch('refresh')
-        }
-      ]
-    })
 
     // Model node context menu
     cy.cxtmenu({
@@ -177,17 +156,14 @@
   function setupEventListeners(): void {
     if (!cy) return
 
-    // Audio node selection
-    cy.on('tap', 'node[type="audio"]', (evt: EventObject) => {
-      console.log('Audio node tapped:', evt.target.data())
-      const audioData = evt.target.data()
-      dispatch('audioSelect', audioData)
-    })
+    cy.on('tap', 'node, edge', (evt: EventObject) => {
+      const elementData = evt.target.data()
+      dispatch('nodeSelect', elementData) // Dispatch for sidebar
 
-    // Model node selection
-    cy.on('tap', 'node[type="model"]', (evt: EventObject) => {
-      const modelData = evt.target.data()
-      dispatch('modelSelect', modelData)
+      // If the tapped element is a node and its type is 'audio'
+      if (evt.target.isNode() && elementData.type === 'audio') {
+        dispatch('audioSelect', elementData) // Dispatch for audio player
+      }
     })
 
     // Double-click to fit
@@ -292,7 +268,7 @@
     updateGraph()
   }
 
-  export function reorganizeLayout(): void {
+  export function tidyView(): void {
     applyLayout()
   }
 
@@ -307,25 +283,12 @@
 
 <div class="graph-wrapper">
   <div bind:this={graphContainer} class="graph-container"></div>
-
-  <div class="graph-legend">
-    <div class="legend-item">
-      <div class="legend-color" style="background-color: {modelColor};"></div>
-      <span>Models</span>
-    </div>
-    <div class="legend-item">
-      <div class="legend-color" style="background-color: {audioColor};"></div>
-      <span>Audio</span>
-    </div>
-    <div class="legend-item">
-      <div class="legend-color" style="background-color: {batchColor};"></div>
-      <span>Batches</span>
-    </div>
-    <div class="legend-item">
-      <div class="legend-color" style="background-color: {externalColor};"></div>
-      <span>External</span>
-    </div>
-  </div>
+  <GraphControls
+    on:tidy={() => tidyView()}
+    on:fit={() => fitView()}
+    on:center={() => centerView()}
+  />
+  <GraphLegend />
 </div>
 
 <style>
@@ -345,34 +308,5 @@
 
   .graph-container:active {
     cursor: grabbing;
-  }
-
-  .graph-legend {
-    position: absolute;
-    bottom: 1rem;
-    left: 1rem;
-    background: rgba(0, 0, 0, 0.7);
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    border-radius: 0.5rem;
-    padding: 1rem;
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-    backdrop-filter: blur(10px);
-    z-index: 100;
-  }
-
-  .legend-item {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    font-size: 0.875rem;
-    color: white;
-  }
-
-  .legend-color {
-    width: 12px;
-    height: 12px;
-    border-radius: 2px;
   }
 </style>

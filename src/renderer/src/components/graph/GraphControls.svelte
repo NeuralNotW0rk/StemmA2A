@@ -6,8 +6,8 @@
 </script>
 
 <div class="graph-controls">
-  <button on:click={() => dispatch('reorganize')} title="Reorganize layout" aria-label="Reorganize layout">
-    Reorganize
+  <button on:click={() => dispatch('tidy')} title="Tidy layout" aria-label="Tidy layout">
+    Tidy
   </button>
 
   <button on:click={() => dispatch('fit')} title="Fit to screen" aria-label="Fit to screen">
@@ -22,7 +22,7 @@
 <style>
   .graph-controls {
     position: absolute;
-    top: 4.5rem;
+    top: 1rem;
     right: 1rem;
     display: flex;
     flex-direction: column;
