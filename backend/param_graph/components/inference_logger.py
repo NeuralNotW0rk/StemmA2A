@@ -5,7 +5,7 @@ from pathlib import Path
 import networkx as nx
 
 from ..util import *
-from ..elements import Batch, Audio
+from ..elements.base_elements import Batch, Artifact
 
 class InferenceLogger:
     def __init__(self, graph: nx.DiGraph, root: Path):
@@ -75,7 +75,7 @@ class InferenceLogger:
             torchaudio.save(str(audio_path), sample.cpu(), sample_rate)
 
             # Create node
-            audio = Audio(
+            audio = Artifact(
                 path=str(audio_path.relative_to(self.root)),
                 alias=f'{model_name[:3]}_{batch_name[-10:]}_{batch_index}',
                 batch_index=batch_index,

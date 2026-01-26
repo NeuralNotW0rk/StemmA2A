@@ -5,7 +5,7 @@ import soundfile as sf
 import networkx as nx
 
 from ..util import *
-from ..elements import Model, ExternalSource, Set, Audio
+from ..elements.base_elements import Model, ExternalSource, Set, Audio
 
 class Importer:
     def __init__(self, graph: nx.DiGraph, root: Path):
