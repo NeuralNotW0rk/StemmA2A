@@ -6,3 +6,5 @@ networkx
 torch
 torchvision
 torchaudio
+
+stable-audio-tools

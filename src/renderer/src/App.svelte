@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { tick } from 'svelte'
+  /* eslint-disable @typescript-eslint/no-explicit-any */
   import AudioGraph from './components/graph/ParameterGraph.svelte'
   import Toolbar from './components/Toolbar.svelte'
   import AudioPlayer from './components/AudioPlayer.svelte'
@@ -28,17 +28,19 @@
     }
   }
 
-  async function handleViewModeChange(event: CustomEvent<'batch' | 'cluster'>) {
+  async function handleViewModeChange(event: CustomEvent<'batch' | 'cluster'>): Promise<void> {
     viewMode = event.detail
     try {
       graphData = await window.api.getGraphData(viewMode)
     } catch (error) {
       console.error('Failed to get graph data:', error)
-      await window.api.logMessage(`Failed to get graph data for view mode ${viewMode}. Error: ${error}`)
+      await window.api.logMessage(
+        `Failed to get graph data for view mode ${viewMode}. Error: ${error}`
+      )
     }
   }
 
-  async function handleAudioSelect(event: CustomEvent<any>) {
+  async function handleAudioSelect(event: CustomEvent<any>): Promise<void> {
     const audioData = event.detail
     await window.api.logMessage(`Audio selected: ${audioData.name}`)
     try {
@@ -54,18 +56,20 @@
     }
   }
 
-  function handleNodeSelect(event: CustomEvent<any>) {
+  function handleNodeSelect(event: CustomEvent<any>): void {
     selectedNodeData = event.detail
     window.api.logMessage(`Node selected: ${selectedNodeData?.name || 'Unknown'}`)
   }
 
-  async function refreshGraphData() {
+  async function refreshGraphData(): Promise<void> {
     try {
       graphData = await window.api.getGraphData(viewMode)
       await window.api.logMessage(`Graph data refreshed for view mode ${viewMode}`)
     } catch (error) {
       console.error('Failed to get graph data:', error)
-      await window.api.logMessage(`Failed to get graph data for view mode ${viewMode}. Error: ${error}`)
+      await window.api.logMessage(
+        `Failed to get graph data for view mode ${viewMode}. Error: ${error}`
+      )
     }
   }
 </script>

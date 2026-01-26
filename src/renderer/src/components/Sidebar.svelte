@@ -1,12 +1,13 @@
 <!-- src/renderer/src/components/Sidebar.svelte -->
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte';
-  export let selectedNodeData: Record<string, any> | null = null;
+  /* eslint-disable @typescript-eslint/no-explicit-any */
+  import { createEventDispatcher } from 'svelte'
+  export let selectedNodeData: Record<string, any> | null = null
 
-  const dispatch = createEventDispatcher();
+  const dispatch = createEventDispatcher()
 
   // A list of keys to ignore for a cleaner display
-  const ignoredKeys = new Set(['x', 'y', 'vx', 'vy', 'fx', 'fy', 'isExpanded', 'index']);
+  const ignoredKeys = new Set(['x', 'y', 'vx', 'vy', 'fx', 'fy', 'isExpanded', 'index'])
 </script>
 
 <aside class="sidebar">
@@ -17,7 +18,7 @@
     </div>
     <div class="sidebar-content">
       <ul>
-        {#each Object.entries(selectedNodeData) as [key, value]}
+        {#each Object.entries(selectedNodeData) as [key, value] (key)}
           {#if !ignoredKeys.has(key)}
             <li>
               <strong class="key">{key}</strong>
@@ -42,7 +43,7 @@
     left: 1rem;
     bottom: 1rem;
     width: 280px;
-    
+
     display: flex;
     flex-direction: column;
 

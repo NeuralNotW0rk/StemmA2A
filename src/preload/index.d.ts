@@ -4,7 +4,9 @@ interface API {
   openProject: () => Promise<string | null>
   getRecentProjects: () => Promise<string[]>
   addRecentProject: (projectPath: string) => Promise<void>
-  loadProjectAndGetData: (projectPath: string) => Promise<any>
+  loadProject: (projectPath: string) => Promise<any>
+  getGraphData: (viewMode: 'batch' | 'cluster') => Promise<any>
+  getAudioFile: (filename: string) => Promise<string | null>
   logMessage: (message: string) => Promise<any>
 }
 

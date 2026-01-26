@@ -19,7 +19,11 @@
     "build:win": "npm run build && electron-builder --win",
     "build:mac": "npm run build && electron-builder --mac",
     "build:linux": "npm run build && electron-builder --linux",
-    "backend:setup": "py -m venv backend/.venv && backend\\.venv\\Scripts\\python.exe -m pip install --upgrade pip && backend\\.venv\\Scripts\\pip.exe install -r backend/requirements.txt"
+    "backend:setup": "npm run backend:check-python && npm run backend:create-venv && npm run backend:upgrade-tools && npm run backend:install-deps",
+    "backend:check-python": "py -3.11 -c \"import sys; print(f'Found compatible Python version: {sys.version}')\"",
+    "backend:create-venv": "py -3.11 -m venv backend/.venv",
+    "backend:upgrade-tools": "backend\\.venv\\Scripts\\python.exe -m pip install --upgrade pip setuptools wheel",
+    "backend:install-deps": "backend\\.venv\\Scripts\\pip.exe install -r backend/requirements.txt"
   },
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.2",

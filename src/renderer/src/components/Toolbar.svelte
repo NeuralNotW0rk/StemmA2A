@@ -13,15 +13,15 @@
   let showImportDialog = false
   let importPath = ''
 
-  onMount(async () => {
+  onMount(async (): Promise<void> => {
     recentProjects = await window.api.getRecentProjects()
   })
 
-  function closeDialog() {
+  function closeDialog(): void {
     showImportDialog = false
   }
 
-  async function openProject() {
+  async function openProject(): Promise<void> {
     showFileMenu = false
     const path = await window.api.openProject()
     if (path) {
@@ -29,19 +29,19 @@
     }
   }
 
-  function loadRecentProject(path: string) {
+  function loadRecentProject(path: string): void {
     showFileMenu = false
     dispatch('projectLoad', { projectPath: path })
   }
 
-  function toggleViewMode() {
+  function toggleViewMode(): void {
     const newMode = viewMode === 'batch' ? 'cluster' : 'batch'
     dispatch('viewModeChange', newMode)
   }
 
-  async function importModel() {
+  async function importModel(): Promise<void> {
     if (!importPath.trim()) return
-    
+
     try {
       // @ts-ignore - function not defined
       await window.api.importModel(importPath)
@@ -53,7 +53,7 @@
     }
   }
 
-  function handleKeydown(e: KeyboardEvent) {
+  function handleKeydown(e: KeyboardEvent): void {
     if (e.key === 'Escape' && showImportDialog) {
       showImportDialog = false
     }
@@ -63,14 +63,14 @@
   }
 
   // TODO: This function is not defined.
-  function selectModelPath() {
+  function selectModelPath(): void {
     console.log('selectModelPath called')
   }
 </script>
 
 <svelte:window
   on:keydown={handleKeydown}
-  on:click={(event) => {
+  on:click={(event: MouseEvent): void => {
     if (fileMenuElement && !fileMenuElement.contains(event.target as Node)) {
       showFileMenu = false
     }
@@ -80,10 +80,7 @@
 <div class="toolbar">
   <div class="toolbar-section">
     <div class="file-menu" bind:this={fileMenuElement}>
-      <button
-        class="project-button"
-        on:click={() => (showFileMenu = !showFileMenu)}
-      >
+      <button class="project-button" on:click={() => (showFileMenu = !showFileMenu)}>
         File
         <svg
           width="12"
@@ -99,12 +96,10 @@
 
       {#if showFileMenu}
         <div class="project-dropdown">
-          <button class="dropdown-item" on:click={openProject}>
-            Load Project...
-          </button>
+          <button class="dropdown-item" on:click={openProject}> Load Project... </button>
           <div class="dropdown-divider"></div>
           <div class="dropdown-header">Recent Projects</div>
-          {#each recentProjects as project}
+          {#each recentProjects as project (project)}
             <button class="dropdown-item" on:click={() => loadRecentProject(project)}>
               {project.split(/[\\/]/).pop()}
             </button>
@@ -115,14 +110,14 @@
         </div>
       {/if}
     </div>
-    <div class="current-project">{currentProject ? currentProject.split(/[\\/]/).pop() : 'No Project Loaded'}</div>
-    <button
-      class="toolbar-button"
-      on:click={() => dispatch('refresh')}
-      title="Refresh graph data"
-    >
+    <div class="current-project">
+      {currentProject ? currentProject.split(/[\\/]/).pop() : 'No Project Loaded'}
+    </div>
+    <button class="toolbar-button" on:click={() => dispatch('refresh')} title="Refresh graph data">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-        <path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/>
+        <path
+          d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"
+        />
       </svg>
       Refresh
     </button>
@@ -145,11 +140,7 @@
   </div>
 
   <div class="toolbar-section">
-    <button
-      class="toolbar-button"
-      on:click={() => (showImportDialog = true)}
-      title="Import model"
-    >
+    <button class="toolbar-button" on:click={() => (showImportDialog = true)} title="Import model">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
         <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" />
       </svg>
@@ -161,12 +152,7 @@
       on:click={() => dispatch('addExternalSource')}
       title="Add external audio source"
     >
-      <svg
-        width="16"
-        height="16"
-        viewBox="0 0 24 24"
-        fill="currentColor"
-      >
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
         <path
           d="M10 4H4c-1.11 0-2 .89-2 2v12c0 1.11.89 2 2 2h16c1.11 0 2-.89 2-2V8c0-1.11-.89-2-2-2h-8l-2-2z"
         />
@@ -203,11 +189,7 @@
         <label>
           Model Path:
           <div class="path-input">
-            <input
-              type="text"
-              bind:value={importPath}
-              placeholder="/path/to/model.ckpt"
-            />
+            <input type="text" bind:value={importPath} placeholder="/path/to/model.ckpt" />
             <button on:click={selectModelPath}>Browse</button>
           </div>
         </label>
@@ -215,11 +197,7 @@
 
       <div class="dialog-actions">
         <button on:click={() => (showImportDialog = false)}>Cancel</button>
-        <button
-          class="primary"
-          on:click={importModel}
-          disabled={!importPath.trim()}
-        >
+        <button class="primary" on:click={importModel} disabled={!importPath.trim()}>
           Import
         </button>
       </div>
