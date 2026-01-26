@@ -1,13 +1,15 @@
 import os
 import json
-
 from pathlib import Path
 from time import time
-
 import networkx as nx
 
 from .util import *
 from .const import *
+from .components.importer import Importer
+from .components.exporter import Exporter
+from .components.inference_logger import InferenceLogger
+from .components.clusterer import Clusterer
 
 DEFAULT_SR = 48000
 
@@ -18,19 +20,42 @@ class ParameterGraph:
         self.backend = backend
         self.G = nx.DiGraph()
         self.project_name = None
+        
+        # Components
+        self.importer = Importer(self.G, self.root)
+        self.exporter = Exporter(self.G, self.root)
+        self.inference_logger = InferenceLogger(self.G, self.root)
+        self.clusterer = Clusterer(self.G, self.root)
+        
         self.load()
 
-    # Split functions into different files for readability
-    from ._import import (
-        import_model,
-        add_external_source,
-        scan_dir,
-        scan_external_source,
-        import_audio_set,
-    )
-    from ._export import export_single, export_batch
-    from ._inference import log_inference
-    from ._cluster import update_tsne
+    # Component-based methods
+    def import_model(self, *args, **kwargs):
+        return self.importer.import_model(*args, **kwargs)
+
+    def add_external_source(self, *args, **kwargs):
+        return self.importer.add_external_source(*args, **kwargs)
+
+    def scan_dir(self, *args, **kwargs):
+        return self.importer.scan_dir(*args, **kwargs)
+
+    def scan_external_source(self, *args, **kwargs):
+        return self.importer.scan_external_source(*args, **kwargs)
+
+    def import_audio_set(self, *args, **kwargs):
+        return self.importer.import_audio_set(*args, **kwargs)
+
+    def export_single(self, *args, **kwargs):
+        return self.exporter.export_single(*args, **kwargs)
+
+    def export_batch(self, *args, **kwargs):
+        return self.exporter.export_batch(*args, **kwargs)
+
+    def log_inference(self, *args, **kwargs):
+        return self.inference_logger.log_inference(*args, **kwargs)
+
+    def update_tsne(self, *args, **kwargs):
+        return self.clusterer.update_tsne(*args, **kwargs)
 
     # IO functions
     def load(self):
@@ -92,15 +117,20 @@ class ParameterGraph:
                         new_alias = f'{attrs["alias"]}_{data["batch_index"]}'
                         self.G.nodes[node]['alias'] = new_alias
 
-        if 'tags' in attrs and attrs['tags'] != '':
+        if 'tags' in attrs and attrs['tags']:
             # Add tags to child tag lists
             for node, data in self.G.nodes(data=True):
                 if data.get('parent') == name:
-                    delim = ','
-                    new_tags = delim.join(
-                        set(data['tags'].split(delim)) | set(attrs['tags'].split(delim))
-                    )
-                    self.G.nodes[node]['tags'] = new_tags
+                    existing_tags = data.get('tags', [])
+                    if isinstance(existing_tags, str):
+                        existing_tags = [tag.strip() for tag in existing_tags.split(',') if tag.strip()]
+                    
+                    new_tags = attrs['tags']
+                    if isinstance(new_tags, str):
+                        new_tags = [tag.strip() for tag in new_tags.split(',') if tag.strip()]
+
+                    updated_tags = sorted(list(set(existing_tags) | set(new_tags)))
+                    self.G.nodes[node]['tags'] = updated_tags
 
     # Remove element (and children in the case of batches)
     def remove_element(self, name: str):
