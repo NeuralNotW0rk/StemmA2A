@@ -112,6 +112,20 @@ app.whenReady().then(async () => {
     callback({ path: decodeURIComponent(url) })
   })
 
+  ipcMain.handle('dialog:newProject', async () => {
+    const { canceled, filePath } = await dialog.showSaveDialog({
+      title: 'Create New Project',
+      defaultPath: 'New Project',
+      buttonLabel: 'Create',
+      properties: ['createDirectory', 'showOverwriteConfirmation']
+    })
+    if (canceled) {
+      return null
+    } else {
+      return filePath
+    }
+  })
+
   ipcMain.handle('dialog:openProject', async () => {
     const { canceled, filePaths } = await dialog.showOpenDialog({
       properties: ['openDirectory']
@@ -136,7 +150,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('getAudioFile', async (_event, filename) => {
     try {
       // 1. Get path from Python backend
-      const pathResponse = await fetch(`http://127.0.0.1:5000/audio-path/${filename}`)
+      const pathResponse = await fetch(`http://127.00.1:5000/audio_path/${filename}`)
       if (!pathResponse.ok) {
         const errorBody = await pathResponse.text()
         throw new Error(
@@ -145,11 +159,20 @@ app.whenReady().then(async () => {
       }
       const { path: audioPath } = await pathResponse.json()
 
-      // 2. Create custom protocol URL
-      const audioUrl = `audiop://${encodeURIComponent(audioPath)}`
-      
-      return audioUrl
+      // 2. Read the file into a buffer
+      const audioBuffer = await fs.readFile(audioPath)
 
+      // 3. Determine MIME type
+      const extension = extname(audioPath).toLowerCase()
+      let mimeType = 'audio/wav' // Default
+      if (extension === '.mp3') {
+        mimeType = 'audio/mpeg'
+      } else if (extension === '.ogg') {
+        mimeType = 'audio/ogg'
+      }
+
+      // 4. Return buffer and mime type
+      return { buffer: audioBuffer, mimeType: mimeType }
     } catch (error) {
       console.error('Failed to get audio file:', error)
       return null
@@ -179,8 +202,8 @@ app.whenReady().then(async () => {
   });
 
   ipcMain.handle('loadProject', async (_event, projectPath) => {
-    // 1. Load the project
-    const loadResponse = await fetch('http://127.0.0.1:5000/load', {
+    // Load project
+    const loadResponse = await fetch('http://127.0.0.1:5000/load_project', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -188,16 +211,40 @@ app.whenReady().then(async () => {
         body: JSON.stringify({ project_path: projectPath }),
     });
 
-    console.log(`Main Process: /load status: ${loadResponse.status}`);
+    // Log status
+    console.log(`Main Process: /load_project status: ${loadResponse.status}`);
     if (!loadResponse.ok) {
         const errorText = await loadResponse.text();
-        console.error(`Main Process: /load error data: ${errorText}`)
+        console.error(`Main Process: /load_project error data: ${errorText}`)
         throw new Error(`Failed to load project. Status code: ${loadResponse.status}`);
     }
   })
 
+  ipcMain.handle('createProject', async (_event, projectPath) => {
+    // Create the directory if it doesn't exist
+    await fs.mkdir(projectPath, { recursive: true })
+
+    // Create project
+    const createResponse = await fetch('http://127.0.0.1:5000/create_project', {
+      method: 'POST',
+      headers: {
+          'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ project_path: projectPath }),
+    });
+
+    // Log status
+    console.log(`Main Process: /create_project status: ${createResponse.status}`);
+    if (!createResponse.ok) {
+        const errorText = await createResponse.text();
+        console.error(`Main Process: /create_project error data: ${errorText}`)
+        throw new Error(`Failed to create project. Status code: ${createResponse.status}`);
+    }
+  })
+
+
   ipcMain.handle('getGraphData', async (_event, viewMode) => {
-    const endpoint = viewMode === 'cluster' ? '/graph-tsne' : '/graph';
+    const endpoint = viewMode === 'cluster' ? '/graph_tsne' : '/graph';
     console.log(`Main Process: getting ${endpoint}`);
     const graphResponse = await fetch(`http://127.0.0.1:5000${endpoint}`);
     console.log(`Main Process: ${endpoint} status: ${graphResponse.status}`);

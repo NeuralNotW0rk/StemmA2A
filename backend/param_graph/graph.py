@@ -4,75 +4,50 @@ from pathlib import Path
 from time import time
 import networkx as nx
 
+import torch
+import numpy as np
+import librosa as lr
+
+from sklearn.manifold import TSNE
+
 from .util import *
 from .const import *
-from .components.importer import Importer
-from .components.exporter import Exporter
-from .components.inference_logger import InferenceLogger
-from .components.clusterer import Clusterer
 
 DEFAULT_SR = 48000
 
 class ParameterGraph:
-    def __init__(self, data_path, backend=None, relative=True) -> None:
+    def __init__(self, data_path, backend=None) -> None:
         self.root = Path(data_path)
         self.export_target = EXPORT_DIR
         self.backend = backend
         self.G = nx.DiGraph()
         self.project_name = None
-        
-        # Components
-        self.importer = Importer(self.G, self.root)
-        self.exporter = Exporter(self.G, self.root)
-        self.inference_logger = InferenceLogger(self.G, self.root)
-        self.clusterer = Clusterer(self.G, self.root)
-        
-        self.load()
-
-    # Component-based methods
-    def import_model(self, *args, **kwargs):
-        return self.importer.import_model(*args, **kwargs)
-
-    def add_external_source(self, *args, **kwargs):
-        return self.importer.add_external_source(*args, **kwargs)
-
-    def scan_dir(self, *args, **kwargs):
-        return self.importer.scan_dir(*args, **kwargs)
-
-    def scan_external_source(self, *args, **kwargs):
-        return self.importer.scan_external_source(*args, **kwargs)
-
-    def import_audio_set(self, *args, **kwargs):
-        return self.importer.import_audio_set(*args, **kwargs)
-
-    def export_single(self, *args, **kwargs):
-        return self.exporter.export_single(*args, **kwargs)
-
-    def export_batch(self, *args, **kwargs):
-        return self.exporter.export_batch(*args, **kwargs)
-
-    def log_inference(self, *args, **kwargs):
-        return self.inference_logger.log_inference(*args, **kwargs)
-
-    def update_tsne(self, *args, **kwargs):
-        return self.clusterer.update_tsne(*args, **kwargs)
 
     # IO functions
-    def load(self):
+    def load(self) -> bool:
         check_dir(self.root)
 
-        with open(self.root / DICT_FILE, 'r') as df:
-            data = json.load(df)
-            self.project_name = data['project_name']
-            self.export_target = Path(data['export_target'])
-            self.G = nx.cytoscape.cytoscape_graph(data['graph'])
-        
+        data_path = self.root / DICT_FILE
+        if os.path.exists(data_path):
+            with open(data_path, 'r') as df:
+                data = json.load(df)
+                self.project_name = data['project_name']
+                self.export_target = Path(data['export_target'])
+                self.G = nx.cytoscape.cytoscape_graph(data['graph'])
+            return True
+        return False
 
     def save(self):
-        os.system(
-            f'cp "{self.root / DICT_FILE}" "{check_dir(self.root / BACKIP_DIR) / DICT_FILE}_{int(time())}"'
-        )
-        with open(self.root / DICT_FILE, 'w') as df:
+        data_path = self.root / DICT_FILE
+
+        # Backup json if it exists
+        if os.path.exists(data_path):
+            os.system(
+                f'cp "{data_path}" "{check_dir(self.root / BACKIP_DIR) / DICT_FILE}_{int(time())}"'
+            )
+
+        # Write new json
+        with open(data_path, 'w') as df:
             data = {
                 'project_name': self.project_name,
                 'export_target': str(self.export_target),
@@ -140,3 +115,65 @@ class ParameterGraph:
                 to_remove.append(node)
 
         self.G.remove_nodes_from(to_remove)
+
+    def update_tsne(
+        self, n_components=2, perplexity=40, n_iter=300, sample_rate=48000, sample_size=None
+    ):
+        if sample_size is None:
+            sample_size = sample_rate
+
+        # Gather audio samples
+        print('Gathering audio samples for t-SNE calculation...')
+        names = []
+        samples = []
+        for node, data in self.G.nodes(data=True):
+            if data['type'] == 'audio':
+                try:
+                    path_str = data.get('path')
+                    if not path_str:
+                        print(f"Node {node} has no path, skipping.")
+                        continue
+                    
+                    audio_path = Path(path_str)
+                    if not audio_path.is_absolute():
+                        audio_path = self.root / audio_path
+
+                    sample_raw = load_audio(
+                        'cpu', str(audio_path), sample_rate=sample_rate
+                    )
+                    sample = torch.zeros(sample_size)
+                    cropped_size = min(sample_size, sample_raw.size(1))
+                    sample[:cropped_size] += sample_raw[0, :cropped_size]
+                    samples.append(sample.numpy())
+                    names.append(node)
+                except Exception as e:
+                    print(f"Could not load audio for node {node}, skipping. Error: {e}")
+
+        if not samples:
+            print("No audio samples found or loaded. Skipping t-SNE calculation.")
+            return
+        
+        samples = np.asarray(samples)
+
+        # Handle if number of samples is smaller than perplexity
+        perplexity = min(perplexity, len(samples) - 1)
+
+        # Convert to spectrograms
+        # TODO: Save spectrograms for reuse
+        print('Extracting spectrograms...')
+        specs = lr.stft(samples, n_fft=512)
+        specs = np.abs(specs)
+        specs = np.reshape(specs, newshape=(specs.shape[0], specs.shape[1] * specs.shape[2]))
+
+        # Compute t-SNE
+        tsne = TSNE(
+            n_components=n_components, verbose=1, perplexity=perplexity, n_iter=n_iter, random_state=0
+        )
+        tsne_results = tsne.fit_transform(specs)
+
+        # Update nodes
+        attrs = {}
+        for name, result in zip(names, tsne_results):
+            attrs[name] = {'tsne': result.tolist()}
+        
+        nx.set_node_attributes(self.G, attrs)

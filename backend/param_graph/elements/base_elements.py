@@ -9,28 +9,16 @@ class GraphElement:
 
     def to_dict(self):
         return asdict(self)
-
+    
 @dataclass(kw_only=True)
-class Audio(GraphElement):
+class Artifact(GraphElement):
     path: str
-    parent: Optional[str] = None
+    uid: int
+    uid_type: str
     alias: Optional[str] = None
-    batch_index: Optional[int] = None
     tags: Optional[List[str]] = None
-    tsne: Optional[List[float]] = None
-
     def __post_init__(self):
-        self.type = 'audio'
-
-@dataclass(kw_only=True)
-class Model(GraphElement):
-    # Let's assume some attributes for now, based on typical model tracking
-    model_path: str
-    parameters: Optional[dict] = None
-    version: Optional[str] = None
-
-    def __post_init__(self):
-        self.type = 'model'
+        self.type = 'artifact'
 
 @dataclass(kw_only=True)
 class ExternalSource(GraphElement):

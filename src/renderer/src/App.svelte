@@ -28,6 +28,21 @@
     }
   }
 
+  async function handleProjectCreate(event: CustomEvent<{ projectPath: string }>): Promise<void> {
+    const projectPath = event.detail.projectPath
+    try {
+      await window.api.logMessage(`Creating project: ${projectPath}`)
+      await window.api.createProject(projectPath)
+      graphData = await window.api.getGraphData(viewMode)
+      currentProject = projectPath
+      await window.api.addRecentProject(projectPath)
+      await window.api.logMessage(`Successfully created project: ${projectPath}`)
+    } catch (error) {
+      console.error('Failed to create project:', error)
+      await window.api.logMessage(`Failed to create project: ${projectPath}. Error: ${error}`)
+    }
+  }
+
   async function handleViewModeChange(event: CustomEvent<'batch' | 'cluster'>): Promise<void> {
     viewMode = event.detail
     try {
@@ -43,16 +58,27 @@
   async function handleAudioSelect(event: CustomEvent<any>): Promise<void> {
     const audioData = event.detail
     await window.api.logMessage(`Audio selected: ${audioData.name}`)
+
+    // Revoke the old blob URL if it exists to prevent memory leaks
+    if (audioSrc && audioSrc.startsWith('blob:')) {
+      URL.revokeObjectURL(audioSrc)
+    }
+
     try {
-      const dataUrl = await window.api.getAudioFile(audioData.name)
-      if (dataUrl) {
-        audioSrc = dataUrl
+      const result = await window.api.getAudioFile(audioData.name)
+      if (result && result.buffer) {
+        const blob = new Blob([result.buffer], { type: result.mimeType })
+        audioSrc = URL.createObjectURL(blob)
         audioTitle = audioData.alias
       } else {
-        console.error('Failed to get audio data URL.')
+        console.error('Failed to get audio file buffer.')
+        audioSrc = null
+        audioTitle = null
       }
     } catch (error) {
       console.error('Error getting audio file:', error)
+      audioSrc = null
+      audioTitle = null
     }
   }
 
@@ -77,6 +103,7 @@
 <main class="container">
   <Toolbar
     on:projectLoad={handleProjectLoad}
+    on:projectCreate={handleProjectCreate}
     on:viewModeChange={handleViewModeChange}
     on:refresh={refreshGraphData}
     {currentProject}

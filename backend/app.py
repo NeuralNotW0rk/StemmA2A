@@ -3,6 +3,8 @@ from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 import os
 import torch
+import torchaudio
+import io
 import json
 import logging
 from pathlib import Path
@@ -22,6 +24,8 @@ CORS(app)
 # Global state
 device_type_accelerator = "cpu"
 device_accelerator = torch.device(device_type_accelerator)
+# A default sample rate for processing and playback
+APP_SAMPLE_RATE = 48000
 
 param_graph: Optional[ParameterGraph] = None
 
@@ -85,7 +89,7 @@ def log_message():
 #  Project Management
 # --------------------
 
-@app.route("/load", methods=["POST"])
+@app.route("/load_project", methods=["POST"])
 def load_project():
     """Load a project from a given absolute path."""
     global param_graph
@@ -98,25 +102,53 @@ def load_project():
             return jsonify({"error": "project_path is required"}), 400
         
         project_path = Path(project_path_str)
-        
-        if not project_path.is_dir():
-            # Before creating, check if a file with that name exists
-            if project_path.exists():
-                return jsonify({"error": f"A file exists at the path, cannot create project directory: {project_path_str}"}), 400
-            project_path.mkdir(parents=True, exist_ok=True)
+        project_name = project_path.name
 
         param_graph = ParameterGraph(str(project_path))
+        if param_graph.load():
+            return jsonify({
+                "message": f"Project '{project_name}' loaded successfully.",
+                "project_name": project_name,
+                "project_path": project_path_str,
+                "success": True
+            })
+        
+        return jsonify({
+            "message": f"Project '{project_name}' not found.",
+            "success": False
+        })
+        
+    except Exception as e:
+        logger.error(f"Failed to load project: {e}")
+        return jsonify({"error": str(e)}), 500
+    
+@app.route("/create_project", methods=["POST"])
+def create_project():
+    """Create a new project at a given absolute path."""
+    global param_graph
+    
+    try:
+        data = request.get_json()
+        project_path_str = data.get("project_path") if data else None
+        
+        if not project_path_str:
+            return jsonify({"error": "project_path is required"}), 400
+        
+        project_path = Path(project_path_str)
+
+        param_graph = ParameterGraph(str(project_path))
+        param_graph.save()
         project_name = project_path.name
         
         return jsonify({
-            "message": f"Project '{project_name}' loaded successfully.",
+            "message": f"Project '{project_name}' created successfully.",
             "project_name": project_name,
             "project_path": project_path_str,
             "success": True
         })
         
     except Exception as e:
-        logger.error(f"Failed to load project: {e}")
+        logger.error(f"Failed to create project: {e}")
         return jsonify({"error": str(e)}), 500
 
 @app.route("/project", methods=["GET"])
@@ -157,7 +189,7 @@ def get_graph():
         logger.error(f"Failed to get graph data: {e}")
         return jsonify({"error": str(e)}), 500
 
-@app.route("/graph-tsne", methods=["GET"])
+@app.route("/graph_tsne", methods=["GET"])
 def get_tsne_graph():
     """Get graph data in cluster mode"""
     if param_graph is None:
@@ -179,7 +211,7 @@ def get_tsne_graph():
 #  Model Operations
 # --------------------
 
-@app.route("/import-model", methods=["POST"])
+@app.route("/import_model", methods=["POST"])
 def import_model():
     """Import a model"""
     if param_graph is None:
@@ -243,7 +275,7 @@ def variation():
             return jsonify({"error": "source_name is required"}), 400
             
         source_path = param_graph.get_path_from_name(source_name, relative=False)
-        source_audio = load_audio(device_accelerator, str(source_path), 48000)
+        source_audio = load_audio(device_accelerator, str(source_path), APP_SAMPLE_RATE)
         
         # Variation logic is commented out, preserving structure
         '''
@@ -259,7 +291,7 @@ def variation():
 #  External Sources
 # --------------------
 
-@app.route("/add-external-source", methods=["POST"])
+@app.route("/add_external_source", methods=["POST"])
 def add_external_source():
     """Add external audio source"""
     if param_graph is None:
@@ -284,7 +316,7 @@ def add_external_source():
         logger.error(f"Failed to add external source: {e}")
         return jsonify({"error": str(e)}), 500
 
-@app.route("/rescan-source", methods=["POST"])
+@app.route("/rescan_source", methods=["POST"])
 def rescan_source():
     """Rescan external source"""
     if param_graph is None:
@@ -313,7 +345,35 @@ def rescan_source():
 #  Audio Operations
 # --------------------
 
-@app.route("/audio-path/<path:filename>", methods=["GET"])
+@app.route("/audio_data/<path:filename>", methods=["GET"])
+def serve_audio_data(filename):
+    """
+    Loads an audio file, processes it, and returns the raw audio data.
+    This ensures a consistent format (stereo WAV) for playback.
+    """
+    if param_graph is None:
+        return jsonify({"error": "No project loaded"}), 400
+    
+    try:
+        audio_path = param_graph.get_path_from_name(filename, relative=False)
+        if not audio_path or not Path(audio_path).exists():
+            return jsonify({"error": "Audio file not found"}), 404
+
+        # Load audio using the robust loader (converts to stereo, resamples)
+        audio_tensor = load_audio(device_accelerator, str(audio_path), APP_SAMPLE_RATE)
+        
+        # Save the tensor to an in-memory buffer
+        buffer = io.BytesIO()
+        torchaudio.save(buffer, audio_tensor, APP_SAMPLE_RATE, format="wav")
+        buffer.seek(0)
+        
+        return send_file(buffer, mimetype="audio/wav")
+        
+    except Exception as e:
+        logger.error(f"Failed to serve audio data: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/audio_path/<path:filename>", methods=["GET"])
 def get_audio_path(filename):
     """Get the absolute path of an audio file"""
     logger.info(f"get_audio_path called with filename: {filename}")
@@ -386,7 +446,7 @@ def export_audio():
 #  Element Updates
 # --------------------
 
-@app.route("/update-element", methods=["POST"])
+@app.route("/update_element", methods=["POST"])
 def update_element():
     """Update element attributes"""
     if param_graph is None:

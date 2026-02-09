@@ -1,8 +1,8 @@
 <!-- src/renderer/src/components/graph/GraphControls.svelte -->
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte';
+  import { createEventDispatcher } from 'svelte'
 
-  const dispatch = createEventDispatcher();
+  const dispatch = createEventDispatcher()
 </script>
 
 <div class="graph-controls">

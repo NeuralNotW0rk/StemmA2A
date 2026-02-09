@@ -1,10 +1,15 @@
+# Core
 flask
 flask-cors
 soundfile
 librosa
-networkx
 torch
 torchvision
 torchaudio
 
+# Representation
+networkx
+xxhash
+
+# Engine
 stable-audio-tools

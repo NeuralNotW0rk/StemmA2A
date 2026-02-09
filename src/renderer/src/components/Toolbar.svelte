@@ -29,6 +29,14 @@
     }
   }
 
+  async function newProject(): Promise<void> {
+    showFileMenu = false
+    const path = await window.api.newProject()
+    if (path) {
+      dispatch('projectCreate', { projectPath: path })
+    }
+  }
+
   function loadRecentProject(path: string): void {
     showFileMenu = false
     dispatch('projectLoad', { projectPath: path })
@@ -96,6 +104,7 @@
 
       {#if showFileMenu}
         <div class="project-dropdown">
+          <button class="dropdown-item" on:click={newProject}> New Project... </button>
           <button class="dropdown-item" on:click={openProject}> Load Project... </button>
           <div class="dropdown-divider"></div>
           <div class="dropdown-header">Recent Projects</div>
