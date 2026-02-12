@@ -1,10 +1,12 @@
 <!-- src/renderer/src/components/Sidebar.svelte -->
 <script lang="ts">
   /* eslint-disable @typescript-eslint/no-explicit-any */
-  import { createEventDispatcher } from 'svelte'
-  export let selectedNodeData: Record<string, any> | null = null
+  interface Props {
+    selectedNodeData?: Record<string, any> | null
+    onclose?: () => void
+  }
 
-  const dispatch = createEventDispatcher()
+  let { selectedNodeData = null, onclose }: Props = $props()
 
   // A list of keys to ignore for a cleaner display
   const ignoredKeys = new Set(['x', 'y', 'vx', 'vy', 'fx', 'fy', 'isExpanded', 'index'])
@@ -14,7 +16,7 @@
   {#if selectedNodeData}
     <div class="sidebar-header">
       <h3>{selectedNodeData.alias || selectedNodeData.name || 'Element Details'}</h3>
-      <button class="close-btn" on:click={() => dispatch('close')}>×</button>
+      <button class="close-btn" onclick={() => onclose?.()}>×</button>
     </div>
     <div class="sidebar-content">
       <ul>

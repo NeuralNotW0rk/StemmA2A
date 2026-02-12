@@ -1,20 +1,23 @@
 <!-- src/renderer/src/components/AudioPlayer.svelte -->
 <script lang="ts">
-  import { createEventDispatcher, onMount, onDestroy } from 'svelte'
+  import { onMount, onDestroy } from 'svelte'
 
-  export let src: string
-  export let title: string = ''
+  interface Props {
+    src: string
+    title?: string
+    onclose?: () => void
+  }
 
-  const dispatch = createEventDispatcher()
+  let { src, title = '', onclose }: Props = $props()
 
-  let audio: HTMLAudioElement
-  let duration = 0
-  let currentTime = 0
-  let volume = 0.8
-  let isPlaying = false
-  let showVolume = false
-  let volumeControlElement: HTMLElement
-  let loadedSrc: string
+  let audio: HTMLAudioElement | undefined = $state()
+  let duration = $state(0)
+  let currentTime = $state(0)
+  let volume = $state(0.8)
+  let isPlaying = $state(false)
+  let showVolume = $state(false)
+  let volumeControlElement: HTMLElement | undefined = $state()
+  let loadedSrc = $state('')
 
   function handleLoadedMetadata(): void {
     if (audio) {
@@ -90,25 +93,29 @@
     window.removeEventListener('click', handleClickOutside)
   })
 
-  $: if (audio && src && src !== loadedSrc) {
-    audio.pause()
-    audio.src = src
-    audio.load()
-    currentTime = 0
-    duration = 0
-    isPlaying = false
-    loadedSrc = src
-    // Play audio on selection
-    audio.play().catch((error) => console.error('Audio playback failed:', error))
-  }
+  $effect(() => {
+    if (audio && src && src !== loadedSrc) {
+      audio.pause()
+      audio.src = src
+      audio.load()
+      currentTime = 0
+      duration = 0
+      isPlaying = false
+      loadedSrc = src
+      // Play audio on selection
+      audio.play().catch((error) => console.error('Audio playback failed:', error))
+    }
+  })
 
-  $: if (audio) {
-    audio.volume = volume
-  }
+  $effect(() => {
+    if (audio) {
+      audio.volume = volume
+    }
+  })
 </script>
 
 <div class="audio-player">
-  <button class="play-button" on:click={togglePlayPause} aria-label={isPlaying ? 'Pause' : 'Play'}>
+  <button class="play-button" onclick={togglePlayPause} aria-label={isPlaying ? 'Pause' : 'Play'}>
     {#if isPlaying}
       <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
         <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
@@ -132,8 +139,8 @@
       aria-valuemax={duration || 0}
       aria-valuenow={currentTime}
       tabindex="0"
-      on:click={seek}
-      on:keydown={handleKeyDown}
+      onclick={seek}
+      onkeydown={handleKeyDown}
     >
       <div class="progress" style="width: {(currentTime / duration) * 100}%"></div>
     </div>
@@ -141,7 +148,10 @@
   <div class="volume-control" bind:this={volumeControlElement}>
     <button
       class="volume-button"
-      on:click|stopPropagation={toggleVolume}
+      onclick={(e) => {
+        e.stopPropagation()
+        toggleVolume()
+      }}
       aria-label="Volume control"
     >
       <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
@@ -157,7 +167,7 @@
     {/if}
   </div>
 
-  <button class="close-button" on:click={() => dispatch('close')} aria-label="Close audio player">
+  <button class="close-button" onclick={() => onclose?.()} aria-label="Close audio player">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
       <path
         d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"
@@ -167,11 +177,11 @@
 
   <audio
     bind:this={audio}
-    on:loadedmetadata={handleLoadedMetadata}
-    on:timeupdate={handleTimeUpdate}
-    on:ended={handleEnded}
-    on:play={() => (isPlaying = true)}
-    on:pause={() => (isPlaying = false)}
+    onloadedmetadata={handleLoadedMetadata}
+    ontimeupdate={handleTimeUpdate}
+    onended={handleEnded}
+    onplay={() => (isPlaying = true)}
+    onpause={() => (isPlaying = false)}
     preload="auto"
   ></audio>
 </div>

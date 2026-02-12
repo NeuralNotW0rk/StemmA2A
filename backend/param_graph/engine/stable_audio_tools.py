@@ -1,7 +1,6 @@
 from dataclasses import dataclass
 import torch
 import torchaudio
-from einops import rearrange
 from stable_audio_tools import get_pretrained_model
 from stable_audio_tools.inference.generation import generate_diffusion_cond
 
@@ -13,7 +12,6 @@ from ..elements.model import Model
 class StableAudioModel(Model):
 
     def __post_init__(self):
-        self.type = 'model'
         self.engine = 'StableAudioTools'
 
 
@@ -51,9 +49,6 @@ class StableAudioTools(Engine):
             sampler_type="pingpong",
             device=self.device
         )
-
-        # Rearrange audio batch to a single sequence
-        output = rearrange(output, "b d n -> d (b n)")
 
         # Peak normalize, clip, convert to int16, and save to file
         output = output.to(torch.float32).div(torch.max(torch.abs(output))).clamp(-1, 1).mul(32767).to(torch.int16).cpu()

@@ -16,6 +16,8 @@ const api = {
     ipcRenderer.invoke('getGraphData', viewMode),
   getAudioFile: (filename: string): Promise<string | null> =>
     ipcRenderer.invoke('getAudioFile', filename),
+  openFile: (options: any) => ipcRenderer.invoke('dialog:openFile', options),
+  importModel: (data: any) => ipcRenderer.invoke('importModel', data),
   logMessage: (message: string): Promise<any> => ipcRenderer.invoke('logMessage', message)
 }
 

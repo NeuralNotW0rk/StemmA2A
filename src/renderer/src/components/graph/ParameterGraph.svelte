@@ -1,7 +1,7 @@
 <!-- src/renderer/src/components/AudioGraph.svelte -->
 <script lang="ts">
   /* eslint-disable @typescript-eslint/no-explicit-any */
-  import { onMount, onDestroy, createEventDispatcher } from 'svelte'
+  import { onMount, onDestroy } from 'svelte'
   import cytoscape, { type EventObject, type NodeSingular } from 'cytoscape'
   import fcose from 'cytoscape-fcose'
   import cxtmenu from 'cytoscape-cxtmenu'
@@ -12,13 +12,31 @@
   import GraphControls from './GraphControls.svelte'
   import GraphLegend from './GraphLegend.svelte'
 
-  export let graphData: { elements: cytoscape.ElementDefinition[] } | null = null
-  export let viewMode: 'batch' | 'cluster' = 'batch'
+  interface Props {
+    graphData?: { elements: cytoscape.ElementDefinition[] } | null
+    viewMode?: 'batch' | 'cluster'
+    onmodelSelect?: (data: any) => void
+    onaudioSelect?: (data: any) => void
+    onvariate?: (data: { source_name: string }) => void
+    onexport?: (data: { names: string[] }) => void
+    onrescanSource?: (name: string) => void
+    onnodeSelect?: (data: any) => void
+  }
 
-  const dispatch = createEventDispatcher()
-  let graphContainer: HTMLElement
-  let cy: cytoscape.Core | null = null
-  let isInitialized = false
+  let {
+    graphData = null,
+    viewMode = 'batch',
+    onmodelSelect,
+    onaudioSelect,
+    onvariate,
+    onexport,
+    onrescanSource,
+    onnodeSelect
+  }: Props = $props()
+
+  let graphContainer: HTMLElement | undefined = $state()
+  let cy: cytoscape.Core | null = $state(null)
+  let isInitialized = $state(false)
 
   onMount(() => {
     initializeGraph()
@@ -73,12 +91,12 @@
           content: 'Generate Audio',
           select: (ele: any) => {
             const modelData = ele.data()
-            dispatch('modelSelect', modelData)
+            onmodelSelect?.(modelData)
           }
         },
         {
           content: 'Model Info',
-          select: (ele: any) => dispatch('modelSelect', ele.data())
+          select: (ele: any) => onmodelSelect?.(ele.data())
         }
       ]
     })
@@ -91,21 +109,21 @@
           content: 'Play/Select',
           select: (ele: any) => {
             const audioData = ele.data()
-            dispatch('audioSelect', audioData)
+            onaudioSelect?.(audioData)
           }
         },
         {
           content: 'Create Variation',
           select: (ele: any) => {
             const audioData = ele.data()
-            dispatch('variate', { source_name: audioData.name })
+            onvariate?.({ source_name: audioData.name })
           }
         },
         {
           content: 'Export',
           select: (ele: any) => {
             const audioData = ele.data()
-            dispatch('export', { names: [audioData.name] })
+            onexport?.({ names: [audioData.name] })
           }
         }
       ]
@@ -132,7 +150,7 @@
           content: 'Export Batch',
           select: (ele: any) => {
             const batchData = ele.data()
-            dispatch('export', { names: batchData.children || [] })
+            onexport?.({ names: batchData.children || [] })
           }
         }
       ]
@@ -146,7 +164,7 @@
           content: 'Rescan',
           select: (ele: any) => {
             const sourceData = ele.data()
-            dispatch('rescanSource', sourceData.name)
+            onrescanSource?.(sourceData.name)
           }
         }
       ]
@@ -158,11 +176,11 @@
 
     cy.on('tap', 'node, edge', (evt: EventObject) => {
       const elementData = evt.target.data()
-      dispatch('nodeSelect', elementData) // Dispatch for sidebar
+      onnodeSelect?.(elementData) // Dispatch for sidebar
 
       // If the tapped element is a node and its type is 'audio'
       if (evt.target.isNode() && elementData.type === 'audio') {
-        dispatch('audioSelect', elementData) // Dispatch for audio player
+        onaudioSelect?.(elementData) // Dispatch for audio player
       }
     })
 
@@ -264,9 +282,11 @@
   }
 
   // React to data changes
-  $: if (isInitialized && graphData) {
-    updateGraph()
-  }
+  $effect(() => {
+    if (isInitialized && graphData) {
+      updateGraph()
+    }
+  })
 
   export function tidyView(): void {
     applyLayout()
@@ -284,9 +304,9 @@
 <div class="graph-wrapper">
   <div bind:this={graphContainer} class="graph-container"></div>
   <GraphControls
-    on:tidy={() => tidyView()}
-    on:fit={() => fitView()}
-    on:center={() => centerView()}
+    ontidy={() => tidyView()}
+    onfit={() => fitView()}
+    oncenter={() => centerView()}
   />
   <GraphLegend />
 </div>

@@ -137,6 +137,30 @@ app.whenReady().then(async () => {
     }
   })
 
+  ipcMain.handle('dialog:openFile', async (_event, options) => {
+    const { canceled, filePaths } = await dialog.showOpenDialog({
+      title: options?.title || 'Open File',
+      properties: ['openFile'],
+      filters: options?.filters || []
+    })
+    if (canceled) {
+      return null
+    }
+    return filePaths[0]
+  })
+
+  ipcMain.handle('importModel', async (_event, modelData) => {
+    const response = await fetch('http://127.0.0.1:5000/import_model', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(modelData)
+    })
+    if (!response.ok) {
+      throw new Error(`Failed to import model. Status: ${response.status}`)
+    }
+    return await response.json()
+  })
+
   ipcMain.handle('getRecentProjects', async () => {
     return (store.get('recentProjects', []) as string[])
   })

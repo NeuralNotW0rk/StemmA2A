@@ -13,8 +13,8 @@
   let audioTitle: string | null = null
   let selectedNodeData: Record<string, any> | null = null
 
-  async function handleProjectLoad(event: CustomEvent<{ projectPath: string }>): Promise<void> {
-    const projectPath = event.detail.projectPath
+  async function handleProjectLoad(data: { projectPath: string }): Promise<void> {
+    const projectPath = data.projectPath
     try {
       await window.api.logMessage(`Loading project: ${projectPath}`)
       await window.api.loadProject(projectPath)
@@ -28,8 +28,8 @@
     }
   }
 
-  async function handleProjectCreate(event: CustomEvent<{ projectPath: string }>): Promise<void> {
-    const projectPath = event.detail.projectPath
+  async function handleProjectCreate(data: { projectPath: string }): Promise<void> {
+    const projectPath = data.projectPath
     try {
       await window.api.logMessage(`Creating project: ${projectPath}`)
       await window.api.createProject(projectPath)
@@ -43,8 +43,8 @@
     }
   }
 
-  async function handleViewModeChange(event: CustomEvent<'batch' | 'cluster'>): Promise<void> {
-    viewMode = event.detail
+  async function handleViewModeChange(mode: 'batch' | 'cluster'): Promise<void> {
+    viewMode = mode
     try {
       graphData = await window.api.getGraphData(viewMode)
     } catch (error) {
@@ -55,8 +55,7 @@
     }
   }
 
-  async function handleAudioSelect(event: CustomEvent<any>): Promise<void> {
-    const audioData = event.detail
+  async function handleAudioSelect(audioData: any): Promise<void> {
     await window.api.logMessage(`Audio selected: ${audioData.name}`)
 
     // Revoke the old blob URL if it exists to prevent memory leaks
@@ -82,8 +81,8 @@
     }
   }
 
-  function handleNodeSelect(event: CustomEvent<any>): void {
-    selectedNodeData = event.detail
+  function handleNodeSelect(nodeData: any): void {
+    selectedNodeData = nodeData
     window.api.logMessage(`Node selected: ${selectedNodeData?.name || 'Unknown'}`)
   }
 
@@ -102,25 +101,25 @@
 
 <main class="container">
   <Toolbar
-    on:projectLoad={handleProjectLoad}
-    on:projectCreate={handleProjectCreate}
-    on:viewModeChange={handleViewModeChange}
-    on:refresh={refreshGraphData}
+    onprojectLoad={handleProjectLoad}
+    onprojectCreate={handleProjectCreate}
+    onviewModeChange={handleViewModeChange}
+    onrefresh={refreshGraphData}
     {currentProject}
     {viewMode}
   />
   {#if selectedNodeData}
-    <Sidebar {selectedNodeData} on:close={() => (selectedNodeData = null)} />
+    <Sidebar {selectedNodeData} onclose={() => (selectedNodeData = null)} />
   {/if}
   <AudioGraph
     bind:this={audioGraph}
     {graphData}
     {viewMode}
-    on:audioSelect={handleAudioSelect}
-    on:nodeSelect={handleNodeSelect}
+    onaudioSelect={handleAudioSelect}
+    onnodeSelect={handleNodeSelect}
   />
   {#if audioSrc}
-    <AudioPlayer src={audioSrc} title={audioTitle} on:close={() => (audioSrc = null)} />
+    <AudioPlayer src={audioSrc} title={audioTitle} onclose={() => (audioSrc = null)} />
   {/if}
 </main>
 

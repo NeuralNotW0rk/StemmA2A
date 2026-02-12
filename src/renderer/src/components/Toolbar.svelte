@@ -1,17 +1,41 @@
 <!-- src/renderer/src/components/Toolbar.svelte -->
 <script lang="ts">
-  import { createEventDispatcher, onMount } from 'svelte'
+  import { onMount } from 'svelte'
+  import { engines } from './engines'
 
-  export let currentProject: string | null = null
-  export let viewMode: 'batch' | 'cluster' = 'batch'
+  interface Props {
+    currentProject?: string | null
+    viewMode?: 'batch' | 'cluster'
+    onprojectLoad?: (data: { projectPath: string }) => void
+    onprojectCreate?: (data: { projectPath: string }) => void
+    onviewModeChange?: (mode: 'batch' | 'cluster') => void
+    onrefresh?: () => void
+    onaddExternalSource?: () => void
+  }
 
-  const dispatch = createEventDispatcher()
+  let {
+    currentProject = null,
+    viewMode = 'batch',
+    onprojectLoad,
+    onprojectCreate,
+    onviewModeChange,
+    onrefresh,
+    onaddExternalSource
+  }: Props = $props()
 
-  let showFileMenu = false
-  let fileMenuElement: HTMLElement
-  let recentProjects: string[] = []
-  let showImportDialog = false
-  let importPath = ''
+  let showFileMenu = $state(false)
+  let fileMenuElement: HTMLElement | undefined = $state()
+  let recentProjects: string[] = $state([])
+  let showImportDialog = $state(false)
+  let selectedEngine = $state('stable-audio-tools')
+  let engineFields: Record<string, string> = $state({})
+
+  let currentEngineConfig = $derived(engines.find((e) => e.id === selectedEngine))
+  let isFormValid = $derived(currentEngineConfig
+    ? currentEngineConfig.fields.every(
+        (f) => !f.required || (engineFields[f.key] && engineFields[f.key].trim() !== '')
+      )
+    : false)
 
   onMount(async (): Promise<void> => {
     recentProjects = await window.api.getRecentProjects()
@@ -25,7 +49,7 @@
     showFileMenu = false
     const path = await window.api.openProject()
     if (path) {
-      dispatch('projectLoad', { projectPath: path })
+      onprojectLoad?.({ projectPath: path })
     }
   }
 
@@ -33,29 +57,35 @@
     showFileMenu = false
     const path = await window.api.newProject()
     if (path) {
-      dispatch('projectCreate', { projectPath: path })
+      onprojectCreate?.({ projectPath: path })
     }
   }
 
   function loadRecentProject(path: string): void {
     showFileMenu = false
-    dispatch('projectLoad', { projectPath: path })
+    onprojectLoad?.({ projectPath: path })
   }
 
   function toggleViewMode(): void {
     const newMode = viewMode === 'batch' ? 'cluster' : 'batch'
-    dispatch('viewModeChange', newMode)
+    onviewModeChange?.(newMode)
   }
 
   async function importModel(): Promise<void> {
-    if (!importPath.trim()) return
+    if (currentEngineConfig) {
+      for (const field of currentEngineConfig.fields) {
+        if (field.required && !engineFields[field.key]?.trim()) return
+      }
+    }
 
     try {
-      // @ts-ignore - function not defined
-      await window.api.importModel(importPath)
-      importPath = ''
+      await window.api.importModel({
+        engine: selectedEngine,
+        ...engineFields
+      })
+      engineFields = {}
       showImportDialog = false
-      dispatch('refresh')
+      onrefresh?.()
     } catch (error) {
       console.error('Failed to import model:', error)
     }
@@ -70,16 +100,18 @@
     }
   }
 
-  // TODO: This function is not defined.
-  function selectModelPath(): void {
-    console.log('selectModelPath called')
+  async function selectFieldFile(key: string, filters?: any[]): Promise<void> {
+    const path = await window.api.openFile({ title: 'Select File', filters })
+    if (path) {
+      engineFields[key] = path
+    }
   }
 </script>
 
 <svelte:window
-  on:keydown={handleKeydown}
-  on:click={(event: MouseEvent): void => {
-    if (fileMenuElement && !fileMenuElement.contains(event.target as Node)) {
+  onkeydown={handleKeydown}
+  onclick={(event: MouseEvent): void => {
+    if (fileMenuElement && event.target instanceof Node && !fileMenuElement.contains(event.target)) {
       showFileMenu = false
     }
   }}
@@ -88,7 +120,7 @@
 <div class="toolbar">
   <div class="toolbar-section">
     <div class="file-menu" bind:this={fileMenuElement}>
-      <button class="project-button" on:click={() => (showFileMenu = !showFileMenu)}>
+      <button class="project-button" onclick={() => (showFileMenu = !showFileMenu)}>
         File
         <svg
           width="12"
@@ -104,12 +136,12 @@
 
       {#if showFileMenu}
         <div class="project-dropdown">
-          <button class="dropdown-item" on:click={newProject}> New Project... </button>
-          <button class="dropdown-item" on:click={openProject}> Load Project... </button>
+          <button class="dropdown-item" onclick={newProject}> New Project... </button>
+          <button class="dropdown-item" onclick={openProject}> Load Project... </button>
           <div class="dropdown-divider"></div>
           <div class="dropdown-header">Recent Projects</div>
           {#each recentProjects as project (project)}
-            <button class="dropdown-item" on:click={() => loadRecentProject(project)}>
+            <button class="dropdown-item" onclick={() => loadRecentProject(project)}>
               {project.split(/[\\/]/).pop()}
             </button>
           {/each}
@@ -122,7 +154,7 @@
     <div class="current-project">
       {currentProject ? currentProject.split(/[\\/]/).pop() : 'No Project Loaded'}
     </div>
-    <button class="toolbar-button" on:click={() => dispatch('refresh')} title="Refresh graph data">
+    <button class="toolbar-button" onclick={() => onrefresh?.()} title="Refresh graph data">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
         <path
           d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"
@@ -137,7 +169,7 @@
       <button
         class="toggle-button"
         class:active={viewMode === 'batch'}
-        on:click={toggleViewMode}
+        onclick={toggleViewMode}
         title="Toggle between batch and cluster view"
       >
         <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
@@ -149,7 +181,7 @@
   </div>
 
   <div class="toolbar-section">
-    <button class="toolbar-button" on:click={() => (showImportDialog = true)} title="Import model">
+    <button class="toolbar-button" onclick={() => (showImportDialog = true)} title="Import model">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
         <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" />
       </svg>
@@ -158,7 +190,7 @@
 
     <button
       class="toolbar-button"
-      on:click={() => dispatch('addExternalSource')}
+      onclick={() => onaddExternalSource?.()}
       title="Add external audio source"
     >
       <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
@@ -177,8 +209,10 @@
     role="button"
     tabindex="0"
     aria-label="Close dialog"
-    on:click|self={closeDialog}
-    on:keydown|self={(e) => {
+    onclick={(e) => {
+      if (e.target === e.currentTarget) closeDialog()
+    }}
+    onkeydown={(e) => {
       if (e.key === 'Enter' || e.key === ' ') closeDialog()
     }}
   >
@@ -191,22 +225,37 @@
     >
       <div class="dialog-header">
         <h3 id="dialog-title">Import Model</h3>
-        <button on:click={() => (showImportDialog = false)}>×</button>
+        <button onclick={() => (showImportDialog = false)}>×</button>
       </div>
 
       <div class="dialog-content">
         <label>
-          Model Path:
-          <div class="path-input">
-            <input type="text" bind:value={importPath} placeholder="/path/to/model.ckpt" />
-            <button on:click={selectModelPath}>Browse</button>
-          </div>
+          Engine:
+          <select bind:value={selectedEngine}>
+            {#each engines as engine (engine.id)}
+              <option value={engine.id}>{engine.name}</option>
+            {/each}
+          </select>
         </label>
+
+        {#each engines.find((e) => e.id === selectedEngine)?.fields || [] as field (field.key)}
+          <label style="margin-top: 1rem;">
+            {field.label}:
+            {#if field.type === 'file'}
+              <div class="path-input">
+                <input type="text" bind:value={engineFields[field.key]} placeholder={field.placeholder} />
+                <button onclick={() => selectFieldFile(field.key, field.filters)}>Browse</button>
+              </div>
+            {:else}
+              <input type="text" bind:value={engineFields[field.key]} placeholder={field.placeholder} />
+            {/if}
+          </label>
+        {/each}
       </div>
 
       <div class="dialog-actions">
-        <button on:click={() => (showImportDialog = false)}>Cancel</button>
-        <button class="primary" on:click={importModel} disabled={!importPath.trim()}>
+        <button onclick={() => (showImportDialog = false)}>Cancel</button>
+        <button class="primary" onclick={importModel} disabled={!isFormValid}>
           Import
         </button>
       </div>
@@ -414,6 +463,19 @@
     color: white;
     font-weight: 500;
     margin-bottom: 0.5rem;
+  }
+
+  .dialog-content select {
+    width: 100%;
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: white;
+    padding: 0.5rem;
+    border-radius: 0.375rem;
+  }
+
+  .dialog-content select option {
+    background: #1e293b;
   }
 
   .path-input {

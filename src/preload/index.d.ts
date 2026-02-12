@@ -9,6 +9,8 @@ interface API {
   createProject: (projectPath: string) => Promise<any>
   getGraphData: (viewMode: 'batch' | 'cluster') => Promise<any>
   getAudioFile: (filename: string) => Promise<string | null>
+  openFile: (options?: { title?: string; filters?: { name: string; extensions: string[] }[] }) => Promise<string | null>
+  importModel: (data: any) => Promise<any>
   logMessage: (message: string) => Promise<any>
 }
 
