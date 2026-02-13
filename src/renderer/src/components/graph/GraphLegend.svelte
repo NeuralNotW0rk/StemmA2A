@@ -1,22 +1,18 @@
-<script lang="ts">
-  import { modelColor, audioColor, batchColor, externalColor } from './Style'
-</script>
-
 <div class="graph-legend">
   <div class="legend-item">
-    <div class="legend-color" style="background-color: {modelColor};"></div>
+    <div class="legend-color model"></div>
     <span>Models</span>
   </div>
   <div class="legend-item">
-    <div class="legend-color" style="background-color: {audioColor};"></div>
+    <div class="legend-color audio"></div>
     <span>Audio</span>
   </div>
   <div class="legend-item">
-    <div class="legend-color" style="background-color: {batchColor};"></div>
+    <div class="legend-color batch"></div>
     <span>Batches</span>
   </div>
   <div class="legend-item">
-    <div class="legend-color" style="background-color: {externalColor};"></div>
+    <div class="legend-color external"></div>
     <span>External</span>
   </div>
 </div>
@@ -26,8 +22,8 @@
     position: absolute;
     bottom: 1rem;
     right: 1rem;
-    background: rgba(0, 0, 0, 0.7);
-    border: 1px solid rgba(255, 255, 255, 0.2);
+    background: var(--color-overlay-background-primary);
+    border: 1px solid var(--color-overlay-border-primary);
     border-radius: 0.5rem;
     padding: 1rem;
     display: flex;
@@ -42,13 +38,25 @@
     align-items: center;
     gap: 0.5rem;
     font-size: 0.875rem;
-    color: white;
+    color: var(--color-overlay-text);
   }
 
   .legend-color {
     width: 12px;
     height: 12px;
     border-radius: 2px;
-    border: 1px solid rgba(255, 255, 255, 0.2);
+    border: 1px solid var(--color-overlay-border-primary);
+  }
+  .model {
+    background-color: var(--graph-gradient-3);
+  }
+  .audio {
+    background-color: var(--graph-audio);
+  }
+  .batch {
+    background-color: var(--graph-batch);
+  }
+  .external {
+    background-color: var(--graph-gradient-2);
   }
 </style>

@@ -1,9 +1,11 @@
-import type { LayoutOptions, NodeSingular, EdgeSingular } from 'cytoscape'
+import type { NodeSingular, EdgeSingular } from 'cytoscape'
 
 // The fcose layout options are not in the main cytoscape types
 // so we define them here.
-interface FcoseLayoutOptions extends LayoutOptions {
+interface FcoseLayoutOptions {
   name: 'fcose'
+  ready?: () => void
+  stop?: () => void
   quality?: 'draft' | 'default' | 'proof'
   randomize?: boolean
   animate?: boolean
@@ -83,11 +85,11 @@ const layoutConfig: FcoseLayoutOptions = {
   /* incremental layout options */
 
   // Node repulsion (non overlapping) multiplier
-  nodeRepulsion: (node) => 16000,
+  nodeRepulsion: (_node) => 16000,
   // Ideal edge (non nested) length
-  idealEdgeLength: (edge) => 400,
+  idealEdgeLength: (_edge) => 400,
   // Divisor to compute edge forces
-  edgeElasticity: (edge) => 0.1,
+  edgeElasticity: (_edge) => 0.1,
   // Nesting factor (multiplier) to compute ideal edge length for nested edges
   nestingFactor: 0.1,
   // Maximum number of iterations to perform - this is a suggested value and might be adjusted by the algorithm as required

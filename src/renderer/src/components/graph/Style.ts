@@ -1,14 +1,15 @@
 import type { CssStyleDeclaration } from 'cytoscape'
+import { getCssVar } from '../../utils/css'
 
-const gradientColor1 = '#002254'
-const gradientColor2 = '#004294'
-const gradientColor3 = '#5b3285'
-const gradientColor4 = '#7e1b6a'
-const gradientColor5 = '#8f004a'
+const gradientColor1 = getCssVar('--graph-gradient-1')
+const gradientColor2 = getCssVar('--graph-gradient-2')
+const gradientColor3 = getCssVar('--graph-gradient-3')
+const gradientColor4 = getCssVar('--graph-gradient-4')
+const gradientColor5 = getCssVar('--graph-gradient-5')
 
-const audioColor = '#278' // Pale cyan
-const batchColor = '#000' // Black
-const selectedColor = '#888' // Light gray
+const audioColor = getCssVar('--graph-audio')
+const batchColor = getCssVar('--graph-batch')
+const selectedColor = getCssVar('--graph-selected')
 const modelColor = gradientColor3
 const externalColor = gradientColor2
 
@@ -156,4 +157,3 @@ const defaultStyle: CssStyleDeclaration[] = [
 ]
 
 export default defaultStyle
-export { gradientColor1, gradientColor2, gradientColor3, gradientColor4, gradientColor5, modelColor, audioColor, batchColor, externalColor }

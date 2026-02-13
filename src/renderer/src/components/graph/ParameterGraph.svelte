@@ -1,4 +1,4 @@
-<!-- src/renderer/src/components/AudioGraph.svelte -->
+<!-- src/renderer/src/components/ParameterGraph.svelte -->
 <script lang="ts">
   /* eslint-disable @typescript-eslint/no-explicit-any */
   import { onMount, onDestroy } from 'svelte'
@@ -303,11 +303,7 @@
 
 <div class="graph-wrapper">
   <div bind:this={graphContainer} class="graph-container"></div>
-  <GraphControls
-    ontidy={() => tidyView()}
-    onfit={() => fitView()}
-    oncenter={() => centerView()}
-  />
+  <GraphControls ontidy={() => tidyView()} onfit={() => fitView()} oncenter={() => centerView()} />
   <GraphLegend />
 </div>
 
@@ -317,7 +313,11 @@
     width: 100%;
     flex-grow: 1;
     min-height: 0;
-    background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+    background: linear-gradient(
+      135deg,
+      var(--color-background-dark) 0%,
+      var(--color-background-medium) 100%
+    );
   }
 
   .graph-container {

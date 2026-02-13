@@ -1,34 +1,42 @@
 :root {
-  --ev-c-white: #ffffff;
-  --ev-c-white-soft: #f8f8f8;
-  --ev-c-white-mute: #f2f2f2;
+  --color-overlay-background-primary: rgba(0, 0, 0, 0.7);
+  --color-overlay-background-secondary: rgba(0, 0, 0, 0.8);
+  --color-overlay-border-primary: rgba(255, 255, 255, 0.2);
+  --color-overlay-border-secondary: rgba(255, 255, 255, 0.3);
+  --color-overlay-text: #ffffff;
 
-  --ev-c-black: #1b1b1f;
-  --ev-c-black-soft: #222222;
-  --ev-c-black-mute: #282828;
+  --color-background-glass-1: rgba(0, 0, 0, 0.3);
+  --color-background-glass-2: rgba(0, 0, 0, 0.2);
+  --color-background-glass-3: rgba(0, 0, 0, 0.5);
+  --color-background-glass-4: rgba(0, 0, 0, 0.9);
+  --color-background-glass-hover-1: rgba(255, 255, 255, 0.15);
+  --color-border-glass-1: rgba(255, 255, 255, 0.1);
+  --color-primary-t-30: rgba(147, 51, 234, 0.3);
+  --color-primary-t-50: rgba(147, 51, 234, 0.5);
 
-  --ev-c-gray-1: #515c67;
-  --ev-c-gray-2: #414853;
-  --ev-c-gray-3: #32363f;
+  --color-background: #1b1b1f;
+  --color-background-soft: #222222;
+  --color-background-mute: #282828;
+  --color-background-dark: #0f172a;
+  --color-background-medium: #1e293b;
 
-  --ev-c-text-1: rgba(255, 255, 245, 0.86);
-  --ev-c-text-2: rgba(235, 235, 245, 0.6);
-  --ev-c-text-3: rgba(235, 235, 245, 0.38);
+  --color-primary: #9333ea;
+  --color-primary-hover: #7c3aed;
 
-  --ev-button-alt-border: transparent;
-  --ev-button-alt-text: var(--ev-c-text-1);
-  --ev-button-alt-bg: var(--ev-c-gray-3);
-  --ev-button-alt-hover-border: transparent;
-  --ev-button-alt-hover-text: var(--ev-c-text-1);
-  --ev-button-alt-hover-bg: var(--ev-c-gray-2);
-}
+  --color-text: rgba(255, 255, 245, 0.86);
+  --color-text-overlay-primary: rgba(255, 255, 255, 0.7);
+  --color-text-overlay-secondary: rgba(255, 255, 255, 0.5);
+  --color-text-overlay-tertiary: rgba(255, 255, 255, 0.9);
 
-:root {
-  --color-background: var(--ev-c-black);
-  --color-background-soft: var(--ev-c-black-soft);
-  --color-background-mute: var(--ev-c-black-mute);
-
-  --color-text: var(--ev-c-text-1);
+  /* Graph Colors */
+  --graph-gradient-1: #002254;
+  --graph-gradient-2: #004294;
+  --graph-gradient-3: #5b3285;
+  --graph-gradient-4: #7e1b6a;
+  --graph-gradient-5: #8f004a;
+  --graph-audio: #227788;
+  --graph-batch: #000000;
+  --graph-selected: #888888;
 }
 
 *,

@@ -1,20 +1,20 @@
 <!-- src/renderer/src/components/graph/GraphControls.svelte -->
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte'
+  interface Props {
+    ontidy?: () => void
+    onfit?: () => void
+    oncenter?: () => void
+  }
 
-  const dispatch = createEventDispatcher()
+  let { ontidy, onfit, oncenter }: Props = $props()
 </script>
 
 <div class="graph-controls">
-  <button on:click={() => dispatch('tidy')} title="Tidy layout" aria-label="Tidy layout">
-    Tidy
-  </button>
+  <button onclick={() => ontidy?.()} title="Tidy layout" aria-label="Tidy layout"> Tidy </button>
 
-  <button on:click={() => dispatch('fit')} title="Fit to screen" aria-label="Fit to screen">
-    Fit
-  </button>
+  <button onclick={() => onfit?.()} title="Fit to screen" aria-label="Fit to screen"> Fit </button>
 
-  <button on:click={() => dispatch('center')} title="Center view" aria-label="Center view">
+  <button onclick={() => oncenter?.()} title="Center view" aria-label="Center view">
     Center
   </button>
 </div>
@@ -31,9 +31,9 @@
   }
 
   .graph-controls button {
-    background: rgba(0, 0, 0, 0.7);
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    color: white;
+    background: var(--color-overlay-background-primary);
+    border: 1px solid var(--color-overlay-border-primary);
+    color: var(--color-overlay-text);
     padding: 0.5rem;
     border-radius: 0.375rem;
     cursor: pointer;
@@ -42,8 +42,8 @@
   }
 
   .graph-controls button:hover {
-    background: rgba(0, 0, 0, 0.8);
-    border-color: rgba(255, 255, 255, 0.3);
+    background: var(--color-overlay-background-secondary);
+    border-color: var(--color-overlay-border-secondary);
     transform: translateY(-1px);
   }
 </style>

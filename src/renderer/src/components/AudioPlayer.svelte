@@ -198,11 +198,11 @@
     gap: 0.75rem;
     width: 90%;
     max-width: 500px;
-    background: rgba(0, 0, 0, 0.3);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: var(--color-background-glass-1);
+    border: 1px solid var(--color-border-glass-1);
     border-radius: 0.5rem;
     padding: 0.5rem;
-    color: white;
+    color: var(--color-overlay-text);
     backdrop-filter: blur(10px);
   }
 
@@ -233,30 +233,30 @@
 
   .time-display {
     font-size: 0.75rem;
-    color: rgba(255, 255, 255, 0.7);
+    color: var(--color-text-overlay-primary);
     font-family: 'JetBrains Mono', monospace;
     white-space: nowrap;
   }
 
   .progress-bar {
     height: 4px;
-    background: rgba(255, 255, 255, 0.2);
+    background: var(--color-overlay-border-primary);
     border-radius: 2px;
     cursor: pointer;
   }
 
   .progress {
     height: 100%;
-    background: #9333ea;
+    background: var(--color-primary);
     border-radius: 2px;
   }
 
   .play-button,
   .close-button,
   .volume-button {
-    background: #9333ea;
+    background: var(--color-primary);
     border: none;
-    color: white;
+    color: var(--color-overlay-text);
     width: 36px;
     height: 36px;
     border-radius: 50%;
@@ -271,7 +271,7 @@
   .play-button:hover,
   .close-button:hover,
   .volume-button:hover {
-    background: #7c3aed;
+    background: var(--color-primary-hover);
     transform: scale(1.05);
   }
 
@@ -283,12 +283,12 @@
 
   .close-button,
   .volume-button {
-    background: rgba(255, 255, 255, 0.1);
+    background: var(--color-border-glass-1);
   }
 
   .close-button:hover,
   .volume-button:hover {
-    background: rgba(255, 255, 255, 0.2);
+    background: var(--color-overlay-border-primary);
   }
 
   .volume-control {
@@ -302,7 +302,7 @@
     bottom: calc(100% + 0.5rem);
     left: 50%;
     transform: translateX(-50%);
-    background: rgba(0, 0, 0, 0.5);
+    background: var(--color-background-glass-3);
     backdrop-filter: blur(10px);
     border-radius: 0.5rem;
     padding: 1rem 0.5rem;
@@ -323,7 +323,7 @@
   /* Webkit (Chrome, Safari) */
   .volume-slider::-webkit-slider-runnable-track {
     height: 4px;
-    background: rgba(255, 255, 255, 0.2);
+    background: var(--color-overlay-border-primary);
     border-radius: 2px;
   }
 
@@ -333,7 +333,7 @@
     margin-top: -5px; /* (thumb height - track height) / 2 */
     width: 14px;
     height: 14px;
-    background: #9333ea;
+    background: var(--color-primary);
     border-radius: 50%;
     border: none;
   }
@@ -341,14 +341,14 @@
   /* Firefox */
   .volume-slider::-moz-range-track {
     height: 4px;
-    background: rgba(255, 255, 255, 0.2);
+    background: var(--color-overlay-border-primary);
     border-radius: 2px;
   }
 
   .volume-slider::-moz-range-thumb {
     width: 14px;
     height: 14px;
-    background: #9333ea;
+    background: var(--color-primary);
     border-radius: 50%;
     border: none;
   }

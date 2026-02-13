@@ -31,11 +31,13 @@
   let engineFields: Record<string, string> = $state({})
 
   let currentEngineConfig = $derived(engines.find((e) => e.id === selectedEngine))
-  let isFormValid = $derived(currentEngineConfig
-    ? currentEngineConfig.fields.every(
-        (f) => !f.required || (engineFields[f.key] && engineFields[f.key].trim() !== '')
-      )
-    : false)
+  let isFormValid = $derived(
+    currentEngineConfig
+      ? currentEngineConfig.fields.every(
+          (f) => !f.required || (engineFields[f.key] && engineFields[f.key].trim() !== '')
+        )
+      : false
+  )
 
   onMount(async (): Promise<void> => {
     recentProjects = await window.api.getRecentProjects()
@@ -100,7 +102,10 @@
     }
   }
 
-  async function selectFieldFile(key: string, filters?: any[]): Promise<void> {
+  async function selectFieldFile(
+    key: string,
+    filters?: { name: string; extensions: string[] }[]
+  ): Promise<void> {
     const path = await window.api.openFile({ title: 'Select File', filters })
     if (path) {
       engineFields[key] = path
@@ -111,7 +116,11 @@
 <svelte:window
   onkeydown={handleKeydown}
   onclick={(event: MouseEvent): void => {
-    if (fileMenuElement && event.target instanceof Node && !fileMenuElement.contains(event.target)) {
+    if (
+      fileMenuElement &&
+      event.target instanceof Node &&
+      !fileMenuElement.contains(event.target)
+    ) {
       showFileMenu = false
     }
   }}
@@ -243,11 +252,19 @@
             {field.label}:
             {#if field.type === 'file'}
               <div class="path-input">
-                <input type="text" bind:value={engineFields[field.key]} placeholder={field.placeholder} />
+                <input
+                  type="text"
+                  bind:value={engineFields[field.key]}
+                  placeholder={field.placeholder}
+                />
                 <button onclick={() => selectFieldFile(field.key, field.filters)}>Browse</button>
               </div>
             {:else}
-              <input type="text" bind:value={engineFields[field.key]} placeholder={field.placeholder} />
+              <input
+                type="text"
+                bind:value={engineFields[field.key]}
+                placeholder={field.placeholder}
+              />
             {/if}
           </label>
         {/each}
@@ -255,9 +272,7 @@
 
       <div class="dialog-actions">
         <button onclick={() => (showImportDialog = false)}>Cancel</button>
-        <button class="primary" onclick={importModel} disabled={!isFormValid}>
-          Import
-        </button>
+        <button class="primary" onclick={importModel} disabled={!isFormValid}> Import </button>
       </div>
     </div>
   </div>
@@ -271,8 +286,8 @@
     align-items: center;
     justify-content: space-between;
     padding: 0.75rem 1.5rem;
-    background: rgba(0, 0, 0, 0.3);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    background: var(--color-background-glass-1);
+    border-bottom: 1px solid var(--color-border-glass-1);
     backdrop-filter: blur(10px);
   }
 
@@ -290,9 +305,9 @@
     display: flex;
     align-items: center;
     gap: 0.5rem;
-    background: rgba(255, 255, 255, 0.1);
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    color: white;
+    background: var(--color-border-glass-1);
+    border: 1px solid var(--color-overlay-border-primary);
+    color: var(--color-overlay-text);
     padding: 0.5rem 1rem;
     border-radius: 0.375rem;
     cursor: pointer;
@@ -300,7 +315,7 @@
   }
 
   .project-button:hover {
-    background: rgba(255, 255, 255, 0.15);
+    background: var(--color-background-glass-hover-1);
   }
 
   .chevron {
@@ -316,8 +331,8 @@
     top: 100%;
     left: 0;
     min-width: 200px;
-    background: rgba(0, 0, 0, 0.9);
-    border: 1px solid rgba(255, 255, 255, 0.2);
+    background: var(--color-background-glass-4);
+    border: 1px solid var(--color-overlay-border-primary);
     border-radius: 0.375rem;
     margin-top: 0.25rem;
     max-height: 200px;
@@ -330,8 +345,8 @@
     padding: 0.5rem 1rem;
     font-size: 0.875rem;
     font-weight: 600;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-    color: rgba(255, 255, 255, 0.7);
+    border-bottom: 1px solid var(--color-border-glass-1);
+    color: var(--color-text-overlay-primary);
   }
 
   .dropdown-item {
@@ -340,30 +355,30 @@
     padding: 0.5rem 1rem;
     background: none;
     border: none;
-    color: white;
+    color: var(--color-overlay-text);
     text-align: left;
     cursor: pointer;
     transition: background-color 0.2s;
   }
 
   .dropdown-item:hover {
-    background: rgba(255, 255, 255, 0.1);
+    background: var(--color-border-glass-1);
   }
 
   .dropdown-divider {
     height: 1px;
-    background-color: rgba(255, 255, 255, 0.1);
+    background-color: var(--color-border-glass-1);
     margin: 0.5rem 0;
   }
 
   .dropdown-empty {
     padding: 1rem;
     text-align: center;
-    color: rgba(255, 255, 255, 0.5);
+    color: var(--color-text-overlay-secondary);
     font-style: italic;
   }
   .current-project {
-    color: white;
+    color: var(--color-overlay-text);
     font-size: 0.875rem;
     font-style: italic;
     opacity: 0.7;
@@ -373,9 +388,9 @@
     display: flex;
     align-items: center;
     gap: 0.5rem;
-    background: rgba(255, 255, 255, 0.1);
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    color: white;
+    background: var(--color-border-glass-1);
+    border: 1px solid var(--color-overlay-border-primary);
+    color: var(--color-overlay-text);
     padding: 0.5rem 1rem;
     border-radius: 0.375rem;
     cursor: pointer;
@@ -383,17 +398,17 @@
   }
 
   .toggle-button.active {
-    background: rgba(147, 51, 234, 0.3);
-    border-color: rgba(147, 51, 234, 0.5);
+    background: var(--color-primary-t-30);
+    border-color: var(--color-primary-t-50);
   }
 
   .toolbar-button {
     display: flex;
     align-items: center;
     gap: 0.5rem;
-    background: rgba(255, 255, 255, 0.1);
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    color: white;
+    background: var(--color-border-glass-1);
+    border: 1px solid var(--color-overlay-border-primary);
+    color: var(--color-overlay-text);
     padding: 0.5rem 1rem;
     border-radius: 0.375rem;
     cursor: pointer;
@@ -401,7 +416,7 @@
   }
 
   .toolbar-button:hover {
-    background: rgba(255, 255, 255, 0.15);
+    background: var(--color-background-glass-hover-1);
     transform: translateY(-1px);
   }
 
@@ -411,7 +426,7 @@
     left: 0;
     right: 0;
     bottom: 0;
-    background: rgba(0, 0, 0, 0.7);
+    background: var(--color-overlay-background-primary);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -420,8 +435,8 @@
   }
 
   .dialog {
-    background: #1e293b;
-    border: 1px solid rgba(255, 255, 255, 0.2);
+    background: var(--color-background-medium);
+    border: 1px solid var(--color-overlay-border-primary);
     border-radius: 0.5rem;
     min-width: 400px;
     max-width: 500px;
@@ -432,18 +447,18 @@
     align-items: center;
     justify-content: space-between;
     padding: 1rem 1.5rem;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    border-bottom: 1px solid var(--color-border-glass-1);
   }
 
   .dialog-header h3 {
     margin: 0;
-    color: white;
+    color: var(--color-overlay-text);
   }
 
   .dialog-header button {
     background: none;
     border: none;
-    color: white;
+    color: var(--color-overlay-text);
     font-size: 1.5rem;
     cursor: pointer;
     padding: 0;
@@ -460,22 +475,22 @@
 
   .dialog-content label {
     display: block;
-    color: white;
+    color: var(--color-overlay-text);
     font-weight: 500;
     margin-bottom: 0.5rem;
   }
 
   .dialog-content select {
     width: 100%;
-    background: rgba(255, 255, 255, 0.1);
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    color: white;
+    background: var(--color-border-glass-1);
+    border: 1px solid var(--color-overlay-border-primary);
+    color: var(--color-overlay-text);
     padding: 0.5rem;
     border-radius: 0.375rem;
   }
 
   .dialog-content select option {
-    background: #1e293b;
+    background: var(--color-background-medium);
   }
 
   .path-input {
@@ -485,17 +500,17 @@
 
   .path-input input {
     flex: 1;
-    background: rgba(255, 255, 255, 0.1);
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    color: white;
+    background: var(--color-border-glass-1);
+    border: 1px solid var(--color-overlay-border-primary);
+    color: var(--color-overlay-text);
     padding: 0.5rem;
     border-radius: 0.375rem;
   }
 
   .path-input button {
-    background: rgba(147, 51, 234, 0.3);
-    border: 1px solid rgba(147, 51, 234, 0.5);
-    color: white;
+    background: var(--color-primary-t-30);
+    border: 1px solid var(--color-primary-t-50);
+    color: var(--color-overlay-text);
     padding: 0.5rem 1rem;
     border-radius: 0.375rem;
     cursor: pointer;
@@ -506,7 +521,7 @@
     justify-content: flex-end;
     gap: 1rem;
     padding: 1rem 1.5rem;
-    border-top: 1px solid rgba(255, 255, 255, 0.1);
+    border-top: 1px solid var(--color-border-glass-1);
   }
 
   .dialog-actions button {
@@ -517,15 +532,15 @@
   }
 
   .dialog-actions button:not(.primary) {
-    background: rgba(255, 255, 255, 0.1);
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    color: white;
+    background: var(--color-border-glass-1);
+    border: 1px solid var(--color-overlay-border-primary);
+    color: var(--color-overlay-text);
   }
 
   .dialog-actions button.primary {
-    background: #9333ea;
-    border: 1px solid #9333ea;
-    color: white;
+    background: var(--color-primary);
+    border: 1px solid var(--color-primary);
+    color: var(--color-overlay-text);
   }
 
   .dialog-actions button.primary:disabled {

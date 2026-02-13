@@ -1,6 +1,6 @@
 <script lang="ts">
   /* eslint-disable @typescript-eslint/no-explicit-any */
-  import AudioGraph from './components/graph/ParameterGraph.svelte'
+  import ParameterGraph from './components/graph/ParameterGraph.svelte'
   import Toolbar from './components/Toolbar.svelte'
   import AudioPlayer from './components/AudioPlayer.svelte'
   import Sidebar from './components/Sidebar.svelte'
@@ -8,7 +8,7 @@
   let graphData: any = null
   let currentProject: string | null = null
   let viewMode: 'batch' | 'cluster' = 'batch'
-  let audioGraph: AudioGraph
+  let audioGraph: ParameterGraph
   let audioSrc: string | null = null
   let audioTitle: string | null = null
   let selectedNodeData: Record<string, any> | null = null
@@ -66,7 +66,8 @@
     try {
       const result = await window.api.getAudioFile(audioData.name)
       if (result && result.buffer) {
-        const blob = new Blob([result.buffer], { type: result.mimeType })
+        const { buffer, mimeType } = result
+        const blob = new Blob([new Uint8Array(buffer)], { type: mimeType })
         audioSrc = URL.createObjectURL(blob)
         audioTitle = audioData.alias
       } else {
@@ -111,7 +112,7 @@
   {#if selectedNodeData}
     <Sidebar {selectedNodeData} onclose={() => (selectedNodeData = null)} />
   {/if}
-  <AudioGraph
+  <ParameterGraph
     bind:this={audioGraph}
     {graphData}
     {viewMode}
