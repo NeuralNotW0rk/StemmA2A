@@ -27,7 +27,7 @@
   let fileMenuElement: HTMLElement | undefined = $state()
   let recentProjects: string[] = $state([])
   let showImportDialog = $state(false)
-  let selectedEngine = $state('stable-audio-tools')
+  let selectedEngine = $state('default')
   let engineFields: Record<string, string> = $state({})
 
   let currentEngineConfig = $derived(engines.find((e) => e.id === selectedEngine))
@@ -247,6 +247,10 @@
           </select>
         </label>
 
+        {#if currentEngineConfig?.description}
+          <p class="engine-description">{currentEngineConfig.description}</p>
+        {/if}
+
         {#each engines.find((e) => e.id === selectedEngine)?.fields || [] as field (field.key)}
           <label style="margin-top: 1rem;">
             {field.label}:
@@ -376,6 +380,17 @@
     text-align: center;
     color: var(--color-text-overlay-secondary);
     font-style: italic;
+  }
+
+  .engine-description {
+    font-size: 0.875rem;
+    color: var(--color-text-overlay-secondary);
+    margin-top: 0.75rem;
+    margin-bottom: 0.5rem;
+    padding: 0.75rem;
+    background-color: var(--color-background-glass-1);
+    border-radius: 0.375rem;
+    border: 1px solid var(--color-border-glass-1);
   }
   .current-project {
     color: var(--color-overlay-text);

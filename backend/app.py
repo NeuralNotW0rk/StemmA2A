@@ -211,9 +211,9 @@ def get_tsne_graph():
 #  Model Operations
 # --------------------
 
-@app.route("/import_model", methods=["POST"])
+@app.route("/register_model", methods=["POST"])
 def import_model():
-    """Import a model"""
+    """Register a model"""
     if param_graph is None:
         return jsonify({"error": "No project loaded"}), 400
     
@@ -224,11 +224,11 @@ def import_model():
         if not model_path:
             return jsonify({"error": "model_path is required"}), 400
         
-        param_graph.import_model(model_path)
+        param_graph.register_model(model_path)
         param_graph.save()
         
         return jsonify({
-            "message": "Model imported successfully",
+            "message": "Model registered successfully",
             "success": True
         })
         

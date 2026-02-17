@@ -10,16 +10,24 @@ export interface EngineField {
 export interface EngineConfig {
   id: string
   name: string
+  description: string
   fields: EngineField[]
 }
 
 export const engines: EngineConfig[] = [
   {
+    id: 'default',
+    name: 'Default',
+    description: 'Automatically download and use the latest version of Stable Audio Open Small (uses the Stable Audio Tools engine)',
+    fields: []
+  },
+  {
     id: 'stable-audio-tools',
     name: 'Stable Audio Tools',
+    description: 'Manually choose any Stable Audio-based model checkpoint and config file',
     fields: [
       {
-        key: 'checkpointPath',
+        key: 'checkpoint_path',
         label: 'Checkpoint Path',
         type: 'file',
         filters: [
@@ -30,7 +38,7 @@ export const engines: EngineConfig[] = [
         required: true
       },
       {
-        key: 'configPath',
+        key: 'config_path',
         label: 'Config Path (model_config.json)',
         type: 'file',
         filters: [{ name: 'JSON Files', extensions: ['json'] }],
