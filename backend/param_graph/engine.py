@@ -15,5 +15,11 @@ class Engine:
     def __init__(self) -> None:
         pass
 
+    def register_model(self) -> Model:
+        pass
+
+    def register_model_default(self) -> Model:
+        pass
+
     def generate(self) -> None:
         pass

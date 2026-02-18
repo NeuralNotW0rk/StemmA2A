@@ -16,7 +16,7 @@ class GraphElement:
 @dataclass(kw_only=True)
 class Artifact(GraphElement):
     uid: int
-    alias: Optional[str] = None
+    name: str
 
     def __post_init__(self):
         super().__post_init__()

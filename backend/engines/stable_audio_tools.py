@@ -1,13 +1,15 @@
 from dataclasses import dataclass
 import torch
 import torchaudio
-from stable_audio_tools import get_pretrained_model, create_model_from_config, load_ckpt_state_dict
+from stable_audio_tools import get_pretrained_model, create_model_from_config
+from stable_audio_tools.models.utils import load_ckpt_state_dict
 from stable_audio_tools.inference.generation import generate_diffusion_cond
 
-from ..param_graph.engine import Engine, Model
-from ..param_graph.uid_gen import UIDGenerator, UIDMismatchError
+from param_graph.engine import Engine, Model
+from param_graph.uid_gen import UIDGenerator, UIDMismatchError
 
-HF_MODEL_DEFAULT = "stabilityai/stable-audio-open-small"
+HF_MODEL_NAME = "Stable Audio Open Small"
+HF_MODEL_PATH = "stabilityai/stable-audio-open-small"
 
 @dataclass(kw_only=True)
 class StableAudioModel(Model):
@@ -23,30 +25,32 @@ class StableAudioModel(Model):
 class StableAudioTools(Engine):
     def __init__(self) -> None:
         super().__init__()
+        self.name = 'stable_audio_tools'
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.model_id = None
         self.model = None
 
-    def register_model(path: str, config: dict) -> StableAudioModel:
-        model = create_model_from_config(config)
-        model.load_state_dict(load_ckpt_state_dict(path))
+    def register_model(name: str = None, path: str = None, config: dict = None, default: bool=False) -> StableAudioModel:
+        if default:
+            model, config = get_pretrained_model(HF_MODEL_PATH)
 
-        return StableAudioModel(
-            default=False,
-            path=path,
-            config=config,
-            uid=UIDGenerator.from_module(model)
-        )    
+            return StableAudioModel(
+                default=True,
+                name=HF_MODEL_NAME,
+                path=HF_MODEL_PATH,
+                config=config,
+                uid=UIDGenerator.from_module(model)
+            )
+        else:
+            model = create_model_from_config(config)
+            model.load_state_dict(load_ckpt_state_dict(path))
 
-    def register_model_default() -> StableAudioModel:
-        model, config = get_pretrained_model(HF_MODEL_DEFAULT)
-
-        return StableAudioModel(
-            default=True,
-            path=HF_MODEL_DEFAULT,
-            config=config,
-            uid=UIDGenerator.from_module(model)
-        )
+            return StableAudioModel(
+                default=False,
+                path=path,
+                config=config,
+                uid=UIDGenerator.from_module(model)
+            )
 
     def load_model(self, ele: StableAudioModel, verify: bool=True):
         # Check if a model is currently loaded

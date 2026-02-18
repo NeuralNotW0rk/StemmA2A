@@ -18,7 +18,7 @@ export const engines: EngineConfig[] = [
   {
     id: 'default',
     name: 'Default',
-    description: 'Automatically download and use the latest version of Stable Audio Open Small (uses the Stable Audio Tools engine)',
+    description: 'Automatically download and use the latest version of Stable Audio Open Small from huggingface (uses the Stable Audio Tools engine)',
     fields: []
   },
   {
@@ -26,6 +26,12 @@ export const engines: EngineConfig[] = [
     name: 'Stable Audio Tools',
     description: 'Manually choose any Stable Audio-based model checkpoint and config file',
     fields: [
+      {
+        key: 'name',
+        label: 'Name',
+        type: 'text',
+        required: true
+      },
       {
         key: 'checkpoint_path',
         label: 'Checkpoint Path',

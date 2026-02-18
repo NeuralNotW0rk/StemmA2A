@@ -6,17 +6,19 @@ import torch
 import torchaudio
 import io
 import json
-import logging
+import traceback
 from pathlib import Path
 from typing import Dict, Any, Optional
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+
 
 # Import your existing modules
 from param_graph.util import load_audio
 from param_graph.graph import ParameterGraph
+from param_graph.engine import Engine
+
+from engines.stable_audio_tools import StableAudioTools
+
 
 app = Flask(__name__)
 CORS(app)
@@ -27,7 +29,21 @@ device_accelerator = torch.device(device_type_accelerator)
 # A default sample rate for processing and playback
 APP_SAMPLE_RATE = 48000
 
-param_graph: Optional[ParameterGraph] = None
+param_graph: ParameterGraph = None
+engine: Engine = None
+
+engine_map = {
+    'stable_audio_tools': StableAudioTools
+}
+
+def set_engine(engine_name):
+    global engine
+    
+    if engine and engine_name == engine.name:
+        return
+    engine = engine_map[engine_name]()
+    print(f"Engine activated: {engine.name}")
+
 
 # Argument type mappings
 ARG_TYPES = {
@@ -48,11 +64,12 @@ def parse_args(args_dict: Dict[str, Any]) -> Dict[str, Any]:
             try:
                 parsed[key] = ARG_TYPES[key](value)
             except (ValueError, TypeError):
-                logger.warning(f"Failed to convert {key}={value} to {ARG_TYPES[key]}")
+                print(f"Failed to convert {key}={value} to {ARG_TYPES[key]}")
                 parsed[key] = value
         else:
             parsed[key] = value
     return parsed
+
 
 # --------------------
 #  Health Check
@@ -68,22 +85,7 @@ def health_check():
         "project_loaded": param_graph is not None
     })
 
-# --------------------
-#  Logging
-# --------------------
 
-@app.route("/log_message", methods=["POST"])
-def log_message():
-    """Log a message from the frontend"""
-    data = request.get_json()
-    if not data:
-        return jsonify({"error": "Invalid JSON"}), 400
-    message = data.get("message")
-    if message:
-        logger.info(f"Frontend message: {message}")
-        return jsonify({"status": "success", "message": "Message logged"}), 200
-    else:
-        return jsonify({"status": "error", "message": "No message provided"}), 400
 
 # --------------------
 #  Project Management
@@ -119,7 +121,8 @@ def load_project():
         })
         
     except Exception as e:
-        logger.error(f"Failed to load project: {e}")
+        print(f"Failed to load project: {e}")
+        traceback.print_exc()
         return jsonify({"error": str(e)}), 500
     
 @app.route("/create_project", methods=["POST"])
@@ -148,7 +151,8 @@ def create_project():
         })
         
     except Exception as e:
-        logger.error(f"Failed to create project: {e}")
+        print(f"Failed to create project: {e}")
+        traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
 @app.route("/project", methods=["GET"])
@@ -186,7 +190,8 @@ def get_graph():
             "success": True
         })
     except Exception as e:
-        logger.error(f"Failed to get graph data: {e}")
+        print(f"Failed to get graph data: {e}")
+        traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
 @app.route("/graph_tsne", methods=["GET"])
@@ -204,7 +209,8 @@ def get_tsne_graph():
             "success": True
         })
     except Exception as e:
-        logger.error(f"Failed to get t-SNE graph data: {e}")
+        print(f"Failed to get t-SNE graph data: {e}")
+        traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
 # --------------------
@@ -219,12 +225,12 @@ def import_model():
     
     try:
         data = request.get_json()
-        model_path = data.get('model_path')
+        engine_name = data.pop('engine')
+        if engine_name == "default":
+            engine_name = "stable_audio_tools"
+        set_engine(engine_name)
         
-        if not model_path:
-            return jsonify({"error": "model_path is required"}), 400
-        
-        param_graph.register_model(model_path)
+        param_graph.add_artifact(engine.register_model(**data))
         param_graph.save()
         
         return jsonify({
@@ -233,7 +239,8 @@ def import_model():
         })
         
     except Exception as e:
-        logger.error(f"Failed to import model: {e}")
+        print(f"Failed to import model: {e}")
+        traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
 @app.route("/generate", methods=["POST"])
@@ -257,7 +264,8 @@ def generate():
         return jsonify({"message": "Generation endpoint is currently a placeholder."}), 200
 
     except Exception as e:
-        logger.error(f"Generation failed: {e}")
+        print(f"Generation failed: {e}")
+        traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
 @app.route("/variation", methods=["POST"])
@@ -284,7 +292,8 @@ def variation():
         return jsonify({"message": "Variation endpoint is currently a placeholder."}), 200
         
     except Exception as e:
-        logger.error(f"Variation failed: {e}")
+        print(f"Variation failed: {e}")
+        traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
 # --------------------
@@ -313,7 +322,8 @@ def add_external_source():
         })
         
     except Exception as e:
-        logger.error(f"Failed to add external source: {e}")
+        print(f"Failed to add external source: {e}")
+        traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
 @app.route("/rescan_source", methods=["POST"])
@@ -338,7 +348,8 @@ def rescan_source():
         })
         
     except Exception as e:
-        logger.error(f"Failed to rescan source: {e}")
+        print(f"Failed to rescan source: {e}")
+        traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
 # --------------------
@@ -370,30 +381,32 @@ def serve_audio_data(filename):
         return send_file(buffer, mimetype="audio/wav")
         
     except Exception as e:
-        logger.error(f"Failed to serve audio data: {e}")
+        print(f"Failed to serve audio data: {e}")
+        traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
 @app.route("/audio_path/<path:filename>", methods=["GET"])
 def get_audio_path(filename):
     """Get the absolute path of an audio file"""
-    logger.info(f"get_audio_path called with filename: {filename}")
+    print(f"get_audio_path called with filename: {filename}")
     if param_graph is None:
-        logger.error("get_audio_path: param_graph is None. No project loaded.")
+        print("get_audio_path: param_graph is None. No project loaded.")
         return jsonify({"error": "No project loaded"}), 400
     
     try:
         audio_path = param_graph.get_path_from_name(filename, relative=False)
-        logger.info(f"Path retrieved from graph: {audio_path}")
+        print(f"Path retrieved from graph: {audio_path}")
 
         if not audio_path or not Path(audio_path).exists():
-            logger.warning(f"Audio file not found at path: {audio_path}")
+            print(f"Audio file not found at path: {audio_path}")
             return jsonify({"error": "Audio file not found"}), 404
         
-        logger.info(f"Returning audio path: {audio_path}")
+        print(f"Returning audio path: {audio_path}")
         return jsonify({"path": str(audio_path)})
         
     except Exception as e:
-        logger.error(f"Failed to get audio path: {e}", exc_info=True)
+        print(f"Failed to get audio path: {e}")
+        traceback.print_exc()
         return jsonify({"error": f"An unexpected error occurred in get_audio_path: {str(e)}"}), 500
 
 @app.route("/audio/<path:filename>", methods=["GET"])
@@ -410,7 +423,8 @@ def serve_audio(filename):
         return send_file(str(audio_path))
         
     except Exception as e:
-        logger.error(f"Failed to serve audio: {e}")
+        print(f"Failed to serve audio: {e}")
+        traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
 @app.route("/export", methods=["POST"])
@@ -439,7 +453,8 @@ def export_audio():
         })
         
     except Exception as e:
-        logger.error(f"Export failed: {e}")
+        print(f"Export failed: {e}")
+        traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
 # --------------------
@@ -469,7 +484,8 @@ def update_element():
         })
         
     except Exception as e:
-        logger.error(f"Failed to update element: {e}")
+        print(f"Failed to update element: {e}")
+        traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
 # --------------------
@@ -489,7 +505,7 @@ def internal_error(error):
 # --------------------
 
 if __name__ == "__main__":
-    logger.info(f"Starting StemmA2A backend on device: {device_accelerator}")
+    print(f"Starting StemmA2A backend on device: {device_accelerator}")
     app.run(
         host="127.0.0.1",
         port=5000,

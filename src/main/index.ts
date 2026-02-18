@@ -22,31 +22,46 @@ function startPythonBackend(): Promise<void> {
       ? join(app.getAppPath(), 'backend', 'app.py')
       : join(process.resourcesPath, 'backend', 'app.py');
 
-    pythonBackend = spawn(venvPath, ['-u', appPyPath], {
-      stdio: ['pipe', 'pipe', 'pipe'] // Use pipes to capture output
-    });
-
-    let backendReady = false;
-    const handleMessage = (message: string) => {
-      if (!backendReady && message.includes('Running on http://127.0.0.1:5000')) {
-        backendReady = true;
-        console.log('Python backend started');
+    if (is.dev && process.platform === 'win32') {
+      // In dev mode on Windows, open a new terminal that stays open
+      console.log('Starting Python backend in new window');
+      const command = ['/c', 'start', 'cmd.exe', '/k', venvPath, '-u', appPyPath];
+      pythonBackend = spawn('cmd.exe', command, {
+        cwd: join(app.getAppPath(), 'backend')
+      });
+      // Resolve after a delay to allow the backend to initialize
+      setTimeout(() => {
+        console.log('Assuming Python backend is ready');
         resolve();
+      }, 5000); // 5 seconds delay
+    } else {
+      // Original behavior for production or other platforms
+      pythonBackend = spawn(venvPath, ['-u', appPyPath], {
+        stdio: ['pipe', 'pipe', 'pipe'] // Use pipes to capture output
+      });
+
+      let backendReady = false;
+      const handleMessage = (message: string) => {
+        if (!backendReady && message.includes('Running on http://127.0.0.1:5000')) {
+          backendReady = true;
+          console.log('Python backend started');
+          resolve();
+        }
       }
+
+      const stdoutReader = readline.createInterface({ input: pythonBackend.stdout! });
+      stdoutReader.on('line', (line) => {
+        console.log(`Python Backend: ${line}`);
+        handleMessage(line);
+      });
+
+      const stderrReader = readline.createInterface({ input: pythonBackend.stderr! });
+      stderrReader.on('line', (line) => {
+        // Log stderr as regular output, since Flask/Werkzeug logs INFO here
+        console.log(`Python Backend: ${line}`);
+        handleMessage(line);
+      });
     }
-
-    const stdoutReader = readline.createInterface({ input: pythonBackend.stdout! });
-    stdoutReader.on('line', (line) => {
-      console.log(`Python Backend: ${line}`);
-      handleMessage(line);
-    });
-
-    const stderrReader = readline.createInterface({ input: pythonBackend.stderr! });
-    stderrReader.on('line', (line) => {
-      // Log stderr as regular output, since Flask/Werkzeug logs INFO here
-      console.log(`Python Backend: ${line}`);
-      handleMessage(line);
-    });
 
     pythonBackend.on('error', (error) => {
       console.error('Failed to start Python backend:', error);
@@ -150,7 +165,7 @@ app.whenReady().then(async () => {
   })
 
   ipcMain.handle('importModel', async (_event, modelData) => {
-    const response = await fetch('http://127.0.0.1:5000/import_model', {
+    const response = await fetch('http://127.0.0.1:5000/register_model', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(modelData)
@@ -203,27 +218,7 @@ app.whenReady().then(async () => {
     }
   })
 
-  ipcMain.handle('logMessage', async (_event, message) => {
-    try {
-        const response = await fetch('http://127.0.0.1:5000/log_message', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ message: message })
-        });
 
-        if (!response.ok) {
-            const errorText = await response.text();
-            throw new Error(`Failed to log message. Status: ${response.status}. Body: ${errorText}`);
-        }
-
-        return await response.json();
-    } catch (error) {
-        console.error('Main Process: /log_message request error:', error);
-        throw error;
-    }
-  });
 
   ipcMain.handle('loadProject', async (_event, projectPath) => {
     // Load project

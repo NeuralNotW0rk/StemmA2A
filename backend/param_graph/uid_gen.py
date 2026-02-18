@@ -1,5 +1,7 @@
 import xxhash
-from torch import Tensor, Module
+from torch import Tensor
+from torch.nn import Module
+
 
 class UIDMismatchError(Exception):
     """Raised when a model's stored UID does not match its calculated UID."""

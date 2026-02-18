@@ -12,6 +12,7 @@ from sklearn.manifold import TSNE
 
 from .util import *
 from .const import *
+from .elements.base_elements import Artifact
 
 DEFAULT_SR = 48000
 
@@ -65,6 +66,11 @@ class ParameterGraph:
                     C.add_node(node, **data)
                     C.nodes[node].pop('parent', None)
             return nx.cytoscape.cytoscape_data(C)
+        
+    def add_artifact(self, ele: Artifact):
+        node_attrs = ele.to_dict()
+        node_id = node_attrs.get('uid', None)
+        self.G.add_node(node_id, **node_attrs)
 
     def get_path_from_name(self, name: str, relative=False):
         if self.G.has_node(name):

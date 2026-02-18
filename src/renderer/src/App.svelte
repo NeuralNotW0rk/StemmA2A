@@ -16,30 +16,30 @@
   async function handleProjectLoad(data: { projectPath: string }): Promise<void> {
     const projectPath = data.projectPath
     try {
-      await window.api.logMessage(`Loading project: ${projectPath}`)
+      console.log(`Loading project: ${projectPath}`)
       await window.api.loadProject(projectPath)
       graphData = await window.api.getGraphData(viewMode)
       currentProject = projectPath
       await window.api.addRecentProject(projectPath)
-      await window.api.logMessage(`Successfully loaded project: ${projectPath}`)
+      console.log(`Successfully loaded project: ${projectPath}`)
     } catch (error) {
       console.error('Failed to load project:', error)
-      await window.api.logMessage(`Failed to load project: ${projectPath}. Error: ${error}`)
+      console.log(`Failed to load project: ${projectPath}. Error: ${error}`)
     }
   }
 
   async function handleProjectCreate(data: { projectPath: string }): Promise<void> {
     const projectPath = data.projectPath
     try {
-      await window.api.logMessage(`Creating project: ${projectPath}`)
+      console.log(`Creating project: ${projectPath}`)
       await window.api.createProject(projectPath)
       graphData = await window.api.getGraphData(viewMode)
       currentProject = projectPath
       await window.api.addRecentProject(projectPath)
-      await window.api.logMessage(`Successfully created project: ${projectPath}`)
+      console.log(`Successfully created project: ${projectPath}`)
     } catch (error) {
       console.error('Failed to create project:', error)
-      await window.api.logMessage(`Failed to create project: ${projectPath}. Error: ${error}`)
+      console.log(`Failed to create project: ${projectPath}. Error: ${error}`)
     }
   }
 
@@ -49,14 +49,14 @@
       graphData = await window.api.getGraphData(viewMode)
     } catch (error) {
       console.error('Failed to get graph data:', error)
-      await window.api.logMessage(
+      console.log(
         `Failed to get graph data for view mode ${viewMode}. Error: ${error}`
       )
     }
   }
 
   async function handleAudioSelect(audioData: any): Promise<void> {
-    await window.api.logMessage(`Audio selected: ${audioData.name}`)
+    console.log(`Audio selected: ${audioData.name}`)
 
     // Revoke the old blob URL if it exists to prevent memory leaks
     if (audioSrc && audioSrc.startsWith('blob:')) {
@@ -84,16 +84,16 @@
 
   function handleNodeSelect(nodeData: any): void {
     selectedNodeData = nodeData
-    window.api.logMessage(`Node selected: ${selectedNodeData?.name || 'Unknown'}`)
+    console.log(`Node selected: ${selectedNodeData?.name || 'Unknown'}`)
   }
 
   async function refreshGraphData(): Promise<void> {
     try {
       graphData = await window.api.getGraphData(viewMode)
-      await window.api.logMessage(`Graph data refreshed for view mode ${viewMode}`)
+      console.log(`Graph data refreshed for view mode ${viewMode}`)
     } catch (error) {
       console.error('Failed to get graph data:', error)
-      await window.api.logMessage(
+      console.log(
         `Failed to get graph data for view mode ${viewMode}. Error: ${error}`
       )
     }
