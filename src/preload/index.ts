@@ -6,6 +6,8 @@ const api = {
   openProject: (): Promise<string | null> => ipcRenderer.invoke('dialog:openProject'),
   newProject: (): Promise<string | null> => ipcRenderer.invoke('dialog:newProject'),
   getRecentProjects: (): Promise<string[]> => ipcRenderer.invoke('getRecentProjects'),
+  removeRecentProject: (projectPath: string): Promise<void> =>
+    ipcRenderer.invoke('removeRecentProject', projectPath),
   addRecentProject: (projectPath: string): Promise<void> =>
     ipcRenderer.invoke('addRecentProject', projectPath),
   loadProject: (projectPath: string): Promise<any> =>

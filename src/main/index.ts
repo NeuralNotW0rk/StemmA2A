@@ -183,6 +183,11 @@ app.whenReady().then(async () => {
     return (store.get('recentProjects', []) as string[])
   })
 
+  ipcMain.handle('removeRecentProject', async (_event, projectPath) => {
+    const recentProjects = (store.get('recentProjects', []) as string[]).filter(p => p !== projectPath)
+    store.set('recentProjects', recentProjects)
+  })
+
   ipcMain.handle('addRecentProject', async (_event, projectPath) => {
     const recentProjects = (store.get('recentProjects', []) as string[]).filter(p => p !== projectPath)
     recentProjects.unshift(projectPath)

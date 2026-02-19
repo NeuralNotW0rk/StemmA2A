@@ -53,6 +53,11 @@
     onprojectLoad?.({ projectPath: path })
   }
 
+  async function removeRecentProject(path: string): Promise<void> {
+    await window.api.removeRecentProject(path)
+    recentProjects = recentProjects.filter((p) => p !== path)
+  }
+
   function toggleViewMode(): void {
     const newMode = viewMode === 'batch' ? 'cluster' : 'batch'
     onviewModeChange?.(newMode)
@@ -81,7 +86,11 @@
 <div class="toolbar">
   <div class="toolbar-section">
     <div class="file-menu" bind:this={fileMenuElement}>
-      <button class="project-button" onclick={() => (showFileMenu = !showFileMenu)}>
+      <button
+        class="project-button"
+        onclick={() => (showFileMenu = !showFileMenu)}
+        aria-label="Open file menu"
+      >
         File
         <svg
           width="12"
@@ -102,9 +111,26 @@
           <div class="dropdown-divider"></div>
           <div class="dropdown-header">Recent Projects</div>
           {#each recentProjects as project (project)}
-            <button class="dropdown-item" onclick={() => loadRecentProject(project)}>
-              {project.split(/[\\/]/).pop()}
-            </button>
+            <div class="dropdown-item-container">
+              <button class="dropdown-item" onclick={() => loadRecentProject(project)}>
+                {project.split(/[\\/]/).pop()}
+              </button>
+              <button
+                class="remove-project-button"
+                onclick={(e) => {
+                  e.stopPropagation()
+                  removeRecentProject(project)
+                }}
+                title="Remove from recent projects"
+                aria-label="Remove from recent projects"
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+                  <path
+                    d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"
+                  />
+                </svg>
+              </button>
+            </div>
           {/each}
           {#if recentProjects.length === 0}
             <div class="dropdown-empty">No recent projects</div>
@@ -115,7 +141,12 @@
     <div class="current-project">
       {currentProject ? currentProject.split(/[\\/]/).pop() : 'No Project Loaded'}
     </div>
-    <button class="toolbar-button" onclick={() => onrefresh?.()} title="Refresh graph data">
+    <button
+      class="toolbar-button"
+      onclick={() => onrefresh?.()}
+      title="Refresh graph data"
+      aria-label="Refresh graph data"
+    >
       <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
         <path
           d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"
@@ -132,6 +163,7 @@
         class:active={viewMode === 'batch'}
         onclick={toggleViewMode}
         title="Toggle between batch and cluster view"
+        aria-label="Toggle between batch and cluster view"
       >
         <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
           <path d="M4 6h16v2H4zm0 5h16v2H4zm0 5h16v2H4z" />
@@ -142,7 +174,12 @@
   </div>
 
   <div class="toolbar-section">
-    <button class="toolbar-button" onclick={() => (showImportDialog = true)} title="Import model">
+    <button
+      class="toolbar-button"
+      onclick={() => (showImportDialog = true)}
+      title="Import model"
+      aria-label="Import model"
+    >
       <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
         <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" />
       </svg>
@@ -153,6 +190,7 @@
       class="toolbar-button"
       onclick={() => onaddExternalSource?.()}
       title="Add external audio source"
+      aria-label="Add external audio source"
     >
       <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
         <path
@@ -227,6 +265,30 @@
     overflow-y: auto;
     z-index: 1000;
     backdrop-filter: blur(10px);
+  }
+
+  .dropdown-item-container {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .dropdown-item-container:hover .remove-project-button {
+    opacity: 1;
+  }
+
+  .remove-project-button {
+    background: transparent;
+    border: none;
+    color: var(--color-overlay-text);
+    cursor: pointer;
+    padding: 0.5rem;
+    opacity: 0.5;
+    transition: opacity 0.2s;
+  }
+
+  .remove-project-button:hover {
+    color: var(--color-primary);
   }
 
   .dropdown-header {

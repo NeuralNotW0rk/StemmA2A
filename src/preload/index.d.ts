@@ -4,6 +4,7 @@ interface API {
   openProject: () => Promise<string | null>
   newProject: () => Promise<string | null>
   getRecentProjects: () => Promise<string[]>
+  removeRecentProject: (projectPath: string) => Promise<void>
   addRecentProject: (projectPath: string) => Promise<void>
   loadProject: (projectPath: string) => Promise<any>
   createProject: (projectPath: string) => Promise<any>
