@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import json
 import torch
 import torchaudio
 from stable_audio_tools import get_pretrained_model, create_model_from_config
@@ -6,20 +7,16 @@ from stable_audio_tools.models.utils import load_ckpt_state_dict
 from stable_audio_tools.inference.generation import generate_diffusion_cond
 
 from param_graph.engine import Engine, Model
-from param_graph.uid_gen import UIDGenerator, UIDMismatchError
+from param_graph.uid_gen import UIDMismatchError
 
 HF_MODEL_NAME = "Stable Audio Open Small"
 HF_MODEL_PATH = "stabilityai/stable-audio-open-small"
 
 @dataclass(kw_only=True)
 class StableAudioModel(Model):
-    default: bool
-    path: str
+    checkpoint_path: str
     config: dict
-
-    def __post_init__(self):
-        super().__post_init__()
-        self.engine = 'stable_audio_tools'
+    engine: str = 'stable_audio_tools'
 
 
 class StableAudioTools(Engine):
@@ -30,27 +27,20 @@ class StableAudioTools(Engine):
         self.model_id = None
         self.model = None
 
-    def register_model(name: str = None, path: str = None, config: dict = None, default: bool=False) -> StableAudioModel:
-        if default:
-            model, config = get_pretrained_model(HF_MODEL_PATH)
+    def register_model(self, name: str = None, checkpoint_path: str = None, config_path: dict = None) -> StableAudioModel:
+        with open(config_path, 'r') as cf:
+            config = json.load(cf)
+        model = create_model_from_config(config)
+        model.load_state_dict(load_ckpt_state_dict(checkpoint_path))
 
-            return StableAudioModel(
-                default=True,
-                name=HF_MODEL_NAME,
-                path=HF_MODEL_PATH,
-                config=config,
-                uid=UIDGenerator.from_module(model)
-            )
-        else:
-            model = create_model_from_config(config)
-            model.load_state_dict(load_ckpt_state_dict(path))
-
-            return StableAudioModel(
-                default=False,
-                path=path,
-                config=config,
-                uid=UIDGenerator.from_module(model)
-            )
+        return StableAudioModel(
+            name=name,
+            checkpoint_path=checkpoint_path,
+            config=config,
+            uid=self.uid_generator.from_module(model),
+            uid_type=self.uid_generator.type,
+            uid_version=self.uid_generator.version
+        )
 
     def load_model(self, ele: StableAudioModel, verify: bool=True):
         # Check if a model is currently loaded
@@ -62,16 +52,12 @@ class StableAudioTools(Engine):
             # Unload existing model
             del self.model
 
-            if ele.default:
-                # Handle file i/o via the internal huggingface implementation
-                self.model, _ = get_pretrained_model()
-            else:
-                # Use stored config and load model from path
-                self.model = create_model_from_config(ele.config)
-                self.model.load_state_dict(load_ckpt_state_dict(ele.path))
+            # Use stored config and load model from path
+            self.model = create_model_from_config(ele.config)
+            self.model.load_state_dict(load_ckpt_state_dict(ele.path))
 
-            if verify:
-                uid = UIDGenerator.from_module(self.model)
+            if verify and self.uid_generator:
+                uid = self.uid_generator.from_module(self.model)
                 if uid != self.uid:
                     raise UIDMismatchError()
                 

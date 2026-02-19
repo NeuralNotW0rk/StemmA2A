@@ -8,7 +8,7 @@
   let graphData: any = null
   let currentProject: string | null = null
   let viewMode: 'batch' | 'cluster' = 'batch'
-  let audioGraph: ParameterGraph
+  let parameterGraph: ParameterGraph
   let audioSrc: string | null = null
   let audioTitle: string | null = null
   let selectedNodeData: Record<string, any> | null = null
@@ -49,9 +49,7 @@
       graphData = await window.api.getGraphData(viewMode)
     } catch (error) {
       console.error('Failed to get graph data:', error)
-      console.log(
-        `Failed to get graph data for view mode ${viewMode}. Error: ${error}`
-      )
+      console.log(`Failed to get graph data for view mode ${viewMode}. Error: ${error}`)
     }
   }
 
@@ -93,9 +91,7 @@
       console.log(`Graph data refreshed for view mode ${viewMode}`)
     } catch (error) {
       console.error('Failed to get graph data:', error)
-      console.log(
-        `Failed to get graph data for view mode ${viewMode}. Error: ${error}`
-      )
+      console.log(`Failed to get graph data for view mode ${viewMode}. Error: ${error}`)
     }
   }
 </script>
@@ -113,7 +109,7 @@
     <Sidebar {selectedNodeData} onclose={() => (selectedNodeData = null)} />
   {/if}
   <ParameterGraph
-    bind:this={audioGraph}
+    bind:this={parameterGraph}
     {graphData}
     {viewMode}
     onaudioSelect={handleAudioSelect}

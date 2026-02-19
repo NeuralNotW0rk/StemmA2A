@@ -2,46 +2,33 @@ from dataclasses import dataclass, asdict, field
 from typing import Optional, List
 from time import time
 
-@dataclass
+@dataclass(kw_only=True)
 class GraphElement:
     type: str
-    created: int
-
-    def __post_init__(self):
-        self.created = int(time())
+    created: int = field(default_factory=lambda: int(time()))
 
     def to_dict(self):
         return asdict(self)
     
 @dataclass(kw_only=True)
 class Artifact(GraphElement):
-    uid: int
+    uid: str
+    uid_type: str
+    uid_version: str
     name: str
-
-    def __post_init__(self):
-        super().__post_init__()
-        self.type = 'artifact'
+    type: str = 'artifact'
 
 @dataclass(kw_only=True)
 class ExternalSource(GraphElement):
     path: str
-
-    def __post_init__(self):
-        super().__post_init__()
-        self.type = 'external'
+    type: str = 'external'
 
 @dataclass(kw_only=True)
 class Set(GraphElement):
     alias: str
-
-    def __post_init__(self):
-        super().__post_init__()
-        self.type = 'set'
+    type: str = 'set'
 
 @dataclass(kw_only=True)
 class Batch(GraphElement):
     alias: str
-
-    def __post_init__(self):
-        super().__post_init__()
-        self.type = 'batch'
+    type: str = 'batch'

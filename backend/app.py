@@ -10,8 +10,6 @@ import traceback
 from pathlib import Path
 from typing import Dict, Any, Optional
 
-
-
 # Import your existing modules
 from param_graph.util import load_audio
 from param_graph.graph import ParameterGraph
@@ -219,17 +217,15 @@ def get_tsne_graph():
 
 @app.route("/register_model", methods=["POST"])
 def import_model():
-    """Register a model"""
+    # Register a model
     if param_graph is None:
         return jsonify({"error": "No project loaded"}), 400
     
     try:
         data = request.get_json()
-        engine_name = data.pop('engine')
-        if engine_name == "default":
-            engine_name = "stable_audio_tools"
+        engine_name = data.pop("engine")
         set_engine(engine_name)
-        
+
         param_graph.add_artifact(engine.register_model(**data))
         param_graph.save()
         
@@ -511,5 +507,5 @@ if __name__ == "__main__":
         port=5000,
         debug=True,
         threaded=True,
-        use_reloader=False
+        use_reloader=True
     )
