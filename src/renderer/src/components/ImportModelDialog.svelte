@@ -65,6 +65,7 @@
   let engineFields: Record<string, string> = $state({})
   let showErrorDialog = $state(false)
   let errorMessage = $state('')
+  let inProgress = $state(false)
 
   let currentEngineConfig = $derived(engines.find((e) => e.id === selectedEngine))
   let isFormValid = $derived(
@@ -76,6 +77,7 @@
   )
 
   function closeDialog(): void {
+    if (inProgress) return
     onclose()
   }
 
@@ -86,6 +88,7 @@
       }
     }
 
+    inProgress = true
     try {
       await window.api.importModel({
         engine: selectedEngine,
@@ -102,12 +105,14 @@
         errorMessage = String(error)
       }
       showErrorDialog = true
+    } finally {
+      inProgress = false
     }
   }
 
   function handleKeydown(e: KeyboardEvent): void {
     if (e.key === 'Escape') {
-      onclose()
+      closeDialog()
     }
   }
 
@@ -188,7 +193,13 @@
 
       <div class="dialog-actions">
         <button onclick={onclose}>Cancel</button>
-        <button class="primary" onclick={importModel} disabled={!isFormValid}> Import </button>
+        <button class="primary" onclick={importModel} disabled={!isFormValid || inProgress}>
+          {#if inProgress}
+            <div class="spinner"></div>
+          {:else}
+            Import
+          {/if}
+        </button>
       </div>
     </div>
   </div>
@@ -332,6 +343,8 @@
     border-radius: 0.375rem;
     cursor: pointer;
     transition: all 0.2s;
+    min-width: 80px;
+    min-height: 38px;
   }
 
   .dialog-actions button:not(.primary) {
@@ -344,10 +357,28 @@
     background: var(--color-primary);
     border: 1px solid var(--color-primary);
     color: var(--color-overlay-text);
+    display: flex;
+    justify-content: center;
+    align-items: center;
   }
 
-  .dialog-actions button.primary:disabled {
+  .dialog-actions button:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+  }
+
+  .spinner {
+    border: 3px solid rgba(255, 255, 255, 0.3);
+    border-left-color: #fff;
+    border-radius: 50%;
+    width: 18px;
+    height: 18px;
+    animation: spin 1s linear infinite;
+  }
+
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
   }
 </style>

@@ -14,6 +14,16 @@
       onclose()
     }
   }
+
+  function handleOverlayClick(e: MouseEvent): void {
+    if (e.target === e.currentTarget) onclose()
+  }
+
+  function handleOverlayKeydown(e: KeyboardEvent): void {
+    if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) {
+      onclose()
+    }
+  }
 </script>
 
 <svelte:window onkeydown={handleKeydown} />
@@ -24,9 +34,8 @@
     role="button"
     tabindex="0"
     aria-label="Close dialog"
-    onclick={(e) => {
-      if (e.target === e.currentTarget) onclose()
-    }}
+    onclick={handleOverlayClick}
+    onkeydown={handleOverlayKeydown}
   >
     <div
       class="dialog"
