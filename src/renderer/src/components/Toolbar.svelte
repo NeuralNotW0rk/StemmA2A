@@ -1,7 +1,5 @@
-<!-- src/renderer/src/components/Toolbar.svelte -->
 <script lang="ts">
   import { onMount } from 'svelte'
-  import ImportModelDialog from './ImportModelDialog.svelte'
 
   interface Props {
     currentProject?: string | null
@@ -11,6 +9,7 @@
     onviewModeChange?: (mode: 'batch' | 'cluster') => void
     onrefresh?: () => void
     onaddExternalSource?: () => void
+    onimportModel?: () => void
   }
 
   let {
@@ -20,13 +19,13 @@
     onprojectCreate,
     onviewModeChange,
     onrefresh,
-    onaddExternalSource
+    onaddExternalSource,
+    onimportModel
   }: Props = $props()
 
   let showFileMenu = $state(false)
   let fileMenuElement: HTMLElement | undefined = $state()
   let recentProjects: string[] = $state([])
-  let showImportDialog = $state(false)
 
   onMount(async (): Promise<void> => {
     recentProjects = await window.api.getRecentProjects()
@@ -176,7 +175,7 @@
   <div class="toolbar-section">
     <button
       class="toolbar-button"
-      onclick={() => (showImportDialog = true)}
+      onclick={() => onimportModel?.()}
       title="Import model"
       aria-label="Import model"
     >
@@ -201,8 +200,6 @@
     </button>
   </div>
 </div>
-
-<ImportModelDialog show={showImportDialog} onclose={() => (showImportDialog = false)} {onrefresh} />
 
 <style>
   .toolbar {

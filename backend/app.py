@@ -239,6 +239,25 @@ def import_model():
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
+@app.route("/engine_config/<engine_name>", methods=["GET"])
+def get_engine_config(engine_name):
+    """Get the form configuration for a specific engine."""
+    try:
+        engine_class = engine_map.get(engine_name)
+        if not engine_class:
+            return jsonify({"error": f"Engine '{engine_name}' not found"}), 404
+
+        if not hasattr(engine_class, 'get_form_config'):
+             return jsonify({"error": f"Engine '{engine_name}' does not have a form configuration"}), 404
+
+        config = engine_class.get_form_config()
+        return jsonify(config)
+
+    except Exception as e:
+        print(f"Failed to get engine config: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
 @app.route("/generate", methods=["POST"])
 def generate():
     """Generate audio"""

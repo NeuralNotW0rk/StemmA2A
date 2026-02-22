@@ -1,5 +1,5 @@
-<!-- src/renderer/src/components/ImportModelDialog.svelte -->
 <script lang="ts">
+  import { onMount } from 'svelte'
   import ErrorDialog from './ErrorDialog.svelte'
 
   export interface EngineField {
@@ -18,50 +18,23 @@
     fields: EngineField[]
   }
 
-  export const engines: EngineConfig[] = [
+  export const engines: Omit<EngineConfig, 'fields'>[] = [
     {
       id: 'stable_audio_tools',
       name: 'Stable Audio Tools',
-      description: 'Manually choose any Stable Audio-based model checkpoint and config file',
-      fields: [
-        {
-          key: 'name',
-          label: 'Name',
-          type: 'text',
-          required: true
-        },
-        {
-          key: 'checkpoint_path',
-          label: 'Checkpoint Path',
-          type: 'file',
-          filters: [
-            { name: 'Model Files', extensions: ['ckpt', 'safetensors', 'pt', 'pth', 'bin'] },
-            { name: 'All Files', extensions: ['*'] }
-          ],
-          placeholder: '/path/to/model.ckpt',
-          required: true
-        },
-        {
-          key: 'config_path',
-          label: 'Config Path (model_config.json)',
-          type: 'file',
-          filters: [{ name: 'JSON Files', extensions: ['json'] }],
-          placeholder: '/path/to/model_config.json',
-          required: true
-        }
-      ]
+      description: 'Manually choose any Stable Audio-based model checkpoint and config file'
     }
   ]
 
   interface Props {
-    show: boolean
     onclose: () => void
     onrefresh: () => void
   }
 
-  let { show, onclose, onrefresh }: Props = $props()
+  let { onclose, onrefresh }: Props = $props()
 
   let selectedEngine = $state(engines[0].id)
+  let formFields = $state<EngineField[]>([])
   let engineFields: Record<string, string> = $state({})
   let showErrorDialog = $state(false)
   let errorMessage = $state('')
@@ -69,12 +42,34 @@
 
   let currentEngineConfig = $derived(engines.find((e) => e.id === selectedEngine))
   let isFormValid = $derived(
-    currentEngineConfig
-      ? currentEngineConfig.fields.every(
-          (f) => !f.required || (engineFields[f.key] && engineFields[f.key].trim() !== '')
-        )
-      : false
+    formFields.every(
+      (f) => !f.required || (engineFields[f.key] && engineFields[f.key].trim() !== '')
+    )
   )
+
+  onMount(async () => {
+    if (selectedEngine) {
+      try {
+        inProgress = true
+        const config = await window.api.getEngineConfig(selectedEngine)
+        if (config && config.import && Array.isArray(config.import)) {
+          formFields = config.import.map((f) => ({ ...f, key: f.name }))
+        } else {
+          throw new Error('Invalid config format for import received from backend.')
+        }
+      } catch (error) {
+        console.error('Failed to load import form config:', error)
+        if (error instanceof Error) {
+          errorMessage = error.message
+        } else {
+          errorMessage = String(error)
+        }
+        showErrorDialog = true
+      } finally {
+        inProgress = false
+      }
+    }
+  })
 
   function closeDialog(): void {
     if (inProgress) return
@@ -82,11 +77,7 @@
   }
 
   async function importModel(): Promise<void> {
-    if (currentEngineConfig) {
-      for (const field of currentEngineConfig.fields) {
-        if (field.required && !engineFields[field.key]?.trim()) return
-      }
-    }
+    if (!isFormValid) return
 
     inProgress = true
     try {
@@ -120,7 +111,8 @@
     key: string,
     filters?: { name: string; extensions: string[] }[]
   ): Promise<void> {
-    const path = await window.api.openFile({ title: 'Select File', filters })
+    const plainFilters = filters ? JSON.parse(JSON.stringify(filters)) : undefined
+    const path = await window.api.openFile({ title: 'Select File', filters: plainFilters })
     if (path) {
       engineFields[key] = path
     }
@@ -129,81 +121,79 @@
 
 <svelte:window onkeydown={handleKeydown} />
 
-{#if show}
+<div
+  class="dialog-overlay"
+  role="button"
+  tabindex="0"
+  aria-label="Close dialog"
+  onclick={(e) => {
+    if (e.target === e.currentTarget) closeDialog()
+  }}
+  onkeydown={(e) => {
+    if (e.key === 'Enter') closeDialog()
+  }}
+>
   <div
-    class="dialog-overlay"
-    role="button"
-    tabindex="0"
-    aria-label="Close dialog"
-    onclick={(e) => {
-      if (e.target === e.currentTarget) closeDialog()
-    }}
-    onkeydown={(e) => {
-      if (e.key === 'Enter') closeDialog()
-    }}
+    class="dialog"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="dialog-title"
+    tabindex="-1"
   >
-    <div
-      class="dialog"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="dialog-title"
-      tabindex="-1"
-    >
-      <div class="dialog-header">
-        <h3 id="dialog-title">Import Model</h3>
-        <button onclick={onclose}>×</button>
-      </div>
+    <div class="dialog-header">
+      <h3 id="dialog-title">Import Model</h3>
+      <button onclick={onclose}>×</button>
+    </div>
 
-      <div class="dialog-content">
-        <label>
-          Engine:
-          <select bind:value={selectedEngine}>
-            {#each engines as engine (engine.id)}
-              <option value={engine.id}>{engine.name}</option>
-            {/each}
-          </select>
-        </label>
+    <div class="dialog-content">
+      <label>
+        Engine:
+        <select bind:value={selectedEngine}>
+          {#each engines as engine (engine.id)}
+            <option value={engine.id}>{engine.name}</option>
+          {/each}
+        </select>
+      </label>
 
-        {#if currentEngineConfig?.description}
-          <p class="engine-description">{currentEngineConfig.description}</p>
-        {/if}
+      {#if currentEngineConfig?.description}
+        <p class="engine-description">{currentEngineConfig.description}</p>
+      {/if}
 
-        {#each engines.find((e) => e.id === selectedEngine)?.fields || [] as field (field.key)}
-          <label style="margin-top: 1rem;">
-            {field.label}:
-            {#if field.type === 'file'}
-              <div class="path-input">
-                <input
-                  type="text"
-                  bind:value={engineFields[field.key]}
-                  placeholder={field.placeholder}
-                />
-                <button onclick={() => selectFieldFile(field.key, field.filters)}>Browse</button>
-              </div>
-            {:else}
+      {#each formFields as field (field.key)}
+        <label style="margin-top: 1rem;">
+          {field.label}:
+          {#if field.type === 'file'}
+            <div class="path-input">
               <input
                 type="text"
                 bind:value={engineFields[field.key]}
                 placeholder={field.placeholder}
               />
-            {/if}
-          </label>
-        {/each}
-      </div>
-
-      <div class="dialog-actions">
-        <button onclick={onclose}>Cancel</button>
-        <button class="primary" onclick={importModel} disabled={!isFormValid || inProgress}>
-          {#if inProgress}
-            <div class="spinner"></div>
+              <button onclick={() => selectFieldFile(field.key, field.filters)}>Browse</button>
+            </div>
           {:else}
-            Import
+            <input
+              type="text"
+              bind:value={engineFields[field.key]}
+              placeholder={field.placeholder}
+            />
           {/if}
-        </button>
-      </div>
+        </label>
+      {/each}
+    </div>
+
+    <div class="dialog-actions">
+      <button onclick={onclose}>Cancel</button>
+      <button class="primary" onclick={importModel} disabled={!isFormValid || inProgress}>
+        {#if inProgress}
+          <div class="spinner"></div>
+        {:else}
+          Import
+        {/if}
+      </button>
     </div>
   </div>
-{/if}
+</div>
 
 <ErrorDialog
   show={showErrorDialog}

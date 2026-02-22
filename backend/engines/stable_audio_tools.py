@@ -61,6 +61,76 @@ class StableAudioTools(Engine):
                 if uid != self.uid:
                     raise UIDMismatchError()
                 
+    @staticmethod
+    def get_form_config():
+        return {
+            "generate": [
+                {
+                    "name": "prompt",
+                    "label": "Prompt",
+                    "type": "textarea",
+                    "defaultValue": "128 BPM tech house drum loop",
+                    "placeholder": "Enter a prompt for the model..."
+                },
+                {
+                    "name": "steps",
+                    "label": "Steps",
+                    "type": "number",
+                    "defaultValue": 100,
+                    "placeholder": "Enter number of steps"
+                },
+                {
+                    "name": "cfg_scale",
+                    "label": "CFG Scale",
+                    "type": "number",
+                    "defaultValue": 7.0,
+                    "placeholder": "Enter CFG scale"
+                },
+                {
+                    "name": "seconds_total",
+                    "label": "Seconds",
+                    "type": "number",
+                    "defaultValue": 30,
+                    "placeholder": "Enter duration in seconds"
+                },
+                {
+                    "name": "seed",
+                    "label": "Seed",
+                    "type": "number",
+                    "defaultValue": 42,
+                    "placeholder": "Enter a seed"
+                }
+            ],
+            "import": [
+                {
+                    "name": "name",
+                    "label": "Model Name",
+                    "type": "text",
+                    "placeholder": "Enter a name for the model",
+                    "required": True
+                },
+                {
+                    "name": "checkpoint_path",
+                    "label": "Checkpoint File",
+                    "type": "file",
+                    "placeholder": "Select a checkpoint file",
+                    "required": True,
+                    "filters": [
+                        { "name": "Model Files", "extensions": ["ckpt", "safetensors", "pt", "pth", "bin"] },
+                        { "name": "All Files", "extensions": ["*"] }
+                    ]
+                },
+                {
+                    "name": "config_path",
+                    "label": "Config File",
+                    "type": "file",
+                    "placeholder": "Select a config file",
+                    "required": True,
+                    "filters": [{ "name": "JSON Files", "extensions": ["json"] }]
+                }
+            ]
+        }
+
     def generate(self):
         model = model.to(self.device)
 

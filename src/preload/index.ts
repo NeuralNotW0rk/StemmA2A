@@ -16,10 +16,17 @@ const api = {
     ipcRenderer.invoke('createProject', projectPath),
   getGraphData: (viewMode: 'batch' | 'cluster'): Promise<any> =>
     ipcRenderer.invoke('getGraphData', viewMode),
+  get_generate_form_config: (engineName: string): Promise<any> =>
+    ipcRenderer.invoke('get_generate_form_config', engineName),
+  get_import_form_config: (engineName: string): Promise<any> =>
+    ipcRenderer.invoke('get_import_form_config', engineName),
+  getEngineConfig: (engineName: string): Promise<any> =>
+    ipcRenderer.invoke('getEngineConfig', engineName),
   getAudioFile: (filename: string): Promise<string | null> =>
     ipcRenderer.invoke('getAudioFile', filename),
-  openFile: (options: any) => ipcRenderer.invoke('dialog:openFile', options),
-  importModel: (data: any) => ipcRenderer.invoke('importModel', data),
+  openFile: (options: unknown) => ipcRenderer.invoke('dialog:openFile', options),
+  importModel: (data: unknown) => ipcRenderer.invoke('importModel', data),
+  generate: (data: unknown) => ipcRenderer.invoke('generate', data),
   logMessage: (message: string): Promise<any> => ipcRenderer.invoke('logMessage', message)
 }
 

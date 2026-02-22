@@ -4,6 +4,8 @@
   import Toolbar from './components/Toolbar.svelte'
   import AudioPlayer from './components/AudioPlayer.svelte'
   import Sidebar from './components/Sidebar.svelte'
+  import GenerateDialog from './components/GenerateDialog.svelte'
+  import ImportModelDialog from './components/ImportModelDialog.svelte'
 
   let graphData: any = null
   let currentProject: string | null = null
@@ -12,6 +14,9 @@
   let audioSrc: string | null = null
   let audioTitle: string | null = null
   let selectedNodeData: Record<string, any> | null = null
+  let showGenerateDialog = false
+  let generateDialogModel: any = null
+  let showImportDialog = false
 
   async function handleProjectLoad(data: { projectPath: string }): Promise<void> {
     const projectPath = data.projectPath
@@ -85,6 +90,11 @@
     console.log(`Node selected: ${selectedNodeData?.name || 'Unknown'}`)
   }
 
+  function handleModelSelect(modelData: any): void {
+    generateDialogModel = modelData
+    showGenerateDialog = true
+  }
+
   async function refreshGraphData(): Promise<void> {
     try {
       graphData = await window.api.getGraphData(viewMode)
@@ -102,6 +112,7 @@
     onprojectCreate={handleProjectCreate}
     onviewModeChange={handleViewModeChange}
     onrefresh={refreshGraphData}
+    onimportModel={() => (showImportDialog = true)}
     {currentProject}
     {viewMode}
   />
@@ -113,10 +124,30 @@
     {graphData}
     {viewMode}
     onaudioSelect={handleAudioSelect}
+    onmodelSelect={handleModelSelect}
     onnodeSelect={handleNodeSelect}
   />
   {#if audioSrc}
     <AudioPlayer src={audioSrc} title={audioTitle} onclose={() => (audioSrc = null)} />
+  {/if}
+  {#if showGenerateDialog}
+    <GenerateDialog
+      model_name={generateDialogModel.name}
+      engine_name={generateDialogModel.engine}
+      onClose={() => (showGenerateDialog = false)}
+      onGenerate={(result) => {
+        console.log('Generation result:', result)
+        showGenerateDialog = false
+        refreshGraphData()
+      }}
+      onError={(error) => {
+        console.error('Generation error:', error)
+        showGenerateDialog = false
+      }}
+    />
+  {/if}
+  {#if showImportDialog}
+    <ImportModelDialog onclose={() => (showImportDialog = false)} onrefresh={refreshGraphData} />
   {/if}
 </main>
 

@@ -179,6 +179,57 @@ app.whenReady().then(async () => {
     return await response.json()
   })
 
+  ipcMain.handle('generate', async (_event, generateData) => {
+    try {
+      const response = await fetch('http://127.0.0.1:5000/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(generateData)
+      })
+      if (!response.ok) {
+        const errorBody = await response.text()
+        throw new Error(
+          `Failed to generate. Status: ${response.status}. Error: ${errorBody}`
+        )
+      }
+      return await response.json()
+    } catch (error) {
+      console.error('Generation Error:', error)
+      throw error
+    }
+  })
+
+async function _getEngineConfig(engineName: string): Promise<any> {
+  try {
+    const response = await fetch(`http://127.0.0.1:5000/engine_config/${engineName}`)
+    if (!response.ok) {
+      const errorBody = await response.text()
+      throw new Error(
+        `Failed to get engine config. Status: ${response.status}. Error: ${errorBody}`
+      )
+    }
+    return await response.json()
+  } catch (error) {
+    console.error('Get Engine Config Error:', error)
+    throw error
+  }
+}
+
+// ... inside app.whenReady()
+  ipcMain.handle('getEngineConfig', async (_event, engineName) => {
+    return await _getEngineConfig(engineName)
+  })
+
+  ipcMain.handle('get_generate_form_config', async (_event, engineName) => {
+    const config = await _getEngineConfig(engineName)
+    return config.generate
+  })
+
+  ipcMain.handle('get_import_form_config', async (_event, engineName) => {
+    const config = await _getEngineConfig(engineName)
+    return config.import
+  })
+
   ipcMain.handle('getRecentProjects', async () => {
     return (store.get('recentProjects', []) as string[])
   })
