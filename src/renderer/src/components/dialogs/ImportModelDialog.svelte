@@ -1,21 +1,13 @@
 <script lang="ts">
   import { onMount } from 'svelte'
+  import type { FormConfig } from '../../utils/forms'
+  import DynamicForm from '../DynamicForm.svelte'
   import ErrorDialog from './ErrorDialog.svelte'
 
-  export interface EngineField {
-    key: string
-    label: string
-    type: 'file' | 'text'
-    filters?: { name: string; extensions: string[] }[]
-    placeholder?: string
-    required?: boolean
-  }
-
-  export interface EngineConfig {
+  interface EngineConfig {
     id: string
     name: string
     description: string
-    fields: EngineField[]
   }
 
   export const engines: Omit<EngineConfig, 'fields'>[] = [
@@ -34,7 +26,7 @@
   let { onclose, onrefresh }: Props = $props()
 
   let selectedEngine = $state(engines[0].id)
-  let formFields = $state<EngineField[]>([])
+  let formFields = $state<FormConfig>([])
   let engineFields: Record<string, string> = $state({})
   let showErrorDialog = $state(false)
   let errorMessage = $state('')
@@ -43,7 +35,7 @@
   let currentEngineConfig = $derived(engines.find((e) => e.id === selectedEngine))
   let isFormValid = $derived(
     formFields.every(
-      (f) => !f.required || (engineFields[f.key] && engineFields[f.key].trim() !== '')
+      (f) => !f.validation?.required || (engineFields[f.name] && engineFields[f.name].trim() !== '')
     )
   )
 
@@ -53,7 +45,7 @@
         inProgress = true
         const config = await window.api.getEngineConfig(selectedEngine)
         if (config && config.import && Array.isArray(config.import)) {
-          formFields = config.import.map((f) => ({ ...f, key: f.name }))
+          formFields = config.import
         } else {
           throw new Error('Invalid config format for import received from backend.')
         }
@@ -106,17 +98,6 @@
       closeDialog()
     }
   }
-
-  async function selectFieldFile(
-    key: string,
-    filters?: { name: string; extensions: string[] }[]
-  ): Promise<void> {
-    const plainFilters = filters ? JSON.parse(JSON.stringify(filters)) : undefined
-    const path = await window.api.openFile({ title: 'Select File', filters: plainFilters })
-    if (path) {
-      engineFields[key] = path
-    }
-  }
 </script>
 
 <svelte:window onkeydown={handleKeydown} />
@@ -133,13 +114,7 @@
     if (e.key === 'Enter') closeDialog()
   }}
 >
-  <div
-    class="dialog"
-    role="dialog"
-    aria-modal="true"
-    aria-labelledby="dialog-title"
-    tabindex="-1"
-  >
+  <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="dialog-title" tabindex="-1">
     <div class="dialog-header">
       <h3 id="dialog-title">Import Model</h3>
       <button onclick={onclose}>×</button>
@@ -159,27 +134,7 @@
         <p class="engine-description">{currentEngineConfig.description}</p>
       {/if}
 
-      {#each formFields as field (field.key)}
-        <label style="margin-top: 1rem;">
-          {field.label}:
-          {#if field.type === 'file'}
-            <div class="path-input">
-              <input
-                type="text"
-                bind:value={engineFields[field.key]}
-                placeholder={field.placeholder}
-              />
-              <button onclick={() => selectFieldFile(field.key, field.filters)}>Browse</button>
-            </div>
-          {:else}
-            <input
-              type="text"
-              bind:value={engineFields[field.key]}
-              placeholder={field.placeholder}
-            />
-          {/if}
-        </label>
-      {/each}
+      <DynamicForm config={formFields} bind:formData={engineFields} />
     </div>
 
     <div class="dialog-actions">
@@ -285,39 +240,6 @@
 
   .dialog-content select option {
     background: var(--color-background-medium);
-  }
-
-  .dialog-content input[type='text'] {
-    width: 100%;
-    background: var(--color-border-glass-1);
-    border: 1px solid var(--color-overlay-border-primary);
-    color: var(--color-overlay-text);
-    padding: 0.5rem;
-    border-radius: 0.375rem;
-    box-sizing: border-box;
-  }
-
-  .path-input {
-    display: flex;
-    gap: 0.5rem;
-  }
-
-  .path-input input {
-    flex: 1;
-    background: var(--color-border-glass-1);
-    border: 1px solid var(--color-overlay-border-primary);
-    color: var(--color-overlay-text);
-    padding: 0.5rem;
-    border-radius: 0.375rem;
-  }
-
-  .path-input button {
-    background: var(--color-primary-t-30);
-    border: 1px solid var(--color-primary-t-50);
-    color: var(--color-overlay-text);
-    padding: 0.5rem 1rem;
-    border-radius: 0.375rem;
-    cursor: pointer;
   }
 
   .dialog-actions {

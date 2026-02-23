@@ -4,8 +4,8 @@
   import Toolbar from './components/Toolbar.svelte'
   import AudioPlayer from './components/AudioPlayer.svelte'
   import Sidebar from './components/Sidebar.svelte'
-  import GenerateDialog from './components/GenerateDialog.svelte'
-  import ImportModelDialog from './components/ImportModelDialog.svelte'
+  import GenerateDialog from './components/dialogs/GenerateDialog.svelte'
+  import ImportModelDialog from './components/dialogs/ImportModelDialog.svelte'
 
   let graphData: any = null
   let currentProject: string | null = null

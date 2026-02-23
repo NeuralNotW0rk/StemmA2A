@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import type { FormConfig } from '../utils/forms'
+  import type { FormConfig } from '../../utils/forms'
   import ErrorDialog from './ErrorDialog.svelte'
+  import DynamicForm from '../DynamicForm.svelte'
 
   let { model_name, engine_name, onClose, onGenerate, onError } = $props<{
     model_name: string
@@ -12,7 +13,7 @@
   }>()
 
   let formConfig: FormConfig | null = $state(null)
-  let formData: Record<string, string | number | boolean | null> = {}
+  let formData: Record<string, string | number | boolean | null> = $state({})
   let isLoading = $state(true)
   let error: string | null = $state(null)
   let showErrorDialog = $state(false)
@@ -27,7 +28,8 @@
         formConfig = config.generate
         // Initialize formData with default values from the fetched config
         for (const field of formConfig) {
-                      formData[field.name] = field.defaultValue as string | number | boolean | null        }
+          formData[field.name] = field.defaultValue as string | number | boolean | null
+        }
       } else {
         throw new Error('Invalid config format received from backend.')
       }
@@ -101,47 +103,7 @@
           <p>Error: {error}</p>
         </div>
       {:else if formConfig}
-        <form
-          onsubmit={(e) => {
-            e.preventDefault()
-            generate()
-          }}
-        >
-          {#each formConfig as field (field.name)}
-            <div class="form-field">
-              <label for={field.name}>{field.label}</label>
-              {#if field.type === 'textarea'}
-                <textarea
-                  bind:value={formData[field.name]}
-                  id={field.name}
-                  placeholder={field.placeholder}
-                ></textarea>
-              {:else if field.type === 'number'}
-                <input
-                  type="number"
-                  bind:value={formData[field.name]}
-                  id={field.name}
-                  placeholder={field.placeholder}
-                />
-              {:else if field.type === 'boolean'}
-                <input
-                  type="checkbox"
-                  checked={formData[field.name] === 'true' || formData[field.name] === true}
-                  onchange={(e) => (formData[field.name] = e.currentTarget.checked)}
-                  id={field.name}
-                />
-              {:else}
-                <!-- Default to text input for 'string' and others -->
-                <input
-                  type="text"
-                  bind:value={formData[field.name]}
-                  id={field.name}
-                  placeholder={field.placeholder}
-                />
-              {/if}
-            </div>
-          {/each}
-        </form>
+        <DynamicForm config={formConfig} bind:formData />
       {/if}
     </div>
 
@@ -219,25 +181,6 @@
     padding: 1.5rem;
   }
 
-  .dialog-content label {
-    display: block;
-    color: var(--color-overlay-text);
-    font-weight: 500;
-    margin-bottom: 0.5rem;
-  }
-
-  .dialog-content input[type='text'],
-  .dialog-content input[type='number'],
-  .dialog-content textarea {
-    width: 100%;
-    background: var(--color-border-glass-1);
-    border: 1px solid var(--color-overlay-border-primary);
-    color: var(--color-overlay-text);
-    padding: 0.5rem;
-    border-radius: 0.375rem;
-    box-sizing: border-box;
-  }
-
   .dialog-actions {
     display: flex;
     justify-content: flex-end;
@@ -288,19 +231,5 @@
     to {
       transform: rotate(360deg);
     }
-  }
-
-  .form-field {
-    margin-bottom: 1rem;
-  }
-
-  .form-field:last-child {
-    margin-bottom: 0;
-  }
-
-  label {
-    display: block;
-    margin-bottom: 0.5rem;
-    font-weight: 500;
   }
 </style>

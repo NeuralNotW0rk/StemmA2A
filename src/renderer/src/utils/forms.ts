@@ -5,8 +5,8 @@ export interface FormFieldOption {
 
 export interface FormField {
   name: string;
-  label: string;
-  type: 'string' | 'number' | 'boolean' | 'textarea' | 'select';
+  label:string;
+  type: 'string' | 'number' | 'boolean' | 'textarea' | 'select' | 'file';
   defaultValue?: any;
   options?: FormFieldOption[];
   placeholder?: string;
@@ -17,6 +17,7 @@ export interface FormField {
     minLength?: number;
     maxLength?: number;
   };
+  filters?: { name: string; extensions: string[] }[];
 }
 
 export type FormConfig = FormField[];
