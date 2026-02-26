@@ -3,9 +3,9 @@
   "include": [
     "src/renderer/src/env.d.ts",
     "src/renderer/src/**/*",
-    "src/renderer/src/**/*.svelte",
     "src/preload/*.d.ts"
   ],
+  "exclude": ["node_modules", "build", "out"],
   "compilerOptions": {
     "verbatimModuleSyntax": true,
     "useDefineForClassFields": true,

@@ -146,6 +146,19 @@ const defaultStyle: CssStyleDeclaration[] = [
 
   // Overrides
   {
+    selector: 'node.highlighted',
+    style: {
+      'border-color': 'yellow',
+      'border-width': '3px'
+    }
+  },
+  {
+    selector: 'node.dimmed',
+    style: {
+      opacity: 0.4
+    }
+  },
+  {
     selector: ':selected',
     style: {
       'border-color': selectedColor,

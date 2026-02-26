@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { FormConfig } from '../utils/forms'
+  import type { FormConfig, FormField } from '../utils/forms'
 
   let { config, formData = $bindable() } = $props<{
     config: FormConfig
@@ -16,6 +16,21 @@
       formData[fieldName] = path
     }
   }
+  const visibleFields = $derived(
+    config.filter((field: FormField) => {
+      if (!field.show_if) {
+        return true
+      }
+
+      for (const key in field.show_if) {
+        if (formData[key] !== field.show_if[key]) {
+          return false
+        }
+      }
+
+      return true
+    })
+  )
 </script>
 
 <form
@@ -23,7 +38,7 @@
     e.preventDefault()
   }}
 >
-  {#each config as field (field.name)}
+  {#each visibleFields as field (field.name)}
     <div class="form-field">
       <label for={field.name}>{field.label}</label>
       {#if field.type === 'textarea'}
@@ -49,6 +64,12 @@
           <input type="text" bind:value={formData[field.name]} placeholder={field.placeholder} />
           <button onclick={() => selectFieldFile(field.name, field.filters)}>Browse</button>
         </div>
+      {:else if field.type === 'select'}
+        <select bind:value={formData[field.name]} id={field.name}>
+          {#each field.options as option (option.value)}
+            <option value={option.value}>{option.label}</option>
+          {/each}
+        </select>
       {:else}
         <!-- Default to text input for 'string' and others -->
         <input
@@ -79,7 +100,8 @@
 
   input[type='text'],
   input[type='number'],
-  textarea {
+  textarea,
+  select {
     width: 100%;
     background: var(--color-border-glass-1);
     border: 1px solid var(--color-overlay-border-primary);
@@ -87,6 +109,11 @@
     padding: 0.5rem;
     border-radius: 0.375rem;
     box-sizing: border-box;
+  }
+
+  select option {
+    background: var(--color-background-mute);
+    color: var(--color-overlay-text);
   }
 
   .path-input {

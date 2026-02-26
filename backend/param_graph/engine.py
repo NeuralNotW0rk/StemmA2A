@@ -19,7 +19,7 @@ class Engine(ABC):
 
 
     @abstractmethod
-    def register_model(self) -> Model:
+    def register_model(self, **kwargs) -> Model:
         pass
 
     @abstractmethod

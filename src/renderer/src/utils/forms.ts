@@ -18,6 +18,14 @@ export interface FormField {
     maxLength?: number;
   };
   filters?: { name: string; extensions: string[] }[];
+  show_if?: Record<string, any>;
 }
 
 export type FormConfig = FormField[];
+
+export interface ModelData {
+  name: string
+  engine: string
+  model_type?: string
+  [key: string]: unknown
+}

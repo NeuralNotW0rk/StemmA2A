@@ -8,7 +8,7 @@ import io
 import json
 import traceback
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 
 # Import your existing modules
 from param_graph.util import load_audio

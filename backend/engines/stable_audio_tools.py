@@ -16,6 +16,7 @@ HF_MODEL_PATH = "stabilityai/stable-audio-open-small"
 class StableAudioModel(Model):
     checkpoint_path: str
     config: dict
+    model_type: str
     engine: str = 'stable_audio_tools'
 
 
@@ -27,15 +28,17 @@ class StableAudioTools(Engine):
         self.model_id = None
         self.model = None
 
-    def register_model(self, name: str = None, checkpoint_path: str = None, config_path: dict = None) -> StableAudioModel:
+    def register_model(self, **kwargs) -> StableAudioModel:
+        config_path = kwargs.pop("config_path")
         with open(config_path, 'r') as cf:
             config = json.load(cf)
+        
+        # Create a temporary model object to generate a UID from
         model = create_model_from_config(config)
-        model.load_state_dict(load_ckpt_state_dict(checkpoint_path))
+        model.load_state_dict(load_ckpt_state_dict(kwargs.get("checkpoint_path")))
 
         return StableAudioModel(
-            name=name,
-            checkpoint_path=checkpoint_path,
+            **kwargs,
             config=config,
             uid=self.uid_generator.from_module(model),
             uid_type=self.uid_generator.type,
@@ -94,6 +97,34 @@ class StableAudioTools(Engine):
                     "placeholder": "Enter duration in seconds"
                 },
                 {
+                    "name": "k_sampler_type",
+                    "label": "K-Sampler",
+                    "type": "select",
+                    "defaultValue": "dpmpp_2m",
+                    "options": [
+                        { "label": "DPM++ 2M", "value": "dpmpp_2m" },
+                        { "label": "DPM++ SDE", "value": "dpmpp_sde" },
+                        { "label": "k-Heun", "value": "k_heun" },
+                        { "label": "k-LMS", "value": "k_lms" },
+                        { "label": "k-Euler", "value": "k_euler" },
+                        { "label": "k-DPM2", "value": "k_dpm_2" },
+                        { "label": "k-DPM Adaptive", "value": "k_dpm_adaptive" }
+                    ],
+                    "show_if": {"model_type": "k_diffusion"}
+                },
+                {
+                    "name": "rf_sampler_type",
+                    "label": "RF-Sampler",
+                    "type": "select",
+                    "defaultValue": "euler",
+                    "options": [
+                        { "label": "Euler", "value": "euler" },
+                        { "label": "RK4", "value": "rk4" },
+                        { "label": "DPM++", "value": "dpmpp" }
+                    ],
+                    "show_if": {"model_type": "rectified_flow"}
+                },
+                {
                     "name": "seed",
                     "label": "Seed",
                     "type": "number",
@@ -108,6 +139,16 @@ class StableAudioTools(Engine):
                     "type": "text",
                     "placeholder": "Enter a name for the model",
                     "required": True
+                },
+                {
+                    "name": "model_type",
+                    "label": "Model Type",
+                    "type": "select",
+                    "defaultValue": "k_diffusion",
+                    "options": [
+                        { "label": "K-Diffusion", "value": "k_diffusion" },
+                        { "label": "Rectified Flow", "value": "rectified_flow" }
+                    ]
                 },
                 {
                     "name": "checkpoint_path",
