@@ -13,8 +13,6 @@ class GraphElement:
 @dataclass(kw_only=True)
 class Artifact(GraphElement):
     uid: str
-    uid_type: str
-    uid_version: str
     name: str
     type: str = 'artifact'
 

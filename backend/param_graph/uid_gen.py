@@ -9,10 +9,6 @@ class UIDMismatchError(Exception):
 
 class UIDGenerator:
     
-    def __init__(self):
-        self.type = None
-        self.version = None
-
     def from_string(self, data: str) -> str:
         pass
 
@@ -25,14 +21,10 @@ class UIDGenerator:
 
 class XXH3_64(UIDGenerator):
 
-    def __init__(self):
-        self.type = 'XXH3_64'
-        self.version = xxhash.XXHASH_VERSION
-
     def from_string(self, data: str) -> str:
         """Generates a hex string UID using XXH3."""
         h = xxhash.xxh3_64
-        return xxhash.xxh3_64_hexdigest(data)
+        return f"XXH3_64:{xxhash.xxh3_64_hexdigest(data)}"
     
     def from_tensor(self, tensor: Tensor) -> str:
         """
@@ -43,7 +35,7 @@ class XXH3_64(UIDGenerator):
         # 3. Pass directly to xxhash (handles the buffer protocol)
         data = tensor.detach().cpu().contiguous().numpy()
         
-        return xxhash.xxh3_64(data).hexdigest()
+        return f"XXH3_64:{xxhash.xxh3_64(data).hexdigest()}"
     
     def from_module(self, module: Module) -> str:
         """
@@ -59,4 +51,4 @@ class XXH3_64(UIDGenerator):
             data = state_dict[key].detach().cpu().contiguous().numpy().tobytes()
             h.update(data)
             
-        return h.hexdigest()
+        return f"XXH3_64:{h.hexdigest()}"

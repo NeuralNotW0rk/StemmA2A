@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 import json
+import os
 import torch
 import torchaudio
 from stable_audio_tools import get_pretrained_model, create_model_from_config
@@ -9,8 +10,6 @@ from stable_audio_tools.inference.generation import generate_diffusion_cond
 from param_graph.engine import Engine, Model
 from param_graph.uid_gen import UIDMismatchError
 
-HF_MODEL_NAME = "Stable Audio Open Small"
-HF_MODEL_PATH = "stabilityai/stable-audio-open-small"
 
 @dataclass(kw_only=True)
 class StableAudioModel(Model):
@@ -40,9 +39,7 @@ class StableAudioTools(Engine):
         return StableAudioModel(
             **kwargs,
             config=config,
-            uid=self.uid_generator.from_module(model),
-            uid_type=self.uid_generator.type,
-            uid_version=self.uid_generator.version
+            uid=self.uid_generator.from_module(model)
         )
 
     def load_model(self, ele: StableAudioModel, verify: bool=True):
@@ -63,114 +60,6 @@ class StableAudioTools(Engine):
                 uid = self.uid_generator.from_module(self.model)
                 if uid != self.uid:
                     raise UIDMismatchError()
-                
-    @staticmethod
-    def get_form_config():
-        return {
-            "generate": [
-                {
-                    "name": "prompt",
-                    "label": "Prompt",
-                    "type": "textarea",
-                    "defaultValue": "128 BPM tech house drum loop",
-                    "placeholder": "Enter a prompt for the model..."
-                },
-                {
-                    "name": "steps",
-                    "label": "Steps",
-                    "type": "number",
-                    "defaultValue": 100,
-                    "placeholder": "Enter number of steps"
-                },
-                {
-                    "name": "cfg_scale",
-                    "label": "CFG Scale",
-                    "type": "number",
-                    "defaultValue": 7.0,
-                    "placeholder": "Enter CFG scale"
-                },
-                {
-                    "name": "seconds_total",
-                    "label": "Seconds",
-                    "type": "number",
-                    "defaultValue": 30,
-                    "placeholder": "Enter duration in seconds"
-                },
-                {
-                    "name": "k_sampler_type",
-                    "label": "K-Sampler",
-                    "type": "select",
-                    "defaultValue": "dpmpp_2m",
-                    "options": [
-                        { "label": "DPM++ 2M", "value": "dpmpp_2m" },
-                        { "label": "DPM++ SDE", "value": "dpmpp_sde" },
-                        { "label": "k-Heun", "value": "k_heun" },
-                        { "label": "k-LMS", "value": "k_lms" },
-                        { "label": "k-Euler", "value": "k_euler" },
-                        { "label": "k-DPM2", "value": "k_dpm_2" },
-                        { "label": "k-DPM Adaptive", "value": "k_dpm_adaptive" }
-                    ],
-                    "show_if": {"model_type": "k_diffusion"}
-                },
-                {
-                    "name": "rf_sampler_type",
-                    "label": "RF-Sampler",
-                    "type": "select",
-                    "defaultValue": "euler",
-                    "options": [
-                        { "label": "Euler", "value": "euler" },
-                        { "label": "RK4", "value": "rk4" },
-                        { "label": "DPM++", "value": "dpmpp" }
-                    ],
-                    "show_if": {"model_type": "rectified_flow"}
-                },
-                {
-                    "name": "seed",
-                    "label": "Seed",
-                    "type": "number",
-                    "defaultValue": 42,
-                    "placeholder": "Enter a seed"
-                }
-            ],
-            "import": [
-                {
-                    "name": "name",
-                    "label": "Model Name",
-                    "type": "text",
-                    "placeholder": "Enter a name for the model",
-                    "required": True
-                },
-                {
-                    "name": "model_type",
-                    "label": "Model Type",
-                    "type": "select",
-                    "defaultValue": "k_diffusion",
-                    "options": [
-                        { "label": "K-Diffusion", "value": "k_diffusion" },
-                        { "label": "Rectified Flow", "value": "rectified_flow" }
-                    ]
-                },
-                {
-                    "name": "checkpoint_path",
-                    "label": "Checkpoint File",
-                    "type": "file",
-                    "placeholder": "Select a checkpoint file",
-                    "required": True,
-                    "filters": [
-                        { "name": "Model Files", "extensions": ["ckpt", "safetensors", "pt", "pth", "bin"] },
-                        { "name": "All Files", "extensions": ["*"] }
-                    ]
-                },
-                {
-                    "name": "config_path",
-                    "label": "Config File",
-                    "type": "file",
-                    "placeholder": "Select a config file",
-                    "required": True,
-                    "filters": [{ "name": "JSON Files", "extensions": ["json"] }]
-                }
-            ]
-        }
 
     def generate(self):
         model = model.to(self.device)

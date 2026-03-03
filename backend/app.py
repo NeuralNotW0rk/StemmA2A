@@ -247,10 +247,11 @@ def get_engine_config(engine_name):
         if not engine_class:
             return jsonify({"error": f"Engine '{engine_name}' not found"}), 404
 
-        if not hasattr(engine_class, 'get_form_config'):
+        engine_instance = engine_class()
+        if not hasattr(engine_instance, 'get_form_config'):
              return jsonify({"error": f"Engine '{engine_name}' does not have a form configuration"}), 404
 
-        config = engine_class.get_form_config()
+        config = engine_instance.get_form_config()
         return jsonify(config)
 
     except Exception as e:
