@@ -1,7 +1,7 @@
 <script lang="ts">
   import { tick } from 'svelte'
-  import type { FormConfig, ModelData, AudioData } from '../../utils/forms'
-  import { selectionStore, activeNodeStore } from '../../utils/stores'
+  import type { FormConfig, ModelData } from '../../utils/forms'
+  import { activeNodeStore } from '../../utils/stores'
   import DynamicForm from '../DynamicForm.svelte'
   import NodeSelector from '../NodeSelector.svelte'
 
@@ -15,15 +15,16 @@
   }>()
 
   let formFields: FormConfig | null = $state(null)
-  let formData: Record<string, any> = $state({})
+  let formData: Record<string, unknown> = $state({})
   let isLoading = $state(true)
   let error: string | null = $state(null)
   let inProgress = $state(false)
   let selectedModel: ModelData | null = $state(null)
   let isVariation = $state(false)
   let lastNodeId: string | null = $state(null)
+  let isFormValid = $state(false)
 
-  async function loadEngineConfig(engine: string) {
+  async function loadEngineConfig(engine: string): Promise<void> {
     try {
       isLoading = true
       error = null
@@ -91,7 +92,7 @@
     }
   })
 
-  function handleModelSelect(newNode: ModelData) {
+  function handleModelSelect(newNode: ModelData): void {
     const newModel = newNode as ModelData
     const oldEngine = selectedModel?.engine
     selectedModel = newModel
@@ -144,7 +145,7 @@
         <p>Error: {error}</p>
       </div>
     {:else if formFields}
-      <DynamicForm config={formFields} bind:formData />
+      <DynamicForm config={formFields} bind:formData bind:isFormValid />
     {:else if isVariation}
       <p class="centered-text">Select a model to see its generation options.</p>
     {/if}
@@ -152,7 +153,12 @@
 
   <div class="panel-actions">
     <button onclick={onClose}>Cancel</button>
-    <button class="primary" onclick={generate} disabled={isLoading || !!error || !selectedModel}>
+
+    <button
+      class="primary"
+      onclick={generate}
+      disabled={isLoading || !!error || !selectedModel || !isFormValid}
+    >
       {#if inProgress}
         <div class="spinner"></div>
       {:else}

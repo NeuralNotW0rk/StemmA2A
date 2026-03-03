@@ -1,10 +1,24 @@
 <script lang="ts">
   import type { FormConfig, FormField } from '../utils/forms'
 
-  let { config, formData = $bindable() } = $props<{
+  let {
+    config,
+    formData = $bindable(),
+    isFormValid = $bindable()
+  } = $props<{
     config: FormConfig
-    formData: Record<string, string | number | boolean | null>
+    formData: Record<string, unknown>
+    isFormValid: boolean
   }>()
+
+  $effect(() => {
+    isFormValid = visibleFields.every(
+      (f) =>
+        !f.validation?.required ||
+        (formData[f.name] != null &&
+          (typeof formData[f.name] !== 'string' || String(formData[f.name]).trim() !== ''))
+    )
+  })
 
   async function selectFieldFile(
     fieldName: string,

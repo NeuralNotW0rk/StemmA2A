@@ -26,15 +26,11 @@
 
   let selectedEngine = $state(engines[0].id)
   let formFields = $state<FormConfig>([])
-  let formData: Record<string, string> = $state({})
+  let formData: Record<string, unknown> = $state({})
   let inProgress = $state(false)
+  let isFormValid = $state(false)
 
   let currentEngineConfig = $derived(engines.find((e) => e.id === selectedEngine))
-  let isFormValid = $derived(
-    formFields.every(
-      (f) => !f.validation?.required || (formData[f.name] && formData[f.name].trim() !== '')
-    )
-  )
 
   onMount(async () => {
     if (selectedEngine) {
@@ -93,7 +89,7 @@
       <p class="engine-description">{currentEngineConfig.description}</p>
     {/if}
 
-    <DynamicForm config={formFields} bind:formData />
+    <DynamicForm config={formFields} bind:formData bind:isFormValid />
   </div>
 
   <div class="panel-actions">
