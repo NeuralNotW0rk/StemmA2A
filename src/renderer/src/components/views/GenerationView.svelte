@@ -1,8 +1,9 @@
 <script lang="ts">
-  import { onMount, tick } from 'svelte'
+  import { tick } from 'svelte'
   import type { FormConfig, ModelData, AudioData } from '../../utils/forms'
-  import { selectionStore } from '../../utils/stores'
+  import { selectionStore, activeNodeStore } from '../../utils/stores'
   import DynamicForm from '../DynamicForm.svelte'
+  import NodeSelector from '../NodeSelector.svelte'
 
   type NodeData = ModelData | AudioData
 
@@ -20,44 +21,27 @@
   let inProgress = $state(false)
   let selectedModel: ModelData | null = $state(null)
   let isVariation = $state(false)
+  let lastNodeId: string | null = $state(null)
 
-  async function initialize() {
+  async function loadEngineConfig(engine: string) {
     try {
       isLoading = true
       error = null
       formFields = null
-      formData = {}
-      selectedModel = null
-      isVariation = false
-
       await tick()
 
-      let engine: string | null = null
-      const title = node.type === 'model' ? 'Generate' : 'Variation'
-
-      if (node.type === 'model') {
-        selectedModel = node as ModelData
-        engine = selectedModel.engine
-        formData = { ...node }
-      } else if (node.type === 'audio') {
-        isVariation = true
-        formData = { init_audio: node.name }
-      }
-
-      if (engine) {
-        const config = await window.api.getEngineConfig(engine)
-        if (config && config.generate && Array.isArray(config.generate)) {
-          formFields = config.generate
-          const newFormData = { ...formData }
-          for (const field of formFields) {
-            if (newFormData[field.name] === undefined || newFormData[field.name] === null) {
-              newFormData[field.name] = field.defaultValue as string | number | boolean | null
-            }
+      const config = await window.api.getEngineConfig(engine)
+      if (config && config.generate && Array.isArray(config.generate)) {
+        formFields = config.generate
+        const newFormData = { ...formData }
+        for (const field of formFields) {
+          if (newFormData[field.name] === undefined || newFormData[field.name] === null) {
+            newFormData[field.name] = field.defaultValue as string | number | boolean | null
           }
-          formData = newFormData
-        } else {
-          throw new Error('Invalid config format received from backend.')
         }
+        formData = newFormData
+      } else {
+        throw new Error('Invalid config format received from backend.')
       }
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : 'Failed to load configuration.'
@@ -70,18 +54,53 @@
   }
 
   $effect(() => {
-    if (node) {
-      initialize()
+    if (node && node.id !== lastNodeId) {
+      lastNodeId = node.id
+      // Reset component state when the input node changes
+      error = null
+      inProgress = false
+
+      if (node.type === 'model') {
+        isVariation = false
+        selectedModel = node as ModelData
+        // Base form data on the node, existing data is merged in loadEngineConfig
+        formData = { ...node }
+        if (selectedModel.engine) {
+          loadEngineConfig(selectedModel.engine)
+        } else {
+          isLoading = false
+          formFields = null
+        }
+      } else if (node.type === 'audio') {
+        isVariation = true
+        selectedModel = null
+        formFields = null
+        formData = { init_audio: node.name }
+        isLoading = false // Not loading engine config until a model is selected
+      }
     }
   })
 
-  function selectModelFromGraph() {
-    selectionStore.startSelection('model', (selected) => {
-      if (selected.type === 'model') {
-        selectedModel = selected as ModelData
-        initialize()
-      }
-    })
+  $effect(() => {
+    if (selectedModel) {
+      console.log('GenerationView: Setting active node store to:', selectedModel.id)
+      activeNodeStore.set(selectedModel)
+    } else {
+      console.log('GenerationView: Setting active node store to (from node prop):', node?.id)
+      activeNodeStore.set(node)
+    }
+  })
+
+  function handleModelSelect(newNode: ModelData) {
+    const newModel = newNode as ModelData
+    const oldEngine = selectedModel?.engine
+    selectedModel = newModel
+
+    if (newModel.engine !== oldEngine) {
+      // If the engine is different, we need to load new config.
+      // Keep existing form data where field names overlap.
+      loadEngineConfig(newModel.engine)
+    }
   }
 
   async function generate(): Promise<void> {
@@ -110,12 +129,14 @@
 
 <div class="view-container">
   <div class="view-content">
-    {#if isVariation && !selectedModel}
-      <div class="model-selection">
-        <p>Select a model to use for the variation.</p>
-        <button onclick={selectModelFromGraph}>Select from Graph</button>
-      </div>
-    {/if}
+    <NodeSelector
+      label="Model"
+      selectionType="model"
+      node={selectedModel}
+      id="model-selector"
+      onSelect={handleModelSelect}
+    />
+
     {#if isLoading}
       <p>Loading configuration...</p>
     {:else if error}
@@ -124,8 +145,8 @@
       </div>
     {:else if formFields}
       <DynamicForm config={formFields} bind:formData />
-    {:else if !isVariation}
-      <p>Could not load generation form.</p>
+    {:else if isVariation}
+      <p class="centered-text">Select a model to see its generation options.</p>
     {/if}
   </div>
 
@@ -152,20 +173,11 @@
     overflow-y: auto;
     padding: 1rem;
   }
-  .model-selection {
-    padding: 1rem;
+  .centered-text {
     text-align: center;
+    padding: 2rem 1rem;
+    color: var(--color-text-muted);
   }
-  .model-selection button {
-    margin-top: 1rem;
-    padding: 0.5rem 1rem;
-    border-radius: 0.375rem;
-    cursor: pointer;
-    background: var(--color-primary);
-    border: 1px solid var(--color-primary);
-    color: var(--color-overlay-text);
-  }
-
   .error-message {
     padding: 1rem;
     color: var(--color-error);

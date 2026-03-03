@@ -24,6 +24,7 @@ export interface FormField {
 export type FormConfig = FormField[];
 
 export interface ModelData {
+  id: string
   name: string
   engine: string
   model_type?: string

@@ -10,6 +10,7 @@ const gradientColor5 = getCssVar('--graph-gradient-5')
 const audioColor = getCssVar('--graph-audio')
 const batchColor = getCssVar('--graph-batch')
 const selectedColor = getCssVar('--graph-selected')
+const boundColor = getCssVar('--graph-bound')
 const modelColor = gradientColor3
 const externalColor = gradientColor2
 
@@ -145,6 +146,14 @@ const defaultStyle: CssStyleDeclaration[] = [
   },
 
   // Overrides
+  {
+    selector: 'node.bound',
+    style: {
+      'border-color': boundColor,
+      'border-width': '3px',
+      'border-style': 'double'
+    }
+  },
   {
     selector: 'node.highlighted',
     style: {

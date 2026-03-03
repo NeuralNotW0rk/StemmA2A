@@ -8,6 +8,7 @@
   import GenerationView from './components/views/GenerationView.svelte'
   import ErrorView from './components/views/ErrorView.svelte'
   import ImportModelView from './components/views/ImportModelView.svelte'
+  import { activeNodeStore } from './utils/stores'
 
   type ActionPanelView = 'generation' | 'import-model' | 'none'
 
@@ -24,6 +25,7 @@
   function closeActionPanel() {
     actionPanelView = 'none'
     generationNode = null
+    activeNodeStore.set(null)
   }
 
   async function handleProjectLoad(data: { projectPath: string }): Promise<void> {
@@ -100,11 +102,13 @@
   function handleModelSelect(modelData: any): void {
     generationNode = modelData
     actionPanelView = 'generation'
+    activeNodeStore.set(modelData)
   }
 
   function handleAudioNodeSelectForGeneration(audioData: any): void {
     generationNode = audioData
     actionPanelView = 'generation'
+    activeNodeStore.set(audioData)
   }
 
   async function refreshGraphData(): Promise<void> {
@@ -150,7 +154,9 @@
   {:else if selectedNodeData}
     <ContentPanel
       title={selectedNodeData.alias || selectedNodeData.name || 'Element Details'}
-      onclose={() => (selectedNodeData = null)}
+      onclose={() => {
+        selectedNodeData = null
+      }}
       position="right"
     >
       <ElementInfoView {selectedNodeData} />

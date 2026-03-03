@@ -2,7 +2,7 @@
 <script lang="ts">
   /* eslint-disable @typescript-eslint/no-explicit-any */
   import { onMount, onDestroy } from 'svelte'
-  import cytoscape, { type EventObject, type NodeSingular } from 'cytoscape'
+  import cytoscape, { type EventObject } from 'cytoscape'
   import fcose from 'cytoscape-fcose'
   import cxtmenu from 'cytoscape-cxtmenu'
   import expandCollapse from 'cytoscape-expand-collapse'
@@ -11,7 +11,7 @@
   import expandCollapseOptions from './Options'
   import GraphControls from './GraphControls.svelte'
   import GraphLegend from './GraphLegend.svelte'
-  import { selectionStore } from '../../utils/stores'
+  import { selectionStore, activeNodeStore } from '../../utils/stores'
 
   interface Props {
     graphData?: { elements: cytoscape.ElementDefinition[] } | null
@@ -38,19 +38,52 @@
   let graphContainer: HTMLElement | undefined = $state()
   let cy: cytoscape.Core | null = $state(null)
   let isInitialized = $state(false)
+
   let isSelecting = $state(false)
   let selectionType: 'model' | 'audio' | null = $state(null)
-
+  let selectionBoundNodeId: string | null = $state(null)
   selectionStore.subscribe((store) => {
     isSelecting = store.isSelecting
     selectionType = store.selectionType
+    selectionBoundNodeId = store.boundNodeId
+  })
+
+  let activeNode = $state<any>(null)
+  activeNodeStore.subscribe((node) => {
+    console.log('ParameterGraph: activeNode received from store:', node?.id)
+    activeNode = node
+  })
+
+  $effect(() => {
     if (cy) {
-      if (store.isSelecting) {
-        cy.nodes().removeClass('highlighted').removeClass('dimmed') // Reset first
-        cy.nodes(`[type = "${store.selectionType}"]`).addClass('highlighted')
-        cy.nodes(`[type != "${store.selectionType}"]`).addClass('dimmed')
+      // Depend on graphData so this runs after nodes are added.
+      if (!graphData) return
+
+      cy.nodes().removeClass('highlighted').removeClass('dimmed').removeClass('bound')
+
+      if (isSelecting) {
+        cy.nodes(`[type = "${selectionType}"]`).addClass('highlighted')
+        cy.nodes(`[type != "${selectionType}"]`).addClass('dimmed')
+
+        if (selectionBoundNodeId) {
+          cy.getElementById(selectionBoundNodeId).removeClass('dimmed').addClass('bound')
+        }
       } else {
-        cy.nodes().removeClass('highlighted').removeClass('dimmed')
+        if (activeNode && activeNode.id) {
+          console.log('ParameterGraph: Highlighting active node:', activeNode.id)
+          const nodeToHighlight = cy.getElementById(activeNode.id)
+          if (nodeToHighlight.length > 0) {
+            nodeToHighlight.addClass('bound')
+            console.log('ParameterGraph: Successfully highlighted', activeNode.id)
+          } else {
+            console.log(
+              'ParameterGraph: Could not find node to highlight in graph:',
+              activeNode.id
+            )
+          }
+        } else {
+          console.log('ParameterGraph: No active node to highlight.')
+        }
       }
     }
   })

@@ -1,13 +1,17 @@
 <!-- src/renderer/src/components/ContentPanel.svelte -->
 <script lang="ts">
+  import type { Snippet } from 'svelte'
+
   let {
     title,
     onclose,
-    position = 'left'
+    position = 'left',
+    children
   } = $props<{
     title: string
     onclose?: () => void
     position?: 'left' | 'right'
+    children: Snippet
   }>()
 </script>
 
@@ -19,7 +23,7 @@
     {/if}
   </div>
   <div class="panel-body">
-    <slot />
+    {@render children()}
   </div>
 </aside>
 

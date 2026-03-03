@@ -1,5 +1,7 @@
 <!-- src/renderer/src/components/graph/GraphControls.svelte -->
 <script lang="ts">
+  import { selectionStore } from '../../utils/stores'
+
   interface Props {
     ontidy?: () => void
     onfit?: () => void
@@ -7,9 +9,24 @@
   }
 
   let { ontidy, onfit, oncenter }: Props = $props()
+
+  let isSelecting = $state(false)
+  selectionStore.subscribe((store) => {
+    isSelecting = store.isSelecting
+  })
 </script>
 
 <div class="graph-controls">
+  {#if isSelecting}
+    <button
+      class="cancel-selection"
+      onclick={() => selectionStore.cancelSelection()}
+      title="Cancel selection"
+      aria-label="Cancel selection"
+    >
+      Cancel
+    </button>
+  {/if}
   <button onclick={() => ontidy?.()} title="Tidy layout" aria-label="Tidy layout"> Tidy </button>
 
   <button onclick={() => onfit?.()} title="Fit to screen" aria-label="Fit to screen"> Fit </button>
@@ -45,5 +62,9 @@
     background: var(--color-overlay-background-secondary);
     border-color: var(--color-overlay-border-secondary);
     transform: translateY(-1px);
+  }
+
+  .graph-controls button.cancel-selection {
+    background-color: var(--color-error);
   }
 </style>
