@@ -75,6 +75,10 @@ class StableAudioTools(Engine):
             "seconds_total": kwargs.get("seconds_total", 11)
         }]
 
+        print(f"Generating with conditioning:{str(conditioning)}")
+        print(f"Sample Rate: {sample_rate}")
+        print(f"Sample Size: {sample_size}")
+
         # Generate stereo audio
         output = generate_diffusion_cond(
             model,
@@ -83,8 +87,11 @@ class StableAudioTools(Engine):
             conditioning=conditioning,
             sample_size=sample_size,
             sampler_type=kwargs.get("sampler_type", "pingpong"),
-            device=self.device
+            device=self.device,
+            seed=kwargs.get("seed", 0)
         )
+        
+        print("Generation complete, rearranging...")
 
         # Rearrange audio batch to a single sequence
         output = rearrange(output, "b d n -> d (b n)")

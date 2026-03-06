@@ -8,7 +8,9 @@ def create_dynamic_model(config: List[Dict[str, Any]]) -> Type[BaseModel]:
     type_mapping = {
         "textarea": str,
         "text": str,
-        "number": float,  # float can accept ints
+        "integer": int,
+        "float": float,
+        "boolean": bool,
         "select": str,
         "file": str, # Assuming file path is passed as string
     }

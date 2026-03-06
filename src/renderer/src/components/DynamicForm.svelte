@@ -58,9 +58,24 @@
       {#if field.type === 'textarea'}
         <textarea bind:value={formData[field.name]} id={field.name} placeholder={field.placeholder}
         ></textarea>
-      {:else if field.type === 'number'}
+      {:else if field.type === 'integer'}
         <input
           type="number"
+          step="1"
+          bind:value={formData[field.name]}
+          onchange={(e) => {
+            const value = e.currentTarget.value
+            if (value) {
+              formData[field.name] = Math.round(Number(value))
+            }
+          }}
+          id={field.name}
+          placeholder={field.placeholder}
+        />
+      {:else if field.type === 'float'}
+        <input
+          type="number"
+          step="any"
           bind:value={formData[field.name]}
           id={field.name}
           placeholder={field.placeholder}

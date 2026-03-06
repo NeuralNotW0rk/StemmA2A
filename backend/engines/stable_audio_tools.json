@@ -10,22 +10,22 @@
         {
             "name": "steps",
             "label": "Steps",
-            "type": "number",
-            "defaultValue": 100,
+            "type": "integer",
+            "defaultValue": 8,
             "placeholder": "Enter number of steps"
         },
         {
             "name": "cfg_scale",
             "label": "CFG Scale",
-            "type": "number",
-            "defaultValue": 7.0,
+            "type": "float",
+            "defaultValue": 1.0,
             "placeholder": "Enter CFG scale"
         },
         {
             "name": "seconds_total",
             "label": "Seconds",
-            "type": "number",
-            "defaultValue": 30,
+            "type": "float",
+            "defaultValue": 11,
             "placeholder": "Enter duration in seconds"
         },
         {
@@ -61,7 +61,7 @@
         {
             "name": "seed",
             "label": "Seed",
-            "type": "number",
+            "type": "integer",
             "defaultValue": 0,
             "placeholder": "Enter a seed"
         }
