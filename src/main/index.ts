@@ -7,6 +7,18 @@ import Store from 'electron-store'
 import { spawn, ChildProcess } from 'child_process'
 import readline from 'readline'
 
+// --- Configuration ---
+// Set to true to automatically start the local Python backend.
+// Set to false if you are running the backend on a separate machine.
+const RUN_LOCAL_BACKEND = true;
+
+// The URL of the backend server.
+// If you are running the backend on a separate machine, change this to
+// 'http://localhost:5001' (or your chosen local port) after setting up
+// an SSH tunnel.
+const BACKEND_URL = 'http://127.0.0.1:5000'
+// --- End Configuration ---
+
 let pythonBackend: ChildProcess | null = null
 const store = new Store()
 
@@ -42,7 +54,7 @@ function startPythonBackend(): Promise<void> {
 
       let backendReady = false;
       const handleMessage = (message: string) => {
-        if (!backendReady && message.includes('Running on http://127.0.0.1:5000')) {
+        if (!backendReady && message.includes(`Running on ${BACKEND_URL}`)) {
           backendReady = true;
           console.log('Python backend started');
           resolve();
@@ -165,7 +177,7 @@ app.whenReady().then(async () => {
   })
 
   ipcMain.handle('importModel', async (_event, modelData) => {
-    const response = await fetch('http://127.0.0.1:5000/register_model', {
+    const response = await fetch(`${BACKEND_URL}/register_model`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(modelData)
@@ -181,7 +193,7 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('generate', async (_event, generateData) => {
     try {
-      const response = await fetch('http://127.0.0.1:5000/generate', {
+      const response = await fetch(`${BACKEND_URL}/generate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(generateData)
@@ -200,7 +212,7 @@ app.whenReady().then(async () => {
   })
 
   ipcMain.handle('removeElement', async (_event, elementId) => {
-    const response = await fetch(`http://127.0.0.1:5000/element/${elementId}`, {
+    const response = await fetch(`${BACKEND_URL}/element/${elementId}`, {
       method: 'DELETE'
     })
     if (!response.ok) {
@@ -214,7 +226,7 @@ app.whenReady().then(async () => {
 
 async function _getEngineConfig(engineName: string): Promise<any> {
   try {
-    const response = await fetch(`http://127.0.0.1:5000/engine_config/${engineName}`)
+    const response = await fetch(`${BACKEND_URL}/engine_config/${engineName}`)
     if (!response.ok) {
       const errorBody = await response.text()
       throw new Error(
@@ -261,7 +273,7 @@ async function _getEngineConfig(engineName: string): Promise<any> {
   ipcMain.handle('getAudioFile', async (_event, filename) => {
     try {
       // 1. Get path from Python backend
-      const pathResponse = await fetch(`http://127.00.1:5000/audio_path/${filename}`)
+      const pathResponse = await fetch(`${BACKEND_URL}/audio_path/${filename}`)
       if (!pathResponse.ok) {
         const errorBody = await pathResponse.text()
         throw new Error(
@@ -294,7 +306,7 @@ async function _getEngineConfig(engineName: string): Promise<any> {
 
   ipcMain.handle('loadProject', async (_event, projectPath) => {
     // Load project
-    const loadResponse = await fetch('http://127.0.0.1:5000/load_project', {
+    const loadResponse = await fetch(`${BACKEND_URL}/load_project`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -316,7 +328,7 @@ async function _getEngineConfig(engineName: string): Promise<any> {
     await fs.mkdir(projectPath, { recursive: true })
 
     // Create project
-    const createResponse = await fetch('http://127.0.0.1:5000/create_project', {
+    const createResponse = await fetch(`${BACKEND_URL}/create_project`, {
       method: 'POST',
       headers: {
           'Content-Type': 'application/json',
@@ -337,7 +349,7 @@ async function _getEngineConfig(engineName: string): Promise<any> {
   ipcMain.handle('getGraphData', async (_event, viewMode) => {
     const endpoint = viewMode === 'cluster' ? '/graph_tsne' : '/graph';
     console.log(`Main Process: getting ${endpoint}`);
-    const graphResponse = await fetch(`http://127.0.0.1:5000${endpoint}`);
+    const graphResponse = await fetch(`${BACKEND_URL}${endpoint}`);
     console.log(`Main Process: ${endpoint} status: ${graphResponse.status}`);
     if (!graphResponse.ok) {
         const errorText = await graphResponse.text();
@@ -364,13 +376,20 @@ async function _getEngineConfig(engineName: string): Promise<any> {
   app.on('browser-window-created', (_, window) => {
     optimizer.watchWindowShortcuts(window)
   })
-  
+
   try {
-    await startPythonBackend()
+    if (RUN_LOCAL_BACKEND) {
+      await startPythonBackend()
+    } else {
+      console.log('Skipping local backend start. Assuming backend is running remotely.')
+    }
     createWindow()
   } catch (error) {
     console.error('Failed to start application:', error)
-    dialog.showErrorBox('Startup Error', 'Failed to start the Python backend. The application will close.')
+    dialog.showErrorBox(
+      'Startup Error',
+      'Failed to start the Python backend. The application will close.'
+    )
     app.quit()
   }
 

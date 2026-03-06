@@ -3,9 +3,6 @@ flask
 flask-cors
 soundfile
 librosa
-torch
-torchvision
-torchaudio
 setuptools<60
 
 # Representation
