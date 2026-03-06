@@ -8,12 +8,15 @@ import io
 import json
 import traceback
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, Optional
+
+from pydantic import BaseModel, ValidationError
+from pydantic_util import create_dynamic_model
 
 # Import your existing modules
 from param_graph.util import load_audio
 from param_graph.graph import ParameterGraph
-from param_graph.engine import Engine
+from param_graph.engine import Engine, Model
 
 from engines.stable_audio_tools import StableAudioTools
 
@@ -30,43 +33,34 @@ APP_SAMPLE_RATE = 48000
 param_graph: ParameterGraph = None
 engine: Engine = None
 
-engine_map = {
+engine_registry = {
     'stable_audio_tools': StableAudioTools
 }
 
-def set_engine(engine_name):
+def set_engine(engine_name: str) -> bool:
+    """
+    Sets the global engine instance. Avoids re-initializing the engine if it's already active.
+    Returns True on success, False on failure.
+    """
     global engine
     
-    if engine and engine_name == engine.name:
-        return
-    engine = engine_map[engine_name]()
-    print(f"Engine activated: {engine.name}")
+    if engine and engine.name == engine_name:
+        return True
 
+    engine_class = engine_registry.get(engine_name)
+    if not engine_class:
+        print(f"Error: Engine '{engine_name}' not found in engine_registry.")
+        return False
 
-# Argument type mappings
-ARG_TYPES = {
-    "sample_rate": int,
-    "chunk_size": int,
-    "batch_size": int,
-    "steps": int,
-    "seed": int,
-    "noise_level": float,
-    "chunk_interval": int,
-}
-
-def parse_args(args_dict: Dict[str, Any]) -> Dict[str, Any]:
-    """Parse and convert argument types"""
-    parsed = {}
-    for key, value in args_dict.items():
-        if key in ARG_TYPES and value is not None:
-            try:
-                parsed[key] = ARG_TYPES[key](value)
-            except (ValueError, TypeError):
-                print(f"Failed to convert {key}={value} to {ARG_TYPES[key]}")
-                parsed[key] = value
-        else:
-            parsed[key] = value
-    return parsed
+    try:
+        engine = engine_class()
+        print(f"Engine activated: {engine.name}")
+        return True
+    except Exception as e:
+        print(f"Error initializing engine '{engine_name}': {e}")
+        traceback.print_exc()
+        engine = None
+        return False
 
 
 # --------------------
@@ -243,7 +237,7 @@ def import_model():
 def get_engine_config(engine_name):
     """Get the form configuration for a specific engine."""
     try:
-        engine_class = engine_map.get(engine_name)
+        engine_class = engine_registry.get(engine_name)
         if not engine_class:
             return jsonify({"error": f"Engine '{engine_name}' not found"}), 404
 
@@ -261,54 +255,59 @@ def get_engine_config(engine_name):
 
 @app.route("/generate", methods=["POST"])
 def generate():
-    """Generate audio"""
+    """Generate audio using dynamic validation based on engine config."""
     if param_graph is None:
         return jsonify({"error": "No project loaded"}), 400
     
     try:
-        data = request.get_json()
-        args = parse_args(data)
-        
-        model_name = args.get('model_name')
-        if not model_name:
-            return jsonify({"error": "model_name is required"}), 400
-        
-        # Generation logic is commented out, preserving structure
-        '''
-        ...
-        '''
-        return jsonify({"message": "Generation endpoint is currently a placeholder."}), 200
+        json_data = request.get_json()
+        model_id = json_data.get("model_id")
+        if not model_id:
+            return jsonify({"error": "'model_id' is required."}), 400
 
+        # 1. Get the full model dataclass from the graph
+        model_element = param_graph.get_element(model_id)
+        
+        # 2. Validate that it's a model
+        if not isinstance(model_element, Model):
+            return jsonify({"error": f"Node '{model_id}' is not a valid model."}), 400
+        
+        # 3. Set engine and load the model object
+        if not set_engine(model_element.engine):
+            return jsonify({"error": f"Failed to set engine '{model_element.engine}'."}), 500
+        
+        engine.load_model(model_element) # Pass the dataclass instance
+            
+        # 4. Get engine config for validation
+        form_config = engine.get_form_config().get("generate")
+        if not form_config:
+            return jsonify({"error": f"Engine '{engine.name}' has no 'generate' configuration"}), 404
+
+        # 5. Validate the request body
+        DynamicArgsModel = create_dynamic_model(form_config)
+        validated_params = DynamicArgsModel.model_validate(json_data)
+
+        # 6. Call actual generation
+        output_dir = param_graph.root / "generated"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        audio_artifact = engine.generate(output_dir=str(output_dir), **validated_params.model_dump())
+        
+        # 7. Add the new audio artifact to the graph
+        param_graph.add_artifact(audio_artifact)
+        param_graph.save()
+        
+        return jsonify({
+            "message": "Audio generated and registered successfully.",
+            "artifact": audio_artifact.to_dict(),
+            "validated_params": validated_params.model_dump()
+        }), 200
+
+    except (ValidationError, ValueError) as e:
+        # Catch validation errors from Pydantic or ValueErrors from get_element
+        return jsonify({"error": "Invalid request", "details": str(e)}), 400
     except Exception as e:
         print(f"Generation failed: {e}")
-        traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/variation", methods=["POST"])
-def variation():
-    """Create audio variation"""
-    if param_graph is None:
-        return jsonify({"error": "No project loaded"}), 400
-    
-    try:
-        data = request.get_json()
-        args = parse_args(data)
-        
-        source_name = args.get('source_name')
-        if not source_name:
-            return jsonify({"error": "source_name is required"}), 400
-            
-        source_path = param_graph.get_path_from_name(source_name, relative=False)
-        source_audio = load_audio(device_accelerator, str(source_path), APP_SAMPLE_RATE)
-        
-        # Variation logic is commented out, preserving structure
-        '''
-        ...
-        '''
-        return jsonify({"message": "Variation endpoint is currently a placeholder."}), 200
-        
-    except Exception as e:
-        print(f"Variation failed: {e}")
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
@@ -501,6 +500,27 @@ def update_element():
         
     except Exception as e:
         print(f"Failed to update element: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/element/<element_id>", methods=["DELETE"])
+def remove_element(element_id):
+    """Remove an element from the graph"""
+    if param_graph is None:
+        return jsonify({"error": "No project loaded"}), 400
+
+    try:
+        param_graph.remove_element(element_id)
+        param_graph.save()
+
+        return jsonify({
+            "message": "Element removed successfully",
+            "success": True
+        })
+
+    except Exception as e:
+        print(f"Failed to remove element: {e}")
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 

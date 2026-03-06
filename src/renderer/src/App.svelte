@@ -8,9 +8,10 @@
   import GenerationView from './components/views/GenerationView.svelte'
   import ErrorView from './components/views/ErrorView.svelte'
   import ImportModelView from './components/views/ImportModelView.svelte'
-  import { activeNodeStore } from './utils/stores'
+  import RemovalView from './components/views/RemovalView.svelte'
+  import { activeNodeStore, selectedForRemoval } from './utils/stores'
 
-  type ActionPanelView = 'generation' | 'import-model' | 'none'
+  type ActionPanelView = 'generation' | 'import-model' | 'removal' | 'none'
 
   let graphData: any = $state(null)
   let currentProject: string | null = $state(null)
@@ -22,10 +23,11 @@
   let actionPanelView: ActionPanelView = $state('none')
   let errorInInfoPanel: { title: string; message: string } | null = $state(null)
 
-  function closeActionPanel() {
+  function closeActionPanel(): void {
     actionPanelView = 'none'
     generationNode = null
     activeNodeStore.set(null)
+    selectedForRemoval.set(null)
   }
 
   async function handleProjectLoad(data: { projectPath: string }): Promise<void> {
@@ -111,6 +113,11 @@
     activeNodeStore.set(audioData)
   }
 
+  function handleNodeRemove(nodeData: any): void {
+    selectedForRemoval.set(nodeData)
+    actionPanelView = 'removal'
+  }
+
   async function refreshGraphData(): Promise<void> {
     try {
       graphData = await window.api.getGraphData(viewMode)
@@ -127,6 +134,9 @@
     }
     if (actionPanelView === 'generation' && generationNode) {
       return generationNode.type === 'model' ? 'Generate' : 'Variation'
+    }
+    if (actionPanelView === 'removal') {
+      return 'Confirm Removal'
     }
     return 'Action'
   }
@@ -193,6 +203,19 @@
             errorInInfoPanel = error
           }}
         />
+      {:else if actionPanelView === 'removal'}
+        <RemovalView
+          onclose={closeActionPanel}
+          onrefresh={() => {
+            closeActionPanel()
+            refreshGraphData()
+          }}
+          onerror={(error) => {
+            console.error('Removal error:', error)
+            closeActionPanel()
+            errorInInfoPanel = error
+          }}
+        />
       {/if}
     </ContentPanel>
   {/if}
@@ -204,6 +227,7 @@
     onmodelSelect={handleModelSelect}
     onaudioNodeSelectForGeneration={handleAudioNodeSelectForGeneration}
     onnodeSelect={handleNodeSelect}
+    onnodeRemove={handleNodeRemove}
   />
   {#if audioSrc}
     <AudioPlayer src={audioSrc} title={audioTitle} onclose={() => (audioSrc = null)} />

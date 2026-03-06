@@ -1,6 +1,7 @@
 from dataclasses import dataclass, asdict, field
 from typing import Optional, List
 from time import time
+from ..registry import register
 
 @dataclass(kw_only=True)
 class GraphElement:
@@ -12,20 +13,23 @@ class GraphElement:
     
 @dataclass(kw_only=True)
 class Artifact(GraphElement):
-    uid: str
+    id: str
     name: str
     type: str = 'artifact'
 
+@register('external')
 @dataclass(kw_only=True)
 class ExternalSource(GraphElement):
     path: str
     type: str = 'external'
 
+@register('set')
 @dataclass(kw_only=True)
 class Set(GraphElement):
     alias: str
     type: str = 'set'
 
+@register('batch')
 @dataclass(kw_only=True)
 class Batch(GraphElement):
     alias: str

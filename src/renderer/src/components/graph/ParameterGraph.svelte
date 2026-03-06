@@ -9,8 +9,6 @@
   import graphStyle from './Style'
   import layoutConfig from './Layout'
   import expandCollapseOptions from './Options'
-  import GraphControls from './GraphControls.svelte'
-  import GraphLegend from './GraphLegend.svelte'
   import { selectionStore, activeNodeStore } from '../../utils/stores'
 
   interface Props {
@@ -22,6 +20,7 @@
     onexport?: (data: { names: string[] }) => void
     onrescanSource?: (name: string) => void
     onnodeSelect?: (data: any) => void
+    onnodeRemove?: (data: any) => void
   }
 
   let {
@@ -32,7 +31,8 @@
     onaudioNodeSelectForGeneration,
     onexport,
     onrescanSource,
-    onnodeSelect
+    onnodeSelect,
+    onnodeRemove
   }: Props = $props()
 
   let graphContainer: HTMLElement | undefined = $state()
@@ -76,10 +76,7 @@
             nodeToHighlight.addClass('bound')
             console.log('ParameterGraph: Successfully highlighted', activeNode.id)
           } else {
-            console.log(
-              'ParameterGraph: Could not find node to highlight in graph:',
-              activeNode.id
-            )
+            console.log('ParameterGraph: Could not find node to highlight in graph:', activeNode.id)
           }
         } else {
           console.log('ParameterGraph: No active node to highlight.')
@@ -132,6 +129,10 @@
         {
           content: 'Generate Audio',
           select: (ele: any) => onmodelSelect?.(ele.data())
+        },
+        {
+          content: 'Remove',
+          select: (ele: any) => onnodeRemove?.(ele.data())
         }
       ]
     })
@@ -150,6 +151,10 @@
         {
           content: 'Export',
           select: (ele: any) => onexport?.({ names: [ele.data().name] })
+        },
+        {
+          content: 'Remove',
+          select: (ele: any) => onnodeRemove?.(ele.data())
         }
       ]
     })
@@ -172,6 +177,10 @@
         {
           content: 'Rescan',
           select: (ele: any) => onrescanSource?.(ele.data().name)
+        },
+        {
+          content: 'Remove',
+          select: (ele: any) => onnodeRemove?.(ele.data())
         }
       ]
     })

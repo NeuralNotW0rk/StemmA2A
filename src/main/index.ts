@@ -199,6 +199,19 @@ app.whenReady().then(async () => {
     }
   })
 
+  ipcMain.handle('removeElement', async (_event, elementId) => {
+    const response = await fetch(`http://127.0.0.1:5000/element/${elementId}`, {
+      method: 'DELETE'
+    })
+    if (!response.ok) {
+      const errorBody = await response.text()
+      throw new Error(
+        `Failed to remove element. Status: ${response.status}. Error: ${errorBody}`
+      )
+    }
+    return await response.json()
+  })
+
 async function _getEngineConfig(engineName: string): Promise<any> {
   try {
     const response = await fetch(`http://127.0.0.1:5000/engine_config/${engineName}`)

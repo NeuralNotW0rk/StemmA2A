@@ -3,16 +3,22 @@ import json
 import os
 import torch
 import torchaudio
+from einops import rearrange
 from stable_audio_tools import get_pretrained_model, create_model_from_config
 from stable_audio_tools.models.utils import load_ckpt_state_dict
 from stable_audio_tools.inference.generation import generate_diffusion_cond
 
+from param_graph.registry import register
 from param_graph.engine import Engine, Model
 from param_graph.uid_gen import UIDMismatchError
+from param_graph.elements.audio import Audio
 
+from coolname import generate_slug
 
+@register('model:stable_audio_tools')
 @dataclass(kw_only=True)
 class StableAudioModel(Model):
+    id: str
     checkpoint_path: str
     config: dict
     model_type: str
@@ -24,8 +30,8 @@ class StableAudioTools(Engine):
         super().__init__()
         self.name = 'stable_audio_tools'
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.model_id = None
         self.model = None
+        self.model_info = None
 
     def register_model(self, **kwargs) -> StableAudioModel:
         config_path = kwargs.pop("config_path")
@@ -39,48 +45,62 @@ class StableAudioTools(Engine):
         return StableAudioModel(
             **kwargs,
             config=config,
-            uid=self.uid_generator.from_module(model)
+            id=self.uid_generator.from_module(model)
         )
 
-    def load_model(self, ele: StableAudioModel, verify: bool=True):
-        # Check if a model is currently loaded
+    def load_model(self, info: StableAudioModel, verify: bool=True):
+        # If a model is loaded, check if it's the same one
+        if self.model and self.model_info.id == info.id:
+            return # Same model, do nothing
+
+        # Unload existing model if there is one
         if self.model:
-            # Same model... do nothing
-            if self.model_id == ele.uid:
-                return
-            
-            # Unload existing model
             del self.model
+            self.model = None
 
-            # Use stored config and load model from path
-            self.model = create_model_from_config(ele.config)
-            self.model.load_state_dict(load_ckpt_state_dict(ele.path))
+        # Load the new model
+        self.model = create_model_from_config(info.config)
+        self.model.load_state_dict(load_ckpt_state_dict(info.checkpoint_path))
+        self.model_info = info
 
-            if verify and self.uid_generator:
-                uid = self.uid_generator.from_module(self.model)
-                if uid != self.uid:
-                    raise UIDMismatchError()
+    def generate(self, output_dir: str, **kwargs):
+        model = self.model.to(self.device)
+        sample_rate = self.model_info.config["sample_rate"]
+        sample_size = self.model_info.config["sample_size"]
 
-    def generate(self):
-        model = model.to(self.device)
 
         # Set up text and timing conditioning
         conditioning = [{
-            "prompt": "128 BPM tech house drum loop",
-            "seconds_total": 11
+            "prompt": kwargs.get("prompt", ""),
+            "seconds_total": kwargs.get("seconds_total", 11)
         }]
 
         # Generate stereo audio
         output = generate_diffusion_cond(
             model,
-            steps=8,
-            cfg_scale=1.0,
+            steps=kwargs.get("steps", 8),
+            cfg_scale=kwargs.get("cfg_scale", 1.0),
             conditioning=conditioning,
-            sample_size=self.model_config["sample_size"],
-            sampler_type="pingpong",
+            sample_size=sample_size,
+            sampler_type=kwargs.get("sampler_type", "pingpong"),
             device=self.device
         )
 
-        # Peak normalize, clip, convert to int16, and save to file
+        # Rearrange audio batch to a single sequence
+        output = rearrange(output, "b d n -> d (b n)")
+
+        # Peak normalize, clip, convert to int16
         output = output.to(torch.float32).div(torch.max(torch.abs(output))).clamp(-1, 1).mul(32767).to(torch.int16).cpu()
-        torchaudio.save("output.wav", output, self.model_config["sample_rate"])
+
+        # Save to file
+        id = self.uid_generator.from_tensor(output)
+        filename = f"{id}.wav"
+        output_path = os.path.join(output_dir, filename)
+        torchaudio.save(output_path, output, sample_rate)
+
+        # Create audio artifact
+        return Audio(
+            id=self.uid_generator.from_tensor(output),
+            name=generate_slug(2),
+            path=output_path,
+        )

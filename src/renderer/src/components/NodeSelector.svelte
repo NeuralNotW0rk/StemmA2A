@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { ModelData, AudioData } from '../utils/forms'
+  import type { ModelData } from '../utils/forms'
   import { selectionStore } from '../utils/stores'
 
   type NodeData = ModelData | AudioData
@@ -12,7 +12,7 @@
     onSelect: (newNode: NodeData) => void
   }>()
 
-  function selectNodeFromGraph() {
+  function selectNodeFromGraph(): void {
     selectionStore.startSelection(selectionType, node?.id ?? null, (selected) => {
       if (selected.type === selectionType) {
         onSelect(selected)

@@ -27,6 +27,8 @@ const api = {
   openFile: (options: unknown) => ipcRenderer.invoke('dialog:openFile', options),
   importModel: (data: unknown) => ipcRenderer.invoke('importModel', data),
   generate: (data: unknown) => ipcRenderer.invoke('generate', data),
+  removeElement: (elementId: string): Promise<any> =>
+    ipcRenderer.invoke('removeElement', elementId),
   logMessage: (message: string): Promise<any> => ipcRenderer.invoke('logMessage', message)
 }
 

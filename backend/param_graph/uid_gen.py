@@ -1,30 +1,42 @@
 import xxhash
 from torch import Tensor
 from torch.nn import Module
+from abc import ABC, abstractmethod
 
 
 class UIDMismatchError(Exception):
     """Raised when a model's stored UID does not match its calculated UID."""
     pass
 
-class UIDGenerator:
+class UIDGenerator(ABC):
+    DELIMITER = "-"
+
+    @abstractmethod
+    def get_prefix(self) -> str:
+        pass
     
+    @abstractmethod
     def from_string(self, data: str) -> str:
         pass
 
+    @abstractmethod
     def from_tensor(self, tensor: Tensor) -> str:
         pass
 
+    @abstractmethod
     def from_module(self, model: Module) -> str:
         pass
 
 
 class XXH3_64(UIDGenerator):
 
+    def get_prefix(self):
+        return "XXH3_64"
+
     def from_string(self, data: str) -> str:
         """Generates a hex string UID using XXH3."""
         h = xxhash.xxh3_64
-        return f"XXH3_64:{xxhash.xxh3_64_hexdigest(data)}"
+        return f"{self.get_prefix()}{self.DELIMITER}{xxhash.xxh3_64_hexdigest(data)}"
     
     def from_tensor(self, tensor: Tensor) -> str:
         """
@@ -35,7 +47,7 @@ class XXH3_64(UIDGenerator):
         # 3. Pass directly to xxhash (handles the buffer protocol)
         data = tensor.detach().cpu().contiguous().numpy()
         
-        return f"XXH3_64:{xxhash.xxh3_64(data).hexdigest()}"
+        return f"{self.get_prefix()}{self.DELIMITER}{xxhash.xxh3_64(data).hexdigest()}"
     
     def from_module(self, module: Module) -> str:
         """
@@ -51,4 +63,4 @@ class XXH3_64(UIDGenerator):
             data = state_dict[key].detach().cpu().contiguous().numpy().tobytes()
             h.update(data)
             
-        return f"XXH3_64:{h.hexdigest()}"
+        return f"{self.get_prefix()}{self.DELIMITER}{h.hexdigest()}"

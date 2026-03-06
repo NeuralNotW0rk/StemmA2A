@@ -6,10 +6,12 @@ librosa
 torch
 torchvision
 torchaudio
+setuptools<60
 
 # Representation
 networkx
 xxhash
+coolname
 
 # Engine
 stable-audio-tools

@@ -18,6 +18,7 @@ interface API {
   openFile: (options?: { title?: string; filters?: { name: string; extensions: string[] }[] }) => Promise<string | null>
   importModel: (data: any) => Promise<any>
   generate: (data: any) => Promise<any>
+  removeElement: (elementId: string) => Promise<any>
   logMessage: (message: string) => Promise<any>
 }
 

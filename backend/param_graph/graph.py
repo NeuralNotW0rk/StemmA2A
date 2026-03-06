@@ -1,5 +1,6 @@
 import os
 import json
+import inspect
 from pathlib import Path
 from time import time
 import networkx as nx
@@ -12,7 +13,8 @@ from sklearn.manifold import TSNE
 
 from .util import *
 from .const import *
-from .elements.base_elements import Artifact
+from .elements.base_elements import Artifact, GraphElement
+from .registry import get_class, get_key_from_attrs
 
 DEFAULT_SR = 48000
 
@@ -52,25 +54,48 @@ class ParameterGraph:
             data = {
                 'project_name': self.project_name,
                 'export_target': str(self.export_target),
-                'graph': nx.cytoscape.cytoscape_data(self.G),
+                'graph': nx.cytoscape.cytoscape_data(self.G, ident='id'),
             }
             df.write(json.dumps(data, indent=4))
 
     def to_json(self, mode='batch'):
         if mode == 'batch':
-            return nx.cytoscape.cytoscape_data(self.G)
+            return nx.cytoscape.cytoscape_data(self.G, ident='id')
         elif mode == 'cluster':
             C = nx.DiGraph()
             for node, data in self.G.nodes(data=True):
                 if data['type'] == 'audio':
                     C.add_node(node, **data)
                     C.nodes[node].pop('parent', None)
-            return nx.cytoscape.cytoscape_data(C)
+            return nx.cytoscape.cytoscape_data(C, ident='id')
         
     def add_artifact(self, ele: Artifact):
         node_attrs = ele.to_dict()
-        node_id = node_attrs.get('uid', None)
+        node_id = node_attrs.get('id', None)
         self.G.add_node(node_id, **node_attrs)
+
+    def get_element(self, node_id: str) -> GraphElement:
+        """
+        Retrieves a node's attributes from the graph and reconstructs
+        its corresponding dataclass object using the central registry.
+        """
+        if not self.G.has_node(node_id):
+            raise ValueError(f"Node '{node_id}' not found in the graph.")
+
+        attrs = self.G.nodes[node_id].copy()
+        
+        # Determine the correct class and instantiate it
+        key = get_key_from_attrs(attrs)
+        TargetClass = get_class(key)
+        
+        # Filter attrs to only include keys that are in the TargetClass's __init__
+        # This is necessary because the graph node attributes may contain extra
+        # data that is not part of the class's definition.
+        sig = inspect.signature(TargetClass)
+        allowed_keys = set(sig.parameters.keys())
+        filtered_attrs = {k: v for k, v in attrs.items() if k in allowed_keys}
+
+        return TargetClass(**filtered_attrs)
 
     def get_path_from_name(self, name: str, relative=False):
         if self.G.has_node(name):

@@ -20,7 +20,6 @@
   let error: string | null = $state(null)
   let inProgress = $state(false)
   let selectedModel: ModelData | null = $state(null)
-  let isVariation = $state(false)
   let lastNodeId: string | null = $state(null)
   let isFormValid = $state(false)
 
@@ -62,7 +61,6 @@
       inProgress = false
 
       if (node.type === 'model') {
-        isVariation = false
         selectedModel = node as ModelData
         // Base form data on the node, existing data is merged in loadEngineConfig
         formData = { ...node }
@@ -73,7 +71,6 @@
           formFields = null
         }
       } else if (node.type === 'audio') {
-        isVariation = true
         selectedModel = null
         formFields = null
         formData = { init_audio: node.name }
@@ -105,16 +102,32 @@
   }
 
   async function generate(): Promise<void> {
-    const title = isVariation ? 'Variation' : 'Generation'
+    const title = 'Generation'
     if (!selectedModel) {
       onError({ title: title + ' Failed', message: 'A model must be selected for generation.' })
       return
     }
 
-    const payload = {
-      ...formData,
-      model_name: selectedModel.name
+    // Construct a clean payload, including only the model name and the fields
+    // defined by the engine's configuration. This avoids sending the entire
+    // (and potentially non-serializable) formData object.
+    const payload: Record<string, unknown> = {
+      model_id: selectedModel.id
     }
+
+    if (formFields) {
+      for (const field of formFields) {
+        if (formData[field.name] !== undefined) {
+          payload[field.name] = formData[field.name]
+        }
+      }
+    }
+
+    // Handle special cases like `init_audio` that are not part of the dynamic form
+    if (formData.init_audio) {
+      payload.init_audio = formData.init_audio
+    }
+
     inProgress = true
     try {
       const result = await window.api.generate(payload)
@@ -146,7 +159,7 @@
       </div>
     {:else if formFields}
       <DynamicForm config={formFields} bind:formData bind:isFormValid />
-    {:else if isVariation}
+    {:else if node.type === 'audio'}
       <p class="centered-text">Select a model to see its generation options.</p>
     {/if}
   </div>

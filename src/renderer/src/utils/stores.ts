@@ -66,3 +66,16 @@ function createSelectionStore() {
 export const selectionStore = createSelectionStore();
 
 export const activeNodeStore = writable<any>(null);
+
+// Types for content panel views
+export type View = 'element-info' | 'error' | 'generation' | 'import-model' | 'removal';
+
+// A minimal type for graph elements, to be expanded as needed.
+export interface GraphElement {
+  id: string;
+  type: string;
+  [key: string]: any;
+}
+
+export const activeView = writable<View>('element-info');
+export const selectedForRemoval = writable<GraphElement | null>(null);
