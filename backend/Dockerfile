@@ -1,23 +1,32 @@
-# Use an official PyTorch image with Python 3.11 and CUDA 12.1
-FROM pytorch/pytorch:2.3.0-cuda12.1-cudnn8-runtime
+# Optimized for RTX 40-series and CUDA 13.0 Hosts (Python 3.10)
+FROM nvcr.io/nvidia/pytorch:24.03-py3
 
 WORKDIR /app
 
-# Upgrade pip and setuptools (still a good practice)
-RUN python -m pip install --upgrade pip setuptools wheel
+# 1. Install system-level dependencies (essential for many Python AI libs)
+RUN apt-get update && apt-get install -y \
+    libgl1 \
+    libglib2.0-0 \
+    git \
+    && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements and install
+# 2. Upgrade core Python build tools
+# We use 'python -m pip' to ensure we're upgrading the correct instance
+RUN python -m pip install --no-cache-dir --upgrade pip setuptools wheel
+
+# 3. Install your specific Python libraries
+# REMINDER: Keep 'torch' OUT of requirements.txt to avoid massive redundant downloads
 COPY requirements.txt .
-# torch is already in the base image, so we don't need to install it.
-# The requirements.txt file does not contain torch, so this is fine.
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the rest of the application code
+# 4. Copy your code
 COPY . .
 
-# Create a non-root user and switch to it
-RUN useradd -m appuser
+# 5. Security: Run as non-root
+RUN useradd -m appuser && chown -R appuser /app
 USER appuser
 
-# Set the default command
+# Standard API port for your app
+EXPOSE 5000
+
 CMD ["python", "app.py"]

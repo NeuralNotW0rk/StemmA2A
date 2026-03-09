@@ -1,10 +1,14 @@
 services:
   backend:
-    # Tell Docker to look in the backend folder for the Dockerfile
     build:
       context: ./backend
-      dockerfile: Dockerfile
-    # "Mount" the backend folder for live development
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     volumes:
       - ./backend:/app
     environment:
