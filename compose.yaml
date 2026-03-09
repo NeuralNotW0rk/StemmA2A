@@ -1,0 +1,28 @@
+services:
+  backend:
+    # Tell Docker to look in the backend folder for the Dockerfile
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    # "Mount" the backend folder for live development
+    volumes:
+      - ./backend:/app
+    environment:
+      - PYTHONUNBUFFERED=1
+    networks:
+      - app-net
+
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      - TUNNEL_TOKEN=${CF_TUNNEL_TOKEN}
+    depends_on:
+      - backend
+    networks:
+      - app-net
+
+networks:
+  app-net:
+    driver: bridge

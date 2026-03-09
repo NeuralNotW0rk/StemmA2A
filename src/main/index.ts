@@ -54,7 +54,7 @@ function startPythonBackend(): Promise<void> {
 
       let backendReady = false;
       const handleMessage = (message: string) => {
-        if (!backendReady && message.includes(`Running on ${BACKEND_URL}`)) {
+        if (!backendReady && message.includes('Running on http://127.0.0.1:5000')) {
           backendReady = true;
           console.log('Python backend started');
           resolve();

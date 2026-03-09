@@ -1,16 +1,10 @@
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
 import json
 import os
 import inspect
 
-from .elements.base_elements import Artifact
+from .elements.models.base import Model
 from .uid_gen import UIDGenerator, XXH3_64
-
-@dataclass(kw_only=True)
-class Model(Artifact):
-    engine: str
-    type: str = 'model'
 
 class Engine(ABC):
     def __init__(self, uid_generator: UIDGenerator = None) -> None:

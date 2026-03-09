@@ -1,0 +1,32 @@
+# --- Version Control ---
+.git
+.gitignore
+
+# --- Secrets & Config ---
+.env
+*.pem
+*.key
+docker-compose.yml
+compose.yaml
+
+# --- Python Backend Cleanup ---
+**/__pycache__/
+**/*.py[cod]
+**/*.so
+**/.venv/
+**/env/
+**/venv/
+**/.pytest_cache/
+**/.coverage
+**/htmlcov/
+
+# --- Frontend (IMPORTANT) ---
+# We ignore the entire frontend folder because the 
+# backend container doesn't need to see it.
+/frontend/
+
+# --- IDE & OS Junk ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

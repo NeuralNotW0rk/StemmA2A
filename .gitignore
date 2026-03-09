@@ -6,5 +6,8 @@ out
 *.log*
 *.pyc
 
+# Environment variables
+.env
+
 # Python virtual environment
 backend/.venv

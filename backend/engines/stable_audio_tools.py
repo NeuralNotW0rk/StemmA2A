@@ -1,4 +1,3 @@
-from dataclasses import dataclass
 import json
 import os
 import torch
@@ -8,21 +7,12 @@ from stable_audio_tools import get_pretrained_model, create_model_from_config
 from stable_audio_tools.models.utils import load_ckpt_state_dict
 from stable_audio_tools.inference.generation import generate_diffusion_cond
 
-from param_graph.registry import register
-from param_graph.engine import Engine, Model
+from param_graph.engine import Engine
 from param_graph.uid_gen import UIDMismatchError
-from param_graph.elements.audio import Audio
+from param_graph.elements.artifacts.audio import Audio
+from param_graph.elements.models.stable_audio import StableAudioModel
 
 from coolname import generate_slug
-
-@register('model:stable_audio_tools')
-@dataclass(kw_only=True)
-class StableAudioModel(Model):
-    id: str
-    checkpoint_path: str
-    config: dict
-    model_type: str
-    engine: str = 'stable_audio_tools'
 
 
 class StableAudioTools(Engine):
