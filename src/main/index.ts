@@ -6,18 +6,24 @@ import icon from '../../resources/icon.png?asset'
 import Store from 'electron-store'
 import { spawn, ChildProcess } from 'child_process'
 import readline from 'readline'
+import dotenv from 'dotenv'
 
-// --- Configuration ---
-// Set to true to automatically start the local Python backend.
-// Set to false if you are running the backend on a separate machine.
-const RUN_LOCAL_BACKEND = true;
+dotenv.config({ path: join(app.getAppPath(), '.env') })
 
-// The URL of the backend server.
-// If you are running the backend on a separate machine, change this to
-// 'http://localhost:5001' (or your chosen local port) after setting up
-// an SSH tunnel.
-const BACKEND_URL = 'http://127.0.0.1:5000'
-// --- End Configuration ---
+const RUN_LOCAL_BACKEND = (process.env.RUN_LOCAL_BACKEND || 'true') === 'true';
+const BACKEND_URL = process.env.BACKEND_URL || 'http://127.0.0.1:5000';
+
+// Function to wrap fetch and add Cloudflare headers
+async function fetchWithAuth(url: string, options: RequestInit = {}): Promise<Response> {
+  const headers = {
+    ...options.headers,
+    'CF-Access-Client-Id': process.env.CF_ACCESS_CLIENT_ID || '',
+    'CF-Access-Client-Secret': process.env.CF_ACCESS_CLIENT_SECRET || ''
+  };
+
+  return fetch(url, { ...options, headers });
+}
+
 
 let pythonBackend: ChildProcess | null = null
 const store = new Store()
@@ -177,7 +183,7 @@ app.whenReady().then(async () => {
   })
 
   ipcMain.handle('importModel', async (_event, modelData) => {
-    const response = await fetch(`${BACKEND_URL}/register_model`, {
+    const response = await fetchWithAuth(`${BACKEND_URL}/register_model`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(modelData)
@@ -193,7 +199,7 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('generate', async (_event, generateData) => {
     try {
-      const response = await fetch(`${BACKEND_URL}/generate`, {
+      const response = await fetchWithAuth(`${BACKEND_URL}/generate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(generateData)
@@ -212,7 +218,7 @@ app.whenReady().then(async () => {
   })
 
   ipcMain.handle('removeElement', async (_event, elementId) => {
-    const response = await fetch(`${BACKEND_URL}/element/${elementId}`, {
+    const response = await fetchWithAuth(`${BACKEND_URL}/element/${elementId}`, {
       method: 'DELETE'
     })
     if (!response.ok) {
@@ -226,7 +232,7 @@ app.whenReady().then(async () => {
 
 async function _getEngineConfig(engineName: string): Promise<any> {
   try {
-    const response = await fetch(`${BACKEND_URL}/engine_config/${engineName}`)
+    const response = await fetchWithAuth(`${BACKEND_URL}/engine_config/${engineName}`)
     if (!response.ok) {
       const errorBody = await response.text()
       throw new Error(
@@ -273,7 +279,7 @@ async function _getEngineConfig(engineName: string): Promise<any> {
   ipcMain.handle('getAudioFile', async (_event, filename) => {
     try {
       // 1. Get path from Python backend
-      const pathResponse = await fetch(`${BACKEND_URL}/audio_path/${filename}`)
+      const pathResponse = await fetchWithAuth(`${BACKEND_URL}/audio_path/${filename}`)
       if (!pathResponse.ok) {
         const errorBody = await pathResponse.text()
         throw new Error(
@@ -306,7 +312,7 @@ async function _getEngineConfig(engineName: string): Promise<any> {
 
   ipcMain.handle('loadProject', async (_event, projectPath) => {
     // Load project
-    const loadResponse = await fetch(`${BACKEND_URL}/load_project`, {
+    const loadResponse = await fetchWithAuth(`${BACKEND_URL}/load_project`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
@@ -328,7 +334,7 @@ async function _getEngineConfig(engineName: string): Promise<any> {
     await fs.mkdir(projectPath, { recursive: true })
 
     // Create project
-    const createResponse = await fetch(`${BACKEND_URL}/create_project`, {
+    const createResponse = await fetchWithAuth(`${BACKEND_URL}/create_project`, {
       method: 'POST',
       headers: {
           'Content-Type': 'application/json',
@@ -349,7 +355,7 @@ async function _getEngineConfig(engineName: string): Promise<any> {
   ipcMain.handle('getGraphData', async (_event, viewMode) => {
     const endpoint = viewMode === 'cluster' ? '/graph_tsne' : '/graph';
     console.log(`Main Process: getting ${endpoint}`);
-    const graphResponse = await fetch(`${BACKEND_URL}${endpoint}`);
+    const graphResponse = await fetchWithAuth(`${BACKEND_URL}${endpoint}`);
     console.log(`Main Process: ${endpoint} status: ${graphResponse.status}`);
     if (!graphResponse.ok) {
         const errorText = await graphResponse.text();
