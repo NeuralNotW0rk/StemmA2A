@@ -1,13 +1,16 @@
 import { ElectronAPI } from '@electron-toolkit/preload'
 
 interface API {
+  getHealth: () => Promise<any>
+  getProjects: () => Promise<string[]>
+  getModels: () => Promise<string[]>
   openProject: () => Promise<string | null>
   newProject: () => Promise<string | null>
   getRecentProjects: () => Promise<string[]>
   removeRecentProject: (projectPath: string) => Promise<void>
   addRecentProject: (projectPath: string) => Promise<void>
-  loadProject: (projectPath: string) => Promise<any>
-  createProject: (projectPath: string) => Promise<any>
+  loadProject: (projectData: { project_path?: string; project_name?: string }) => Promise<any>
+  createProject: (projectData: { project_path?: string; project_name?: string }) => Promise<any>
   getGraphData: (viewMode: 'batch' | 'cluster') => Promise<any>
   get_generate_form_config: (engineName: string) => Promise<any>
   get_import_form_config: (engineName: string) => Promise<any>

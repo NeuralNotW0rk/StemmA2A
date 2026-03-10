@@ -6,8 +6,11 @@ out
 *.log*
 *.pyc
 
+backend/_exports
+
 # Environment variables
 .env
 
 # Python virtual environment
 backend/.venv
+/backend/data

@@ -10,8 +10,8 @@ import dotenv from 'dotenv'
 
 dotenv.config({ path: join(app.getAppPath(), '.env') })
 
-const RUN_LOCAL_BACKEND = (process.env.RUN_LOCAL_BACKEND || 'true') === 'true';
-const BACKEND_URL = process.env.BACKEND_URL || 'http://127.0.0.1:5000';
+const RUN_LOCAL_BACKEND = (process.env.RUN_LOCAL_BACKEND || 'true') === 'true'
+const BACKEND_URL = process.env.BACKEND_URL || 'http://127.0.0.1:5000'
 
 // Function to wrap fetch and add Cloudflare headers
 async function fetchWithAuth(url: string, options: RequestInit = {}): Promise<Response> {
@@ -19,11 +19,10 @@ async function fetchWithAuth(url: string, options: RequestInit = {}): Promise<Re
     ...options.headers,
     'CF-Access-Client-Id': process.env.CF_ACCESS_CLIENT_ID || '',
     'CF-Access-Client-Secret': process.env.CF_ACCESS_CLIENT_SECRET || ''
-  };
+  }
 
-  return fetch(url, { ...options, headers });
+  return fetch(url, { ...options, headers })
 }
-
 
 let pythonBackend: ChildProcess | null = null
 const store = new Store()
@@ -31,65 +30,65 @@ const store = new Store()
 // Backend management
 function startPythonBackend(): Promise<void> {
   return new Promise((resolve, reject) => {
-    const pythonExecutable = process.platform === 'win32' ? 'python.exe' : 'python';
+    const pythonExecutable = process.platform === 'win32' ? 'python.exe' : 'python'
     const venvPath = is.dev
       ? join(app.getAppPath(), 'backend', '.venv', 'Scripts', pythonExecutable)
-      : join(process.resourcesPath, 'backend', '.venv', 'Scripts', pythonExecutable);
+      : join(process.resourcesPath, 'backend', '.venv', 'Scripts', pythonExecutable)
 
     const appPyPath = is.dev
       ? join(app.getAppPath(), 'backend', 'app.py')
-      : join(process.resourcesPath, 'backend', 'app.py');
+      : join(process.resourcesPath, 'backend', 'app.py')
 
     if (is.dev && process.platform === 'win32') {
       // In dev mode on Windows, open a new terminal that stays open
-      console.log('Starting Python backend in new window');
-      const command = ['/c', 'start', 'cmd.exe', '/k', venvPath, '-u', appPyPath];
+      console.log('Starting Python backend in new window')
+      const command = ['/c', 'start', 'cmd.exe', '/k', venvPath, '-u', appPyPath]
       pythonBackend = spawn('cmd.exe', command, {
         cwd: join(app.getAppPath(), 'backend')
-      });
+      })
       // Resolve after a delay to allow the backend to initialize
       setTimeout(() => {
-        console.log('Assuming Python backend is ready');
-        resolve();
-      }, 5000); // 5 seconds delay
+        console.log('Assuming Python backend is ready')
+        resolve()
+      }, 5000) // 5 seconds delay
     } else {
       // Original behavior for production or other platforms
       pythonBackend = spawn(venvPath, ['-u', appPyPath], {
         stdio: ['pipe', 'pipe', 'pipe'] // Use pipes to capture output
-      });
+      })
 
-      let backendReady = false;
-      const handleMessage = (message: string) => {
+      let backendReady = false
+      const handleMessage = (message: string): void => {
         if (!backendReady && message.includes('Running on http://127.0.0.1:5000')) {
-          backendReady = true;
-          console.log('Python backend started');
-          resolve();
+          backendReady = true
+          console.log('Python backend started')
+          resolve()
         }
       }
 
-      const stdoutReader = readline.createInterface({ input: pythonBackend.stdout! });
+      const stdoutReader = readline.createInterface({ input: pythonBackend.stdout! })
       stdoutReader.on('line', (line) => {
-        console.log(`Python Backend: ${line}`);
-        handleMessage(line);
-      });
+        console.log(`Python Backend: ${line}`)
+        handleMessage(line)
+      })
 
-      const stderrReader = readline.createInterface({ input: pythonBackend.stderr! });
+      const stderrReader = readline.createInterface({ input: pythonBackend.stderr! })
       stderrReader.on('line', (line) => {
         // Log stderr as regular output, since Flask/Werkzeug logs INFO here
-        console.log(`Python Backend: ${line}`);
-        handleMessage(line);
-      });
+        console.log(`Python Backend: ${line}`)
+        handleMessage(line)
+      })
     }
 
     pythonBackend.on('error', (error) => {
-      console.error('Failed to start Python backend:', error);
-      reject(error);
-    });
-    
+      console.error('Failed to start Python backend:', error)
+      reject(error)
+    })
+
     pythonBackend.on('exit', (code) => {
-      console.log(`Python backend exited with code ${code}`);
-    });
-  });
+      console.log(`Python backend exited with code ${code}`)
+    })
+  })
 }
 
 function stopPythonBackend(): void {
@@ -145,10 +144,50 @@ app.whenReady().then(async () => {
     callback({ path: decodeURIComponent(url) })
   })
 
+  ipcMain.handle('getHealth', async () => {
+    const response = await fetchWithAuth(`${BACKEND_URL}/health`)
+    if (!response.ok) {
+      const errorBody = await response.text()
+      throw new Error(`Failed to get health status. Status: ${response.status}. Error: ${errorBody}`)
+    }
+    return await response.json()
+  })
+
+  ipcMain.handle('getProjects', async () => {
+    const response = await fetchWithAuth(`${BACKEND_URL}/projects`)
+    if (!response.ok) {
+      const errorBody = await response.text()
+      throw new Error(`Failed to get projects. Status: ${response.status}. Error: ${errorBody}`)
+    }
+    const data = await response.json()
+    return data.projects
+  })
+
+  ipcMain.handle('getModels', async () => {
+    const response = await fetchWithAuth(`${BACKEND_URL}/models`)
+    if (!response.ok) {
+      const errorBody = await response.text()
+      throw new Error(`Failed to get models. Status: ${response.status}. Error: ${errorBody}`)
+    }
+    const data = await response.json()
+    return data.models
+  })
+
   ipcMain.handle('dialog:newProject', async () => {
+    let defaultPath = 'New Project'
+    try {
+      const response = await fetchWithAuth(`${BACKEND_URL}/project_root`)
+      if (response.ok) {
+        const data = await response.json()
+        defaultPath = data.project_root
+      }
+    } catch (error) {
+      console.error('Failed to get project root for new project dialog:', error)
+    }
+
     const { canceled, filePath } = await dialog.showSaveDialog({
       title: 'Create New Project',
-      defaultPath: 'New Project',
+      defaultPath: defaultPath,
       buttonLabel: 'Create',
       properties: ['createDirectory', 'showOverwriteConfirmation']
     })
@@ -160,8 +199,20 @@ app.whenReady().then(async () => {
   })
 
   ipcMain.handle('dialog:openProject', async () => {
+    let defaultPath = app.getPath('documents')
+    try {
+      const response = await fetchWithAuth(`${BACKEND_URL}/project_root`)
+      if (response.ok) {
+        const data = await response.json()
+        defaultPath = data.project_root
+      }
+    } catch (error) {
+      console.error('Failed to get project root for open project dialog:', error)
+    }
+
     const { canceled, filePaths } = await dialog.showOpenDialog({
-      properties: ['openDirectory']
+      properties: ['openDirectory'],
+      defaultPath: defaultPath
     })
     if (canceled) {
       return null
@@ -230,25 +281,30 @@ app.whenReady().then(async () => {
     return await response.json()
   })
 
-async function _getEngineConfig(engineName: string): Promise<any> {
-  try {
-    const response = await fetchWithAuth(`${BACKEND_URL}/engine_config/${engineName}`)
-    if (!response.ok) {
-      const errorBody = await response.text()
-      throw new Error(
-        `Failed to get engine config. Status: ${response.status}. Error: ${errorBody}`
-      )
+  async function _getEngineConfig(engineName: string): Promise<any> {
+    try {
+      const response = await fetchWithAuth(`${BACKEND_URL}/engine_config/${engineName}`)
+      if (!response.ok) {
+        const errorBody = await response.text()
+        throw new Error(
+          `Failed to get engine config. Status: ${response.status}. Error: ${errorBody}`
+        )
+      }
+      return await response.json()
+    } catch (error) {
+      console.error('Get Engine Config Error:', error)
+      throw error
     }
-    return await response.json()
-  } catch (error) {
-    console.error('Get Engine Config Error:', error)
-    throw error
   }
-}
 
-// ... inside app.whenReady()
+  // ... inside app.whenReady()
   ipcMain.handle('getEngineConfig', async (_event, engineName) => {
     return await _getEngineConfig(engineName)
+  })
+
+
+  ipcMain.handle('getRunMode', async () => {
+    return process.env.VFS_MODE === 'remote' ? 'remote' : 'local'
   })
 
   ipcMain.handle('get_generate_form_config', async (_event, engineName) => {
@@ -262,16 +318,20 @@ async function _getEngineConfig(engineName: string): Promise<any> {
   })
 
   ipcMain.handle('getRecentProjects', async () => {
-    return (store.get('recentProjects', []) as string[])
+    return store.get('recentProjects', []) as string[]
   })
 
   ipcMain.handle('removeRecentProject', async (_event, projectPath) => {
-    const recentProjects = (store.get('recentProjects', []) as string[]).filter(p => p !== projectPath)
+    const recentProjects = (store.get('recentProjects', []) as string[]).filter(
+      (p) => p !== projectPath
+    )
     store.set('recentProjects', recentProjects)
   })
 
   ipcMain.handle('addRecentProject', async (_event, projectPath) => {
-    const recentProjects = (store.get('recentProjects', []) as string[]).filter(p => p !== projectPath)
+    const recentProjects = (store.get('recentProjects', []) as string[]).filter(
+      (p) => p !== projectPath
+    )
     recentProjects.unshift(projectPath)
     store.set('recentProjects', recentProjects.slice(0, 10))
   })
@@ -308,73 +368,84 @@ async function _getEngineConfig(engineName: string): Promise<any> {
     }
   })
 
-
-
-  ipcMain.handle('loadProject', async (_event, projectPath) => {
-    // Load project
-    const loadResponse = await fetchWithAuth(`${BACKEND_URL}/load_project`, {
+  ipcMain.handle(
+    'loadProject',
+    async (_event, projectData: { project_path?: string; project_name?: string }) => {
+      // Load project
+      const loadResponse = await fetchWithAuth(`${BACKEND_URL}/load_project`, {
         method: 'POST',
         headers: {
-            'Content-Type': 'application/json',
+          'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ project_path: projectPath }),
-    });
+        body: JSON.stringify(projectData)
+      })
 
-    // Log status
-    console.log(`Main Process: /load_project status: ${loadResponse.status}`);
-    if (!loadResponse.ok) {
-        const errorText = await loadResponse.text();
+      // Log status
+      console.log(`Main Process: /load_project status: ${loadResponse.status}`)
+      if (!loadResponse.ok) {
+        const errorText = await loadResponse.text()
         console.error(`Main Process: /load_project error data: ${errorText}`)
-        throw new Error(`Failed to load project. Status code: ${loadResponse.status}`);
+        throw new Error(`Failed to load project. Status code: ${loadResponse.status}`)
+      }
     }
-  })
+  )
 
-  ipcMain.handle('createProject', async (_event, projectPath) => {
-    // Create the directory if it doesn't exist
-    await fs.mkdir(projectPath, { recursive: true })
+  ipcMain.handle(
+    'createProject',
+    async (_event, projectData: { project_path?: string; project_name?: string }) => {
+      // In local mode, we might still want to create the directory from the electron app
+      if (projectData.project_path) {
+        await fs.mkdir(projectData.project_path, { recursive: true })
+      }
 
-    // Create project
-    const createResponse = await fetchWithAuth(`${BACKEND_URL}/create_project`, {
-      method: 'POST',
-      headers: {
-          'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ project_path: projectPath }),
-    });
+      const payload: { project_path?: string; project_name?: string } = { ...projectData }
+      if (!payload.project_name && payload.project_path) {
+        payload.project_name = payload.project_path.split(/[/\\]/).pop()
+      }
 
-    // Log status
-    console.log(`Main Process: /create_project status: ${createResponse.status}`);
-    if (!createResponse.ok) {
-        const errorText = await createResponse.text();
+      // Create project
+      const createResponse = await fetchWithAuth(`${BACKEND_URL}/create_project`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(payload)
+      })
+
+      // Log status
+      console.log(`Main Process: /create_project status: ${createResponse.status}`)
+      if (!createResponse.ok) {
+        const errorText = await createResponse.text()
         console.error(`Main Process: /create_project error data: ${errorText}`)
-        throw new Error(`Failed to create project. Status code: ${createResponse.status}`);
+        throw new Error(`Failed to create project. Status code: ${createResponse.status}`)
+      }
     }
-  })
-
+  )
 
   ipcMain.handle('getGraphData', async (_event, viewMode) => {
-    const endpoint = viewMode === 'cluster' ? '/graph_tsne' : '/graph';
-    console.log(`Main Process: getting ${endpoint}`);
-    const graphResponse = await fetchWithAuth(`${BACKEND_URL}${endpoint}`);
-    console.log(`Main Process: ${endpoint} status: ${graphResponse.status}`);
+    const endpoint = viewMode === 'cluster' ? '/graph_tsne' : '/graph'
+    console.log(`Main Process: getting ${endpoint}`)
+    const graphResponse = await fetchWithAuth(`${BACKEND_URL}${endpoint}`)
+    console.log(`Main Process: ${endpoint} status: ${graphResponse.status}`)
     if (!graphResponse.ok) {
-        const errorText = await graphResponse.text();
-        throw new Error(`Failed to get graph data from ${endpoint}. Status code: ${graphResponse.status}. Body: ${errorText}`);
+      const errorText = await graphResponse.text()
+      throw new Error(
+        `Failed to get graph data from ${endpoint}. Status code: ${graphResponse.status}. Body: ${errorText}`
+      )
     }
 
-    const graphDataText = await graphResponse.text();
-    console.log(`Main Process: ${endpoint} data received, parsing...`);
+    const graphDataText = await graphResponse.text()
+    console.log(`Main Process: ${endpoint} data received, parsing...`)
     try {
-        const parsedData = JSON.parse(graphDataText);
-        console.log(`Main Process: ${endpoint} data parsed successfully.`);
-        return parsedData.graph_data;
+      const parsedData = JSON.parse(graphDataText)
+      console.log(`Main Process: ${endpoint} data parsed successfully.`)
+      return parsedData.graph_data
     } catch (e) {
-        console.error(`Main Process: ${endpoint} JSON parse error:`, e);
-        console.error('Main Process: Raw data was:', graphDataText);
-        throw new Error('Failed to parse graph data from backend.');
+      console.error(`Main Process: ${endpoint} JSON parse error:`, e)
+      console.error('Main Process: Raw data was:', graphDataText)
+      throw new Error('Failed to parse graph data from backend.')
     }
-  });
-
+  })
 
   // Default open or close DevTools by F12 in development
   // and ignore CommandOrControl + R in production.

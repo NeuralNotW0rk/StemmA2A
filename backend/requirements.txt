@@ -4,6 +4,7 @@ flask-cors
 soundfile
 librosa
 setuptools<60
+requests
 
 # Representation
 networkx

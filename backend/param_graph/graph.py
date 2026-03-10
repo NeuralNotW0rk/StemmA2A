@@ -41,6 +41,7 @@ class ParameterGraph:
         return False
 
     def save(self):
+        check_dir(self.root)
         data_path = self.root / DICT_FILE
 
         # Backup json if it exists

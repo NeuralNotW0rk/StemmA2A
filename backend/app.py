@@ -6,17 +6,17 @@ import torchaudio
 import io
 import traceback
 from pathlib import Path
+import os
 
+from vfs.factory import get_vfs_provider
 from pydantic import ValidationError
 from pydantic_util import create_dynamic_model
-
-# Import your existing modules
 from param_graph.util import load_audio
 from param_graph.graph import ParameterGraph
 from param_graph.engine import Engine, Model
-
 from engines.stable_audio_tools import StableAudioTools
 
+provider = get_vfs_provider()
 
 app = Flask(__name__)
 CORS(app)
@@ -68,10 +68,12 @@ def set_engine(engine_name: str) -> bool:
 def health_check():
     """Health check endpoint"""
     global param_graph
+    backend_type = os.environ.get("BACKEND_TYPE", "local").lower()
     return jsonify({
         "status": "healthy",
         "device": str(device_accelerator),
-        "project_loaded": param_graph is not None
+        "project_loaded": param_graph is not None,
+        "backend_type": backend_type
     })
 
 
@@ -80,20 +82,36 @@ def health_check():
 #  Project Management
 # --------------------
 
+@app.route("/projects", methods=["GET"])
+def list_projects():
+    """List all available projects."""
+    try:
+        projects = provider.list_projects()
+        return jsonify({"projects": projects})
+    except Exception as e:
+        print(f"Failed to list projects: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/load_project", methods=["POST"])
 def load_project():
-    """Load a project from a given absolute path."""
+    """
+    Load a project from the VFS.
+    """
     global param_graph
     
     try:
         data = request.get_json()
-        project_path_str = data.get("project_path") if data else None
+        if not data:
+            return jsonify({"error": "Request body is required"}), 400
+
+        project_name = data.get("project_name")
+        if not project_name:
+            return jsonify({"error": "project_name is required"}), 400
         
-        if not project_path_str:
-            return jsonify({"error": "project_path is required"}), 400
-        
+        project_path_str = provider.get_project_path(project_name)
         project_path = Path(project_path_str)
-        project_name = project_path.name
 
         param_graph = ParameterGraph(str(project_path))
         if param_graph.load():
@@ -116,21 +134,25 @@ def load_project():
     
 @app.route("/create_project", methods=["POST"])
 def create_project():
-    """Create a new project at a given absolute path."""
+    """
+    Create a new project in the VFS.
+    """
     global param_graph
     
     try:
         data = request.get_json()
-        project_path_str = data.get("project_path") if data else None
+        if not data:
+            return jsonify({"error": "Request body is required"}), 400
+            
+        project_name = data.get("project_name")
+        if not project_name:
+            return jsonify({"error": "project_name is required"}), 400
         
-        if not project_path_str:
-            return jsonify({"error": "project_path is required"}), 400
-        
+        project_path_str = provider.get_project_path(project_name)
         project_path = Path(project_path_str)
 
         param_graph = ParameterGraph(str(project_path))
         param_graph.save()
-        project_name = project_path.name
         
         return jsonify({
             "message": f"Project '{project_name}' created successfully.",
@@ -160,6 +182,18 @@ def get_project():
             "message": "no project selected",
             "success": False
         })
+
+@app.route("/data_root", methods=["GET"])
+def get_data_root():
+    """Get the data root."""
+    try:
+        data_root = os.getenv("DATA_ROOT", "data")
+        return jsonify({"data_root": os.path.abspath(data_root)})
+    except Exception as e:
+        print(f"Failed to get data root: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
 
 # --------------------
 #  Graph Data
@@ -205,6 +239,19 @@ def get_tsne_graph():
 # --------------------
 #  Model Operations
 # --------------------
+@app.route("/models", methods=["GET"])
+def list_models():
+    """List all available models."""
+    # In the local filesystem implementation, models are global.
+    # For a remote provider, we might want to list models per project.
+    project_id = request.args.get("project_id")
+    try:
+        models = provider.list_models(project_id)
+        return jsonify({"models": models})
+    except Exception as e:
+        print(f"Failed to list models: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/register_model", methods=["POST"])
 def import_model():
@@ -215,7 +262,28 @@ def import_model():
     try:
         data = request.get_json()
         engine_name = data.pop("engine")
+        copy_to_staging = data.pop("copy_to_staging", False)
         set_engine(engine_name)
+
+        # Staging logic
+        if copy_to_staging:
+            provider.export_model_package({
+                "name": data.get("name"),
+                "config_path": data.get("config_path"),
+                "checkpoint_path": data.get("checkpoint_path"),
+            })
+
+        # Resolve logical paths to physical paths using the VFS provider
+        config_logical_path = data.get("config_path")
+        checkpoint_logical_path = data.get("checkpoint_path")
+
+        if not config_logical_path or not checkpoint_logical_path:
+            return jsonify({"error": "config_path and checkpoint_path are required"}), 400
+
+        # The provider handles resolving these, whether they are local full paths
+        # or remote logical paths.
+        data["config_path"] = provider.resolve_to_physical_path(config_logical_path)
+        data["checkpoint_path"] = provider.resolve_to_physical_path(checkpoint_logical_path)
 
         param_graph.add_artifact(engine.register_model(**data))
         param_graph.save()
@@ -314,11 +382,21 @@ def generate():
 
 @app.route("/add_external_source", methods=["POST"])
 def add_external_source():
-    """Add external audio source"""
+    """
+    Add external audio source.
+    This is currently only supported for local backends.
+    """
     if param_graph is None:
         return jsonify({"error": "No project loaded"}), 400
     
     try:
+        backend_type = os.environ.get("BACKEND_TYPE", "local").lower()
+        if backend_type != "local":
+            return jsonify({
+                "error": "Adding external sources from remote clients is not yet implemented.",
+                "success": False
+            }), 501 # 501 Not Implemented
+
         data = request.get_json()
         source_path = data.get('source_path')
         
@@ -519,6 +597,88 @@ def remove_element(element_id):
     except Exception as e:
         print(f"Failed to remove element: {e}")
         traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+# --------------------
+#  VFS API (for Remote Client)
+# --------------------
+# These endpoints are used by the RemoteClientVFS to interact with the
+# RemoteServerVFS. When the backend is run with VFS_MODE=remote_server,
+# the 'provider' will be a RemoteServerVFS instance.
+
+@app.route("/api/vfs/projects", methods=["GET"])
+def vfs_list_projects():
+    try:
+        return jsonify(provider.list_projects())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/vfs/models", methods=["GET"])
+def vfs_list_models():
+    try:
+        project_id = request.args.get("project_id", "")
+        return jsonify(provider.list_models(project_id))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/vfs/metadata", methods=["GET"])
+def vfs_get_file_metadata():
+    try:
+        path = request.args.get("path")
+        if not path:
+            return jsonify({"error": "path parameter is required"}), 400
+        
+        metadata = provider.get_file_metadata(path)
+        if metadata is None:
+            return jsonify({"error": "File not found"}), 404
+        return jsonify(metadata)
+    except PermissionError as e:
+        return jsonify({"error": str(e)}), 403
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/vfs/exists", methods=["GET"])
+def vfs_exists():
+    try:
+        path = request.args.get("path")
+        if not path:
+            return jsonify({"error": "path parameter is required"}), 400
+        return jsonify(provider.exists(path))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/vfs/project-path", methods=["GET"])
+def vfs_get_project_path():
+    try:
+        project_name = request.args.get("project_name")
+        if not project_name:
+            return jsonify({"error": "project_name parameter is required"}), 400
+        return jsonify({"path": provider.get_project_path(project_name)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/vfs/model-path", methods=["GET"])
+def vfs_get_model_path():
+    try:
+        model_name = request.args.get("model_name")
+        if not model_name:
+            return jsonify({"error": "model_name parameter is required"}), 400
+        return jsonify({"path": provider.get_model_path(model_name)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/vfs/resolve-path", methods=["GET"])
+def vfs_resolve_path():
+    try:
+        logical_path = request.args.get("path")
+        if not logical_path:
+            return jsonify({"error": "path parameter is required"}), 400
+        
+        physical_path = provider.resolve_to_physical_path(logical_path)
+        return jsonify({"path": physical_path})
+    except (PermissionError, FileNotFoundError) as e:
+        return jsonify({"error": str(e)}), 404
+    except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 # --------------------

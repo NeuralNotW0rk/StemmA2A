@@ -1,5 +1,6 @@
 <script lang="ts">
   /* eslint-disable @typescript-eslint/no-explicit-any */
+  import { onMount } from 'svelte'
   import ParameterGraph from './components/graph/ParameterGraph.svelte'
   import Toolbar from './components/Toolbar.svelte'
   import AudioPlayer from './components/AudioPlayer.svelte'
@@ -9,7 +10,13 @@
   import ErrorView from './components/views/ErrorView.svelte'
   import ImportModelView from './components/views/ImportModelView.svelte'
   import RemovalView from './components/views/RemovalView.svelte'
-  import { activeNodeStore, selectedForRemoval } from './utils/stores'
+  import NewProjectView from './components/views/NewProjectView.svelte'
+  import {
+    activeNodeStore,
+    selectedForRemoval,
+    backendStatus,
+    isCreatingNewProject
+  } from './utils/stores'
 
   type ActionPanelView = 'generation' | 'import-model' | 'removal' | 'none'
 
@@ -22,6 +29,23 @@
   let generationNode: any = $state(null)
   let actionPanelView: ActionPanelView = $state('none')
   let errorInInfoPanel: { title: string; message: string } | null = $state(null)
+  let toolbarComponent: Toolbar
+
+  onMount(async () => {
+    try {
+      const runMode = await window.api.getRunMode()
+      const status = await window.api.getHealth()
+      backendStatus.set({ ...status, run_mode: runMode })
+      console.log('Backend status:', status)
+    } catch (error) {
+      console.error('Failed to get backend health:', error)
+      errorInInfoPanel = {
+        title: 'Backend Connection Failed',
+        message:
+          'Could not connect to the backend server. Please ensure it is running and accessible.'
+      }
+    }
+  })
 
   function closeActionPanel(): void {
     actionPanelView = 'none'
@@ -30,33 +54,49 @@
     selectedForRemoval.set(null)
   }
 
-  async function handleProjectLoad(data: { projectPath: string }): Promise<void> {
-    const projectPath = data.projectPath
+  async function handleProjectLoad(data: {
+    project_path?: string
+    project_name?: string
+  }): Promise<void> {
     try {
-      console.log(`Loading project: ${projectPath}`)
-      await window.api.loadProject(projectPath)
+      const projectName = data.project_name || data.project_path?.split(/[/\\]/).pop()
+      console.log(`Loading project: ${projectName}`)
+      await window.api.loadProject(data)
       graphData = await window.api.getGraphData(viewMode)
-      currentProject = projectPath
-      await window.api.addRecentProject(projectPath)
-      console.log(`Successfully loaded project: ${projectPath}`)
+      currentProject = projectName || null
+      if (data.project_path) {
+        await window.api.addRecentProject(data.project_path)
+      }
+      console.log(`Successfully loaded project: ${projectName}`)
     } catch (error) {
       console.error('Failed to load project:', error)
       errorInInfoPanel = { title: 'Project Load Failed', message: error.message }
     }
   }
 
-  async function handleProjectCreate(data: { projectPath: string }): Promise<void> {
-    const projectPath = data.projectPath
+  async function handleProjectCreate(data: {
+    project_path?: string
+    project_name?: string
+  }): Promise<void> {
+    const projectName = data.project_name || data.project_path?.split(/[/\\]/).pop()
+    console.log(`Creating project: ${projectName}`)
+    await window.api.createProject(data)
+    graphData = await window.api.getGraphData(viewMode)
+    currentProject = projectName || null
+    if (data.project_path) {
+      await window.api.addRecentProject(data.project_path)
+    }
+    console.log(`Successfully created project: ${projectName}`)
+  }
+
+  async function handleProjectCreateAndRefresh(data: { project_name: string }): Promise<void> {
     try {
-      console.log(`Creating project: ${projectPath}`)
-      await window.api.createProject(projectPath)
-      graphData = await window.api.getGraphData(viewMode)
-      currentProject = projectPath
-      await window.api.addRecentProject(projectPath)
-      console.log(`Successfully created project: ${projectPath}`)
-    } catch (error) {
+      await handleProjectCreate(data)
+      await toolbarComponent.refreshProjects()
+    } catch (error: any) {
       console.error('Failed to create project:', error)
-      errorInInfoPanel = { title: 'Project Create Failed', message: error.message }
+      // Re-throw the error so the child component can display it
+      throw new Error(error.message || 'An unknown error occurred during project creation.')
     }
   }
 
@@ -132,6 +172,9 @@
     if (actionPanelView === 'import-model') {
       return 'Import Model'
     }
+    if (actionPanelView === 'new-project') {
+      return 'Create New Project'
+    }
     if (actionPanelView === 'generation' && generationNode) {
       return generationNode.type === 'model' ? 'Generate' : 'Variation'
     }
@@ -144,8 +187,9 @@
 
 <main class="container">
   <Toolbar
+    bind:this={toolbarComponent}
     onprojectLoad={handleProjectLoad}
-    onprojectCreate={handleProjectCreate}
+    onNewProjectClick={() => ($isCreatingNewProject = true)}
     onviewModeChange={handleViewModeChange}
     onrefresh={refreshGraphData}
     onimportModel={() => (actionPanelView = 'import-model')}
@@ -217,6 +261,19 @@
           }}
         />
       {/if}
+    </ContentPanel>
+  {/if}
+
+  {#if $isCreatingNewProject}
+    <ContentPanel
+      title="Create New Project"
+      onclose={() => ($isCreatingNewProject = false)}
+      position="left"
+    >
+      <NewProjectView
+        onclose={() => ($isCreatingNewProject = false)}
+        oncreate={handleProjectCreateAndRefresh}
+      />
     </ContentPanel>
   {/if}
 
