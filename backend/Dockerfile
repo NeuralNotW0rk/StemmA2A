@@ -1,32 +1,26 @@
-# Optimized for RTX 40-series and CUDA 13.0 Hosts (Python 3.10)
-FROM nvcr.io/nvidia/pytorch:24.03-py3
+# 1. Use the slim Python 3.11 base
+FROM python:3.11-slim
 
+# 2. Set the working directory
 WORKDIR /app
 
-# 1. Install system-level dependencies (essential for many Python AI libs)
-RUN apt-get update && apt-get install -y \
+# 3. Install essential C++ build tools and OS-level dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
     libgl1 \
     libglib2.0-0 \
-    git \
     && rm -rf /var/lib/apt/lists/*
 
-# 2. Upgrade core Python build tools
-# We use 'python -m pip' to ensure we're upgrading the correct instance
-RUN python -m pip install --no-cache-dir --upgrade pip setuptools wheel
+# 4. Install PyTorch targeting CUDA 13.0
+RUN pip install --no-cache-dir \
+    torch torchvision torchaudio \
+    --extra-index-url https://download.pytorch.org/whl/cu130
 
-# 3. Install your specific Python libraries
-# REMINDER: Keep 'torch' OUT of requirements.txt to avoid massive redundant downloads
+# 5. Install the rest of your app's requirements
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 4. Copy your code
+# 6. Copy the code
 COPY . .
-
-# 5. Security: Run as non-root
-RUN useradd -m appuser && chown -R appuser /app
-USER appuser
-
-# Standard API port for your app
-EXPOSE 5000
 
 CMD ["python", "app.py"]
