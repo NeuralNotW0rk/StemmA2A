@@ -78,13 +78,11 @@ export interface GraphElement {
 }
 
 export type BackendStatus = {
-  run_mode: 'local' | 'remote' | 'unknown'
   project_loaded: boolean
   device: string
 }
 
 export const backendStatus = writable<BackendStatus>({
-  run_mode: 'unknown',
   project_loaded: false,
   device: 'unknown'
 })

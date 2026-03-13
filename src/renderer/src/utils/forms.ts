@@ -26,7 +26,7 @@ export type FormConfig = FormField[];
 export interface ModelData {
   id: string
   name: string
-  engine: string
+  adapter: string
   model_type?: string
   [key: string]: unknown
 }

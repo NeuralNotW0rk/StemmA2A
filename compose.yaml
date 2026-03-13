@@ -1,5 +1,5 @@
 services:
-  backend:
+  execution-engine:
     build:
       context: ./backend
     deploy:
@@ -12,7 +12,7 @@ services:
     volumes:
       - ./backend:/app
     environment:
-      - PYTHONUNBUFFERED=1
+      PYTHONUNBUFFERED: 1
     networks:
       - app-net
 
@@ -21,9 +21,9 @@ services:
     restart: unless-stopped
     command: tunnel --no-autoupdate run
     environment:
-      - TUNNEL_TOKEN=${CF_TUNNEL_TOKEN}
+      TUNNEL_TOKEN: ${CF_TUNNEL_TOKEN?Cloudflare Tunnel token is not set}
     depends_on:
-      - backend
+      - execution-engine
     networks:
       - app-net
 

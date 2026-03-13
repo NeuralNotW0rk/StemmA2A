@@ -1,5 +1,5 @@
 # Core
-flask
+flask[async]
 flask-cors
 soundfile
 librosa

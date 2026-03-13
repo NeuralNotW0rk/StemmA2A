@@ -23,14 +23,14 @@
   let lastNodeId: string | null = $state(null)
   let isFormValid = $state(false)
 
-  async function loadEngineConfig(engine: string): Promise<void> {
+  async function loadAdapterConfig(adapter: string): Promise<void> {
     try {
       isLoading = true
       error = null
       formFields = null
       await tick()
 
-      const config = await window.api.getEngineConfig(engine)
+      const config = await window.api.getAdapterConfig(adapter)
       if (config && config.generate && Array.isArray(config.generate)) {
         formFields = config.generate
         const newFormData = { ...formData }
@@ -62,10 +62,10 @@
 
       if (node.type === 'model') {
         selectedModel = node as ModelData
-        // Base form data on the node, existing data is merged in loadEngineConfig
+        // Base form data on the node, existing data is merged in loadAdapterConfig
         formData = { ...node }
-        if (selectedModel.engine) {
-          loadEngineConfig(selectedModel.engine)
+        if (selectedModel.adapter) {
+          loadAdapterConfig(selectedModel.adapter)
         } else {
           isLoading = false
           formFields = null
@@ -74,7 +74,7 @@
         selectedModel = null
         formFields = null
         formData = { init_audio: node.name }
-        isLoading = false // Not loading engine config until a model is selected
+        isLoading = false // Not loading adapter config until a model is selected
       }
     }
   })
@@ -91,13 +91,13 @@
 
   function handleModelSelect(newNode: ModelData): void {
     const newModel = newNode as ModelData
-    const oldEngine = selectedModel?.engine
+    const oldAdapter = selectedModel?.adapter
     selectedModel = newModel
 
-    if (newModel.engine !== oldEngine) {
-      // If the engine is different, we need to load new config.
+    if (newModel.adapter !== oldAdapter) {
+      // If the adapter is different, we need to load new config.
       // Keep existing form data where field names overlap.
-      loadEngineConfig(newModel.engine)
+      loadAdapterConfig(newModel.adapter)
     }
   }
 

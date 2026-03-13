@@ -29,11 +29,11 @@ def get_key_from_attrs(attrs: Dict[str, Any]) -> str:
         raise ValueError("Node attributes must include a 'type' field to be resolved.")
 
     if node_type == 'model':
-        # For models, the key is a composite: "type:engine"
-        engine = attrs.get('engine')
-        if not engine:
-            raise ValueError("Model attributes must include an 'engine' field.")
-        return f"{node_type}:{engine}"
+        # For models, the key is a composite: "type:adapter"
+        adapter = attrs.get('adapter')
+        if not adapter:
+            raise ValueError("Model attributes must include an 'adapter' field.")
+        return f"{node_type}:{adapter}"
     else:
         # For all other elements, the 'type' field is the key
         return node_type

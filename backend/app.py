@@ -8,15 +8,15 @@ import traceback
 from pathlib import Path
 import os
 
-from vfs.factory import get_vfs_provider
 from pydantic import ValidationError
 from pydantic_util import create_dynamic_model
 from param_graph.util import load_audio
 from param_graph.graph import ParameterGraph
-from param_graph.engine import Engine, Model
-from engines.stable_audio_tools import StableAudioTools
-
-provider = get_vfs_provider()
+from param_graph.elements.models.base import Model
+from engine.model_adapter import ModelAdapter
+from engine.stable_audio_tools import StableAudioAdapter
+from engine.engine_provider import EngineProvider
+from export_util import export_project
 
 app = Flask(__name__)
 CORS(app)
@@ -28,35 +28,36 @@ device_accelerator = torch.device(device_type_accelerator)
 APP_SAMPLE_RATE = 48000
 
 param_graph: ParameterGraph = None
-engine: Engine = None
+adapter: ModelAdapter = None
+engine_provider: EngineProvider = None
 
-engine_registry = {
-    'stable_audio_tools': StableAudioTools
+adapter_registry = {
+    'stable_audio_tools': StableAudioAdapter
 }
 
-def set_engine(engine_name: str) -> bool:
+def set_adapter(adapter_name: str) -> bool:
     """
-    Sets the global engine instance. Avoids re-initializing the engine if it's already active.
+    Sets the global adapter instance. Avoids re-initializing the adapter if it's already active.
     Returns True on success, False on failure.
     """
-    global engine
+    global adapter
     
-    if engine and engine.name == engine_name:
+    if adapter and adapter.name == adapter_name:
         return True
 
-    engine_class = engine_registry.get(engine_name)
-    if not engine_class:
-        print(f"Error: Engine '{engine_name}' not found in engine_registry.")
+    adapter_class = adapter_registry.get(adapter_name)
+    if not adapter_class:
+        print(f"Error: Adapter '{adapter_name}' not found in adapter_registry.")
         return False
 
     try:
-        engine = engine_class()
-        print(f"Engine activated: {engine.name}")
+        adapter = adapter_class()
+        print(f"Adapter activated: {adapter.name}")
         return True
     except Exception as e:
-        print(f"Error initializing engine '{engine_name}': {e}")
+        print(f"Error initializing adapter '{adapter_name}': {e}")
         traceback.print_exc()
-        engine = None
+        adapter = None
         return False
 
 
@@ -68,12 +69,10 @@ def set_engine(engine_name: str) -> bool:
 def health_check():
     """Health check endpoint"""
     global param_graph
-    backend_type = os.environ.get("BACKEND_TYPE", "local").lower()
     return jsonify({
         "status": "healthy",
         "device": str(device_accelerator),
-        "project_loaded": param_graph is not None,
-        "backend_type": backend_type
+        "project_loaded": param_graph is not None
     })
 
 
@@ -82,49 +81,49 @@ def health_check():
 #  Project Management
 # --------------------
 
-@app.route("/projects", methods=["GET"])
-def list_projects():
-    """List all available projects."""
-    try:
-        projects = provider.list_projects()
-        return jsonify({"projects": projects})
-    except Exception as e:
-        print(f"Failed to list projects: {e}")
-        traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
-
-
 @app.route("/load_project", methods=["POST"])
 def load_project():
     """
-    Load a project from the VFS.
+    Load a project from an absolute path.
     """
-    global param_graph
+    global param_graph, engine_provider
     
     try:
         data = request.get_json()
         if not data:
             return jsonify({"error": "Request body is required"}), 400
 
-        project_name = data.get("project_name")
-        if not project_name:
-            return jsonify({"error": "project_name is required"}), 400
+        project_path_str = data.get("project_path")
+        if not project_path_str:
+            return jsonify({"error": "project_path is required"}), 400
         
-        project_path_str = provider.get_project_path(project_name)
         project_path = Path(project_path_str)
+        if not project_path.is_dir():
+            return jsonify({"error": f"Project path '{project_path_str}' does not exist or is not a directory."}), 404
 
         param_graph = ParameterGraph(str(project_path))
+        
+        # Initialize the engine provider
+        execution_url = os.environ.get("EXECUTION_STRATEGY_URL")
+        engine_provider = EngineProvider(remote_url=execution_url, graph=param_graph)
+
         if param_graph.load():
             return jsonify({
-                "message": f"Project '{project_name}' loaded successfully.",
-                "project_name": project_name,
-                "project_path": project_path_str,
+                "message": f"Project '{project_path.name}' loaded successfully.",
+                "project_name": project_path.name,
+                "project_path": str(project_path),
                 "success": True
             })
         
+        # If load fails, it might be a directory without a project file yet.
+        # We can still "load" it to create one.
+        param_graph.save()
+
         return jsonify({
-            "message": f"Project '{project_name}' not found.",
-            "success": False
+            "message": f"New project '{project_path.name}' created and loaded.",
+            "project_name": project_path.name,
+            "project_path": str(project_path),
+            "success": True
         })
         
     except Exception as e:
@@ -135,34 +134,69 @@ def load_project():
 @app.route("/create_project", methods=["POST"])
 def create_project():
     """
-    Create a new project in the VFS.
+    Create a new project at a given absolute path.
     """
-    global param_graph
+    global param_graph, engine_provider
     
     try:
         data = request.get_json()
         if not data:
             return jsonify({"error": "Request body is required"}), 400
             
-        project_name = data.get("project_name")
-        if not project_name:
-            return jsonify({"error": "project_name is required"}), 400
+        project_path_str = data.get("project_path")
+        project_name = data.get("project_name") # Optional, can derive from path
+        if not project_path_str:
+            return jsonify({"error": "project_path is required"}), 400
         
-        project_path_str = provider.get_project_path(project_name)
         project_path = Path(project_path_str)
+        project_path.mkdir(parents=True, exist_ok=True)
+
+        final_project_name = project_name or project_path.name
 
         param_graph = ParameterGraph(str(project_path))
+        param_graph.project_name = final_project_name
         param_graph.save()
         
+        # Initialize the engine provider
+        execution_url = os.environ.get("EXECUTION_STRATEGY_URL")
+        engine_provider = EngineProvider(remote_url=execution_url, graph=param_graph)
+
         return jsonify({
-            "message": f"Project '{project_name}' created successfully.",
-            "project_name": project_name,
-            "project_path": project_path_str,
+            "message": f"Project '{final_project_name}' created successfully.",
+            "project_name": final_project_name,
+            "project_path": str(project_path),
             "success": True
         })
         
     except Exception as e:
         print(f"Failed to create project: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/export_project", methods=["POST"])
+def export_project_route():
+    """Export a project to a specified directory."""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "Request body is required"}), 400
+
+        project_path = data.get("project_path")
+        export_path = data.get("export_path")
+
+        if not project_path or not export_path:
+            return jsonify({"error": "project_path and export_path are required"}), 400
+        
+        destination = export_project(project_path, export_path)
+        
+        return jsonify({
+            "message": "Project exported successfully.",
+            "destination": destination,
+            "success": True
+        })
+        
+    except Exception as e:
+        print(f"Failed to export project: {e}")
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
@@ -182,17 +216,6 @@ def get_project():
             "message": "no project selected",
             "success": False
         })
-
-@app.route("/data_root", methods=["GET"])
-def get_data_root():
-    """Get the data root."""
-    try:
-        data_root = os.getenv("DATA_ROOT", "data")
-        return jsonify({"data_root": os.path.abspath(data_root)})
-    except Exception as e:
-        print(f"Failed to get data root: {e}")
-        traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
 
 
 # --------------------
@@ -239,53 +262,29 @@ def get_tsne_graph():
 # --------------------
 #  Model Operations
 # --------------------
-@app.route("/models", methods=["GET"])
-def list_models():
-    """List all available models."""
-    # In the local filesystem implementation, models are global.
-    # For a remote provider, we might want to list models per project.
-    project_id = request.args.get("project_id")
-    try:
-        models = provider.list_models(project_id)
-        return jsonify({"models": models})
-    except Exception as e:
-        print(f"Failed to list models: {e}")
-        traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
 
 @app.route("/register_model", methods=["POST"])
 def import_model():
-    # Register a model
+    """Register a model by providing absolute paths to its files."""
     if param_graph is None:
         return jsonify({"error": "No project loaded"}), 400
     
     try:
         data = request.get_json()
-        engine_name = data.pop("engine")
-        copy_to_staging = data.pop("copy_to_staging", False)
-        set_engine(engine_name)
+        adapter_name = data.pop("adapter")
+        set_adapter(adapter_name)
 
-        # Staging logic
-        if copy_to_staging:
-            provider.export_model_package({
-                "name": data.get("name"),
-                "config_path": data.get("config_path"),
-                "checkpoint_path": data.get("checkpoint_path"),
-            })
+        config_path = data.get("config_path")
+        checkpoint_path = data.get("checkpoint_path")
 
-        # Resolve logical paths to physical paths using the VFS provider
-        config_logical_path = data.get("config_path")
-        checkpoint_logical_path = data.get("checkpoint_path")
-
-        if not config_logical_path or not checkpoint_logical_path:
+        if not config_path or not checkpoint_path:
             return jsonify({"error": "config_path and checkpoint_path are required"}), 400
 
-        # The provider handles resolving these, whether they are local full paths
-        # or remote logical paths.
-        data["config_path"] = provider.resolve_to_physical_path(config_logical_path)
-        data["checkpoint_path"] = provider.resolve_to_physical_path(checkpoint_logical_path)
+        # Paths are now expected to be absolute and valid on the server's filesystem.
+        data["config_path"] = str(Path(config_path))
+        data["checkpoint_path"] = str(Path(checkpoint_path))
 
-        param_graph.add_artifact(engine.register_model(**data))
+        param_graph.add_artifact(adapter.register_model(**data))
         param_graph.save()
         
         return jsonify({
@@ -298,29 +297,29 @@ def import_model():
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
-@app.route("/engine_config/<engine_name>", methods=["GET"])
-def get_engine_config(engine_name):
-    """Get the form configuration for a specific engine."""
+@app.route("/adapter_config/<adapter_name>", methods=["GET"])
+def get_adapter_config(adapter_name):
+    """Get the form configuration for a specific adapter."""
     try:
-        engine_class = engine_registry.get(engine_name)
-        if not engine_class:
-            return jsonify({"error": f"Engine '{engine_name}' not found"}), 404
+        adapter_class = adapter_registry.get(adapter_name)
+        if not adapter_class:
+            return jsonify({"error": f"Adapter '{adapter_name}' not found"}), 404
 
-        engine_instance = engine_class()
-        if not hasattr(engine_instance, 'get_form_config'):
-             return jsonify({"error": f"Engine '{engine_name}' does not have a form configuration"}), 404
+        adapter_instance = adapter_class()
+        if not hasattr(adapter_instance, 'get_form_config'):
+             return jsonify({"error": f"Adapter '{adapter_name}' does not have a form configuration"}), 404
 
-        config = engine_instance.get_form_config()
+        config = adapter_instance.get_form_config()
         return jsonify(config)
 
     except Exception as e:
-        print(f"Failed to get engine config: {e}")
+        print(f"Failed to get adapter config: {e}")
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
 @app.route("/generate", methods=["POST"])
-def generate():
-    """Generate audio using dynamic validation based on engine config."""
+async def generate():
+    """Generate audio using dynamic validation based on adapter config."""
     if param_graph is None:
         return jsonify({"error": "No project loaded"}), 400
     
@@ -337,26 +336,31 @@ def generate():
         if not isinstance(model_element, Model):
             return jsonify({"error": f"Node '{model_id}' is not a valid model."}), 400
         
-        # 3. Set engine and load the model object
-        if not set_engine(model_element.engine):
-            return jsonify({"error": f"Failed to set engine '{model_element.engine}'."}), 500
+        # 3. Set adapter and load the model object
+        if not set_adapter(model_element.adapter):
+            return jsonify({"error": f"Failed to set adapter '{model_element.adapter}'."}), 500
         
-        engine.load_model(model_element) # Pass the dataclass instance
+        adapter.load_model(model_element) # Pass the dataclass instance
             
-        # 4. Get engine config for validation
-        form_config = engine.get_form_config().get("generate")
+        # 4. Get adapter config for validation
+        form_config = adapter.get_form_config().get("generate")
         if not form_config:
-            return jsonify({"error": f"Engine '{engine.name}' has no 'generate' configuration"}), 404
+            return jsonify({"error": f"Adapter '{adapter.name}' has no 'generate' configuration"}), 404
 
         # 5. Validate the request body
         DynamicArgsModel = create_dynamic_model(form_config)
         validated_params = DynamicArgsModel.model_validate(json_data)
 
-        # 6. Call actual generation
+        # 6. Call actual generation using the provider
         output_dir = param_graph.root / "generated"
         output_dir.mkdir(parents=True, exist_ok=True)
-        
-        audio_artifact = engine.generate(output_dir=str(output_dir), **validated_params.model_dump())
+
+        engine = engine_provider.get_engine()
+        audio_artifact = await engine.execute(
+            adapter,
+            output_dir=str(output_dir),
+            **validated_params.model_dump()
+        )
         
         # 7. Add the new audio artifact to the graph
         param_graph.add_artifact(audio_artifact)
@@ -370,6 +374,8 @@ def generate():
 
     except (ValidationError, ValueError) as e:
         # Catch validation errors from Pydantic or ValueErrors from get_element
+        print(f"Invalid request: {e}")
+        traceback.print_exc()
         return jsonify({"error": "Invalid request", "details": str(e)}), 400
     except Exception as e:
         print(f"Generation failed: {e}")
@@ -384,19 +390,11 @@ def generate():
 def add_external_source():
     """
     Add external audio source.
-    This is currently only supported for local backends.
     """
     if param_graph is None:
         return jsonify({"error": "No project loaded"}), 400
     
     try:
-        backend_type = os.environ.get("BACKEND_TYPE", "local").lower()
-        if backend_type != "local":
-            return jsonify({
-                "error": "Adding external sources from remote clients is not yet implemented.",
-                "success": False
-            }), 501 # 501 Not Implemented
-
         data = request.get_json()
         source_path = data.get('source_path')
         
@@ -600,88 +598,6 @@ def remove_element(element_id):
         return jsonify({"error": str(e)}), 500
 
 # --------------------
-#  VFS API (for Remote Client)
-# --------------------
-# These endpoints are used by the RemoteClientVFS to interact with the
-# RemoteServerVFS. When the backend is run with VFS_MODE=remote_server,
-# the 'provider' will be a RemoteServerVFS instance.
-
-@app.route("/api/vfs/projects", methods=["GET"])
-def vfs_list_projects():
-    try:
-        return jsonify(provider.list_projects())
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/api/vfs/models", methods=["GET"])
-def vfs_list_models():
-    try:
-        project_id = request.args.get("project_id", "")
-        return jsonify(provider.list_models(project_id))
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/api/vfs/metadata", methods=["GET"])
-def vfs_get_file_metadata():
-    try:
-        path = request.args.get("path")
-        if not path:
-            return jsonify({"error": "path parameter is required"}), 400
-        
-        metadata = provider.get_file_metadata(path)
-        if metadata is None:
-            return jsonify({"error": "File not found"}), 404
-        return jsonify(metadata)
-    except PermissionError as e:
-        return jsonify({"error": str(e)}), 403
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/api/vfs/exists", methods=["GET"])
-def vfs_exists():
-    try:
-        path = request.args.get("path")
-        if not path:
-            return jsonify({"error": "path parameter is required"}), 400
-        return jsonify(provider.exists(path))
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/api/vfs/project-path", methods=["GET"])
-def vfs_get_project_path():
-    try:
-        project_name = request.args.get("project_name")
-        if not project_name:
-            return jsonify({"error": "project_name parameter is required"}), 400
-        return jsonify({"path": provider.get_project_path(project_name)})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/api/vfs/model-path", methods=["GET"])
-def vfs_get_model_path():
-    try:
-        model_name = request.args.get("model_name")
-        if not model_name:
-            return jsonify({"error": "model_name parameter is required"}), 400
-        return jsonify({"path": provider.get_model_path(model_name)})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/api/vfs/resolve-path", methods=["GET"])
-def vfs_resolve_path():
-    try:
-        logical_path = request.args.get("path")
-        if not logical_path:
-            return jsonify({"error": "path parameter is required"}), 400
-        
-        physical_path = provider.resolve_to_physical_path(logical_path)
-        return jsonify({"path": physical_path})
-    except (PermissionError, FileNotFoundError) as e:
-        return jsonify({"error": str(e)}), 404
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-# --------------------
 #  Error Handlers
 # --------------------
 
@@ -702,7 +618,5 @@ if __name__ == "__main__":
     app.run(
         host="127.0.0.1",
         port=5000,
-        debug=True,
-        threaded=True,
-        use_reloader=True
+        debug=True
     )

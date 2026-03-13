@@ -7,6 +7,9 @@ from .base import Model
 class StableAudioModel(Model):
     id: str
     checkpoint_path: str
+    checkpoint_hash: str
+    config_path: str
+    config_hash: str
     config: dict
     model_type: str
-    engine: str = 'stable_audio_tools'
+    adapter: str = 'stable_audio_tools'

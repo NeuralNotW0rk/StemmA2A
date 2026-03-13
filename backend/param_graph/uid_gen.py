@@ -1,3 +1,4 @@
+import json
 import xxhash
 from torch import Tensor
 from torch.nn import Module
@@ -27,12 +28,20 @@ class UIDGenerator(ABC):
     def from_module(self, model: Module) -> str:
         pass
 
+    @abstractmethod
+    def from_dict(self, data: dict) -> str:
+        pass
+
+    @abstractmethod
+    def from_hashes(self, hashes: list) -> str:
+        pass
+
 
 class XXH3_64(UIDGenerator):
 
     def get_prefix(self):
         return "XXH3_64"
-
+    
     def from_string(self, data: str) -> str:
         """Generates a hex string UID using XXH3."""
         h = xxhash.xxh3_64
@@ -64,3 +73,22 @@ class XXH3_64(UIDGenerator):
             h.update(data)
             
         return f"{self.get_prefix()}{self.DELIMITER}{h.hexdigest()}"
+
+    def from_dict(self, data: dict) -> str:
+        """
+        Generates a deterministic xxh3_64 hash for a dictionary.
+        """
+        # Serialize the dictionary to a JSON string with sorted keys
+        serialized_data = json.dumps(data, sort_keys=True)
+        return self.from_string(serialized_data)
+    
+    def from_hashes(self, hashes: list) -> str:
+        """
+        Generates a deterministic xxh3_64 hash from a list of hashes.
+        """
+        # Sort the hashes to ensure determinism
+        hashes.sort()
+        # Concatenate the sorted hashes
+        concatenated_hashes = "".join(hashes)
+        # Hash the concatenated string
+        return self.from_string(concatenated_hashes)

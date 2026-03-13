@@ -7,7 +7,7 @@ from stable_audio_tools import get_pretrained_model, create_model_from_config
 from stable_audio_tools.models.utils import load_ckpt_state_dict
 from stable_audio_tools.inference.generation import generate_diffusion_cond
 
-from param_graph.engine import Engine
+from .model_adapter import ModelAdapter
 from param_graph.uid_gen import UIDMismatchError
 from param_graph.elements.artifacts.audio import Audio
 from param_graph.elements.models.stable_audio import StableAudioModel
@@ -15,7 +15,7 @@ from param_graph.elements.models.stable_audio import StableAudioModel
 from coolname import generate_slug
 
 
-class StableAudioTools(Engine):
+class StableAudioAdapter(ModelAdapter):
     def __init__(self) -> None:
         super().__init__()
         self.name = 'stable_audio_tools'
@@ -24,18 +24,28 @@ class StableAudioTools(Engine):
         self.model_info = None
 
     def register_model(self, **kwargs) -> StableAudioModel:
-        config_path = kwargs.pop("config_path")
+        config_path = kwargs.get("config_path")
         with open(config_path, 'r') as cf:
-            config = json.load(cf)
+            config_json = cf.read()
+            config = json.loads(config_json)
         
+        config_hash = self.uid_generator.from_dict(config)
+
         # Create a temporary model object to generate a UID from
         model = create_model_from_config(config)
         model.load_state_dict(load_ckpt_state_dict(kwargs.get("checkpoint_path")))
 
+        checkpoint_hash = self.uid_generator.from_module(model)
+
+        # Combine the hashes to create a single ID
+        model_id = self.uid_generator.from_hashes([checkpoint_hash, config_hash])
+
         return StableAudioModel(
             **kwargs,
             config=config,
-            id=self.uid_generator.from_module(model)
+            config_hash=config_hash,
+            id=model_id,
+            checkpoint_hash=checkpoint_hash
         )
 
     def load_model(self, info: StableAudioModel, verify: bool=True):

@@ -14,7 +14,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # 4. Install PyTorch targeting CUDA 13.0
 RUN pip install --no-cache-dir \
     torch torchvision torchaudio \
-    --extra-index-url https://download.pytorch.org/whl/cu130
+    --extra-index-url https://download.pytorch.org/whl/cu121
 
 # 5. Install the rest of your app's requirements
 COPY requirements.txt .
@@ -23,4 +23,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 # 6. Copy the code
 COPY . .
 
-CMD ["python", "app.py"]
+CMD ["python", "engine_service.py"]

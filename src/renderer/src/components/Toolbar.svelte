@@ -1,12 +1,11 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { backendStatus, isCreatingNewProject, newProjectName } from '../utils/stores'
+  import { isCreatingNewProject } from '../utils/stores'
 
   interface Props {
     currentProject?: string | null
     viewMode?: 'batch' | 'cluster'
     onprojectLoad?: (data: { project_path?: string; project_name?: string }) => void
-    onNewProjectClick?: () => void
     onviewModeChange?: (mode: 'batch' | 'cluster') => void
     onrefresh?: () => void
     onaddExternalSource?: () => void
@@ -17,7 +16,6 @@
     currentProject = null,
     viewMode = 'batch',
     onprojectLoad,
-    onNewProjectClick,
     onviewModeChange,
     onrefresh,
     onaddExternalSource,
@@ -26,31 +24,37 @@
 
   let showFileMenu = $state(false)
   let fileMenuElement: HTMLElement | undefined = $state()
-  let projects: string[] = $state([])
-  const maxRetries = 5
-  const retryDelay = 10000
+  let recentProjects: string[] = $state([])
 
-  let runMode = $derived($backendStatus.run_mode)
-
-  async function refreshProjects(retries = maxRetries): Promise<void> {
+  async function refreshRecentProjects(): Promise<void> {
     try {
-      projects = await window.api.getProjects()
+      recentProjects = await window.api.getRecentProjects()
     } catch (error) {
-      console.error('Failed to fetch projects:', error)
-      if (retries > 0) {
-        console.log(`Retrying... ${retries} attempts left.`)
-        setTimeout(() => refreshProjects(retries - 1), retryDelay)
-      }
+      console.error('Failed to get recent projects:', error)
     }
   }
 
-  onMount(async (): Promise<void> => {
-    await refreshProjects()
+  onMount(async () => {
+    await refreshRecentProjects()
   })
 
-  function loadProject(name: string): void {
+  async function openProject(): Promise<void> {
     showFileMenu = false
-    onprojectLoad?.({ project_name: name })
+    const projectPath = await window.api.openProject()
+    if (projectPath) {
+      onprojectLoad?.({ project_path: projectPath })
+    }
+  }
+
+  function loadRecentProject(path: string): void {
+    showFileMenu = false
+    onprojectLoad?.({ project_path: path })
+  }
+
+  async function handleRemoveRecent(path: string, event: MouseEvent): Promise<void> {
+    event.stopPropagation() // Prevent the dropdown item from being clicked
+    await window.api.removeRecentProject(path)
+    await refreshRecentProjects()
   }
 
   function toggleViewMode(): void {
@@ -64,7 +68,7 @@
     }
   }
 
-  export { refreshProjects }
+  export { refreshRecentProjects }
 </script>
 
 <svelte:window
@@ -76,8 +80,6 @@
       !fileMenuElement.contains(event.target)
     ) {
       showFileMenu = false
-      $isCreatingNewProject = false
-      $newProjectName = ''
     }
   }}
 />
@@ -108,23 +110,32 @@
           <button
             class="dropdown-item"
             onclick={() => {
-              onNewProjectClick?.()
+              $isCreatingNewProject = true
               showFileMenu = false
             }}
           >
             New Project...
           </button>
+          <button class="dropdown-item" onclick={openProject}> Open Project... </button>
           <div class="dropdown-divider"></div>
-          <div class="dropdown-header">Projects</div>
-          {#each projects as project (project)}
+          <div class="dropdown-header">Recent Projects</div>
+          {#each recentProjects as project (project)}
             <div class="dropdown-item-container">
-              <button class="dropdown-item" onclick={() => loadProject(project)}>
-                {project}
+              <button class="dropdown-item" onclick={() => loadRecentProject(project)}>
+                {project.split(/[/\\]/).pop()}
+                <span class="recent-project-path">{project}</span>
+              </button>
+              <button
+                class="remove-recent"
+                title="Remove from recent"
+                onclick={(e) => handleRemoveRecent(project, e)}
+              >
+                &times;
               </button>
             </div>
           {/each}
-          {#if projects.length === 0}
-            <div class="dropdown-empty">No projects found</div>
+          {#if recentProjects.length === 0}
+            <div class="dropdown-empty">No recent projects</div>
           {/if}
         </div>
       {/if}
@@ -182,7 +193,6 @@
       onclick={() => onaddExternalSource?.()}
       title="Add external audio source"
       aria-label="Add external audio source"
-      disabled={runMode === 'remote'}
     >
       <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
         <path
@@ -246,12 +256,12 @@
     position: absolute;
     top: 100%;
     left: 0;
-    min-width: 200px;
+    min-width: 260px;
     background: var(--color-background-glass-4);
     border: 1px solid var(--color-overlay-border-primary);
     border-radius: 0.375rem;
     margin-top: 0.25rem;
-    max-height: 200px;
+    max-height: 300px;
     overflow-y: auto;
     z-index: 1000;
     backdrop-filter: blur(10px);
@@ -261,6 +271,25 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+    padding-right: 0.5rem;
+  }
+  .dropdown-item-container:hover {
+    background: var(--color-border-glass-1);
+  }
+
+  .remove-recent {
+    background: none;
+    border: none;
+    color: var(--color-text-overlay-secondary);
+    cursor: pointer;
+    font-size: 1.2rem;
+    padding: 0 0.5rem;
+    opacity: 0.5;
+    transition: opacity 0.2s;
+  }
+  .remove-recent:hover {
+    opacity: 1;
+    background: var(--color-background-glass-hover-1);
   }
 
   .dropdown-header {
@@ -281,10 +310,16 @@
     text-align: left;
     cursor: pointer;
     transition: background-color 0.2s;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
-  .dropdown-item:hover {
-    background: var(--color-border-glass-1);
+  .recent-project-path {
+    display: block;
+    font-size: 0.75rem;
+    color: var(--color-text-overlay-secondary);
+    opacity: 0.8;
   }
 
   .dropdown-divider {
@@ -341,15 +376,5 @@
   .toolbar-button:hover {
     background: var(--color-background-glass-hover-1);
     transform: translateY(-1px);
-  }
-
-  .new-project-input {
-    width: 100%;
-    background: var(--color-background-glass-1);
-    border: 1px solid var(--color-overlay-border-primary);
-    color: var(--color-overlay-text);
-    padding: 0.5rem;
-    border-radius: 0.25rem;
-    margin: 0.25rem;
   }
 </style>

@@ -103,9 +103,16 @@ class ParameterGraph:
             path_str = self.G.nodes[name].get('path')
             if path_str:
                 path = Path(path_str)
-                if path.is_absolute():
+                if not path.is_absolute():
+                    path = self.root / path
+                
+                if relative:
+                    # This is tricky because the "relative" path needs to be
+                    # relative to the VFS root, not the graph's root.
+                    # For now, we assume the graph root IS the VFS root.
                     return str(path)
-                return str(self.root / path)
+                
+                return str(path.resolve())
         return None
 
     # Simple element attribute update

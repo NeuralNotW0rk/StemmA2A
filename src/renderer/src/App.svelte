@@ -1,6 +1,5 @@
 <script lang="ts">
   /* eslint-disable @typescript-eslint/no-explicit-any */
-  import { onMount } from 'svelte'
   import ParameterGraph from './components/graph/ParameterGraph.svelte'
   import Toolbar from './components/Toolbar.svelte'
   import AudioPlayer from './components/AudioPlayer.svelte'
@@ -11,6 +10,7 @@
   import ImportModelView from './components/views/ImportModelView.svelte'
   import RemovalView from './components/views/RemovalView.svelte'
   import NewProjectView from './components/views/NewProjectView.svelte'
+  import { onMount } from 'svelte'
   import {
     activeNodeStore,
     selectedForRemoval,
@@ -33,12 +33,32 @@
 
   onMount(async () => {
     try {
-      const runMode = await window.api.getRunMode()
       const status = await window.api.getHealth()
-      backendStatus.set({ ...status, run_mode: runMode })
+      backendStatus.set(status)
       console.log('Backend status:', status)
     } catch (error) {
       console.error('Failed to get backend health:', error)
+      errorInInfoPanel = {
+        title: 'Backend Connection Failed',
+        message: 'Waiting for backend...'
+      }
+      const MAX_RETRIES = 10
+      const RETRY_INTERVAL = 3000
+      for (let i = 0; i < MAX_RETRIES; i++) {
+        await new Promise((resolve) => setTimeout(resolve, RETRY_INTERVAL))
+        try {
+          const status = await window.api.getHealth()
+          backendStatus.set(status)
+          errorInInfoPanel = null
+          return
+        } catch (e) {
+          console.error(`Backend connection attempt ${i + 1} failed:`, e)
+          errorInInfoPanel = {
+            title: 'Backend Connection Failed',
+            message: `Waiting for backend... (attempt ${i + 2}/${MAX_RETRIES})`
+          }
+        }
+      }
       errorInInfoPanel = {
         title: 'Backend Connection Failed',
         message:
@@ -79,8 +99,8 @@
     project_name?: string
   }): Promise<void> {
     const projectName = data.project_name || data.project_path?.split(/[/\\]/).pop()
-    console.log(`Creating project: ${projectName}`)
-    await window.api.createProject(data)
+    console.log(`Creating project: ${projectName} at ${data.project_path}`)
+    await window.api.createProject(data) // Pass the whole data object
     graphData = await window.api.getGraphData(viewMode)
     currentProject = projectName || null
     if (data.project_path) {
@@ -89,10 +109,13 @@
     console.log(`Successfully created project: ${projectName}`)
   }
 
-  async function handleProjectCreateAndRefresh(data: { project_name: string }): Promise<void> {
+  async function handleProjectCreateAndRefresh(data: {
+    project_path: string
+    project_name: string
+  }): Promise<void> {
     try {
       await handleProjectCreate(data)
-      await toolbarComponent.refreshProjects()
+      await toolbarComponent.refreshRecentProjects()
     } catch (error: any) {
       console.error('Failed to create project:', error)
       // Re-throw the error so the child component can display it
@@ -164,16 +187,13 @@
       console.log(`Graph data refreshed for view mode ${viewMode}`)
     } catch (error) {
       console.error('Failed to get graph data:', error)
-      errorInInfoPanel = { title: 'Graph Refresh Failed', message: error.message }
+      errorInInfoPanel = { title: 'View Change Failed', message: error.message }
     }
   }
 
   function getActionPanelTitle(): string {
     if (actionPanelView === 'import-model') {
       return 'Import Model'
-    }
-    if (actionPanelView === 'new-project') {
-      return 'Create New Project'
     }
     if (actionPanelView === 'generation' && generationNode) {
       return generationNode.type === 'model' ? 'Generate' : 'Variation'
@@ -189,7 +209,6 @@
   <Toolbar
     bind:this={toolbarComponent}
     onprojectLoad={handleProjectLoad}
-    onNewProjectClick={() => ($isCreatingNewProject = true)}
     onviewModeChange={handleViewModeChange}
     onrefresh={refreshGraphData}
     onimportModel={() => (actionPanelView = 'import-model')}

@@ -3,10 +3,10 @@ import json
 import os
 import inspect
 
-from .elements.models.base import Model
-from .uid_gen import UIDGenerator, XXH3_64
+from param_graph.elements.models.base import Model
+from param_graph.uid_gen import UIDGenerator, XXH3_64
 
-class Engine(ABC):
+class ModelAdapter(ABC):
     def __init__(self, uid_generator: UIDGenerator = None) -> None:
         if uid_generator is None:
             # Set default uid generator (XXH3_64)

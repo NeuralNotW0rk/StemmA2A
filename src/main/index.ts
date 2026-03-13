@@ -39,12 +39,18 @@ function startPythonBackend(): Promise<void> {
       ? join(app.getAppPath(), 'backend', 'app.py')
       : join(process.resourcesPath, 'backend', 'app.py')
 
+    const spawnEnv = { ...process.env }
+    if (!is.dev) {
+      spawnEnv.DATA_ROOT = app.getPath('userData')
+    }
+
     if (is.dev && process.platform === 'win32') {
       // In dev mode on Windows, open a new terminal that stays open
       console.log('Starting Python backend in new window')
       const command = ['/c', 'start', 'cmd.exe', '/k', venvPath, '-u', appPyPath]
       pythonBackend = spawn('cmd.exe', command, {
-        cwd: join(app.getAppPath(), 'backend')
+        cwd: join(app.getAppPath(), 'backend'),
+        env: spawnEnv
       })
       // Resolve after a delay to allow the backend to initialize
       setTimeout(() => {
@@ -52,9 +58,12 @@ function startPythonBackend(): Promise<void> {
         resolve()
       }, 5000) // 5 seconds delay
     } else {
-      // Original behavior for production or other platforms
+      // For production or other dev platforms
+      const cwd = is.dev ? join(app.getAppPath(), 'backend') : undefined
       pythonBackend = spawn(venvPath, ['-u', appPyPath], {
-        stdio: ['pipe', 'pipe', 'pipe'] // Use pipes to capture output
+        stdio: ['pipe', 'pipe', 'pipe'], // Use pipes to capture output
+        env: spawnEnv,
+        cwd
       })
 
       let backendReady = false
@@ -153,41 +162,10 @@ app.whenReady().then(async () => {
     return await response.json()
   })
 
-  ipcMain.handle('getProjects', async () => {
-    const response = await fetchWithAuth(`${BACKEND_URL}/projects`)
-    if (!response.ok) {
-      const errorBody = await response.text()
-      throw new Error(`Failed to get projects. Status: ${response.status}. Error: ${errorBody}`)
-    }
-    const data = await response.json()
-    return data.projects
-  })
-
-  ipcMain.handle('getModels', async () => {
-    const response = await fetchWithAuth(`${BACKEND_URL}/models`)
-    if (!response.ok) {
-      const errorBody = await response.text()
-      throw new Error(`Failed to get models. Status: ${response.status}. Error: ${errorBody}`)
-    }
-    const data = await response.json()
-    return data.models
-  })
-
   ipcMain.handle('dialog:newProject', async () => {
-    let defaultPath = 'New Project'
-    try {
-      const response = await fetchWithAuth(`${BACKEND_URL}/project_root`)
-      if (response.ok) {
-        const data = await response.json()
-        defaultPath = data.project_root
-      }
-    } catch (error) {
-      console.error('Failed to get project root for new project dialog:', error)
-    }
-
     const { canceled, filePath } = await dialog.showSaveDialog({
       title: 'Create New Project',
-      defaultPath: defaultPath,
+      defaultPath: 'New Project',
       buttonLabel: 'Create',
       properties: ['createDirectory', 'showOverwriteConfirmation']
     })
@@ -199,20 +177,9 @@ app.whenReady().then(async () => {
   })
 
   ipcMain.handle('dialog:openProject', async () => {
-    let defaultPath = app.getPath('documents')
-    try {
-      const response = await fetchWithAuth(`${BACKEND_URL}/project_root`)
-      if (response.ok) {
-        const data = await response.json()
-        defaultPath = data.project_root
-      }
-    } catch (error) {
-      console.error('Failed to get project root for open project dialog:', error)
-    }
-
     const { canceled, filePaths } = await dialog.showOpenDialog({
       properties: ['openDirectory'],
-      defaultPath: defaultPath
+      defaultPath: app.getPath('documents')
     })
     if (canceled) {
       return null
@@ -281,39 +248,35 @@ app.whenReady().then(async () => {
     return await response.json()
   })
 
-  async function _getEngineConfig(engineName: string): Promise<any> {
+  async function _getAdapterConfig(adapterName: string): Promise<any> {
     try {
-      const response = await fetchWithAuth(`${BACKEND_URL}/engine_config/${engineName}`)
+      const response = await fetchWithAuth(`${BACKEND_URL}/adapter_config/${adapterName}`)
       if (!response.ok) {
         const errorBody = await response.text()
         throw new Error(
-          `Failed to get engine config. Status: ${response.status}. Error: ${errorBody}`
+          `Failed to get adapter config. Status: ${response.status}. Error: ${errorBody}`
         )
       }
       return await response.json()
     } catch (error) {
-      console.error('Get Engine Config Error:', error)
+      console.error('Get Adapter Config Error:', error)
       throw error
     }
   }
 
   // ... inside app.whenReady()
-  ipcMain.handle('getEngineConfig', async (_event, engineName) => {
-    return await _getEngineConfig(engineName)
+  ipcMain.handle('getAdapterConfig', async (_event, adapterName) => {
+    return await _getAdapterConfig(adapterName)
   })
 
 
-  ipcMain.handle('getRunMode', async () => {
-    return process.env.VFS_MODE === 'remote' ? 'remote' : 'local'
-  })
-
-  ipcMain.handle('get_generate_form_config', async (_event, engineName) => {
-    const config = await _getEngineConfig(engineName)
+  ipcMain.handle('get_generate_form_config', async (_event, adapterName) => {
+    const config = await _getAdapterConfig(adapterName)
     return config.generate
   })
 
-  ipcMain.handle('get_import_form_config', async (_event, engineName) => {
-    const config = await _getEngineConfig(engineName)
+  ipcMain.handle('get_import_form_config', async (_event, adapterName) => {
+    const config = await _getAdapterConfig(adapterName)
     return config.import
   })
 
