@@ -7,7 +7,7 @@ from stable_audio_tools import get_pretrained_model, create_model_from_config
 from stable_audio_tools.models.utils import load_ckpt_state_dict
 from stable_audio_tools.inference.generation import generate_diffusion_cond
 
-from .model_adapter import ModelAdapter
+from .base import ModelAdapter
 from param_graph.uid_gen import UIDMismatchError
 from param_graph.elements.artifacts.audio import Audio
 from param_graph.elements.models.stable_audio import StableAudioModel
@@ -21,7 +21,7 @@ class StableAudioAdapter(ModelAdapter):
         self.name = 'stable_audio_tools'
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.model = None
-        self.model_info = None
+        self.model_info: StableAudioModel | None = None
 
     def register_model(self, **kwargs) -> StableAudioModel:
         config_path = kwargs.get("config_path")
@@ -48,7 +48,7 @@ class StableAudioAdapter(ModelAdapter):
             checkpoint_hash=checkpoint_hash
         )
 
-    def load_model(self, info: StableAudioModel, verify: bool=True):
+    def load_model(self, info: StableAudioModel):
         # If a model is loaded, check if it's the same one
         if self.model and self.model_info.id == info.id:
             return # Same model, do nothing
@@ -63,7 +63,7 @@ class StableAudioAdapter(ModelAdapter):
         self.model.load_state_dict(load_ckpt_state_dict(info.checkpoint_path))
         self.model_info = info
 
-    def generate(self, output_dir: str, **kwargs):
+    def generate(self, output_dir: str, **kwargs) -> Audio:
         model = self.model.to(self.device)
         sample_rate = self.model_info.config["sample_rate"]
         sample_size = self.model_info.config["sample_size"]

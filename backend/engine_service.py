@@ -4,11 +4,12 @@ from flask_cors import CORS
 import torch
 import traceback
 from pathlib import Path
-import os
 
-from engine.engine import Engine
-from engine.stable_audio_tools import StableAudioTools
-from param_graph.graph import ParameterGraph # Needed for asset paths
+from pydantic import ValidationError
+from pydantic_util import create_dynamic_model
+from engine.engine_provider import EngineProvider
+from param_graph.registry import resolve_element
+
 
 app = Flask(__name__)
 CORS(app)
@@ -17,41 +18,14 @@ CORS(app)
 device_type_accelerator = "cuda" if torch.cuda.is_available() else "cpu"
 device_accelerator = torch.device(device_type_accelerator)
 
-engine: Engine = None
+# The engine service acts as a simple, remote executor.
+# It maintains a local file cache for assets required for generation.
+data_cache_root = Path("/app/data")
+data_cache_root.mkdir(parents=True, exist_ok=True)
 
-# This is a mock param_graph. In the remote engine, we don't have a full project context.
-# We only need it to resolve asset paths, assuming assets are uploaded to a predictable 'data' directory.
-mock_project_root = Path("/app/local_data")
-param_graph = ParameterGraph(str(mock_project_root))
-
-
-engine_registry = {
-    'stable_audio_tools': StableAudioTools
-}
-
-def set_engine(engine_name: str) -> bool:
-    """
-    Sets the global engine instance.
-    """
-    global engine
-    
-    if engine and engine.name == engine_name:
-        return True
-
-    engine_class = engine_registry.get(engine_name)
-    if not engine_class:
-        print(f"Error: Engine '{engine_name}' not found in engine_registry.")
-        return False
-
-    try:
-        engine = engine_class()
-        print(f"Engine activated: {engine.name}")
-        return True
-    except Exception as e:
-        print(f"Error initializing engine '{engine_name}': {e}")
-        traceback.print_exc()
-        engine = None
-        return False
+# Initialize the engine provider. Since this is the engine service,
+# it will always use the local engine implementation.
+engine_provider = EngineProvider()
 
 # --------------------
 #  Health Check
@@ -66,8 +40,35 @@ def health_check():
     })
 
 # --------------------
-#  Execution Endpoint
+#  Engine API
 # --------------------
+
+@app.route("/adapter_config/<adapter_name>", methods=["GET"])
+async def get_adapter_config(adapter_name):
+    """Get the form configuration for a specific adapter."""
+    try:
+        engine = engine_provider.get_engine()
+        config = await engine.get_adapter_config(adapter_name)
+        return jsonify(config)
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/register_model", methods=["POST"])
+async def register_model():
+    """Register a model with the engine."""
+    try:
+        data = request.get_json()
+        adapter_name = data.get("adapter")
+        params = data.get("params")
+
+        engine = engine_provider.get_engine()
+        model_artifact = await engine.register_model(adapter_name, **params)
+        return jsonify(model_artifact.to_dict())
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
 
 @app.route("/execute", methods=["POST"])
 async def execute():
@@ -77,43 +78,38 @@ async def execute():
     """
     try:
         data = request.get_json()
-        engine_name = data.get("engine")
-        engine_params = data.get("engine_params")
+        adapter_params = data.get("adapter_params") # This is the model dataclass
         generation_params = data.get("generation_params")
         output_dir = data.get("output_dir")
 
-        if not all([engine_name, engine_params, generation_params, output_dir]):
+        if not all([adapter_params, generation_params, output_dir]):
             return jsonify({"error": "Missing required parameters in request."}), 400
 
-        # 1. Set the engine
-        if not set_engine(engine_name):
-            return jsonify({"error": f"Engine '{engine_name}' not found"}), 404
+        engine = engine_provider.get_engine()
 
-        # 2. Check for missing assets before loading the model
-        required_assets = engine.get_required_assets(engine_params)
-        missing_hashes = []
-        for asset_hash in required_assets:
-            # The remote execution strategy is expected to upload assets to '/app/local_data/data/<hash>'
-            asset_path = param_graph.root / "data" / asset_hash
-            if not asset_path.exists():
-                missing_hashes.append(asset_hash)
+        # The remote engine now handles its own asset checking if needed,
+        # but the local engine (which this service runs) will assume assets are present.
+        model_element = resolve_element(adapter_params)
 
+        # Compare the model's required hashes against local storage.
+        required_hashes = set(model_element.get_hashes())
+        missing_hashes = [hsh for hsh in required_hashes if not (data_cache_root / hsh).exists()]
+        print(f"Missing assets: {missing_hashes}")
         if missing_hashes:
-            return jsonify({
-                "error": "Missing required assets for model execution.",
-                "missing_hashes": missing_hashes
-            }), 422  # Unprocessable Entity
-
-        # 3. Load the model from the provided parameters
-        model_info = engine.register_model(**engine_params)
-        engine.load_model(model_info)
-
-        # 4. Execute generation
-        artifact = await engine.generate(output_dir=output_dir, **generation_params)
+            return jsonify({"error": "Missing assets", "missing_hashes": missing_hashes}), 422
         
-        # 5. Return the resulting artifact
-        return jsonify(artifact.to_dict())
+        # Execute generation
+        audio_artifact = await engine.execute(
+            model_element.anchor(data_cache_root),
+            output_dir=output_dir,
+            **generation_params
+        )
+        
+        return jsonify(audio_artifact.to_dict())
 
+    except (ValidationError, ValueError) as e:
+        traceback.print_exc()
+        return jsonify({"error": "Invalid request", "details": str(e)}), 400
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
@@ -135,7 +131,7 @@ def upload():
         # The filename is expected to be the hash of the file
         filename = file.filename
         # Assets are saved in a 'data' subdirectory of our mock project root
-        upload_path = param_graph.root / "data" / filename
+        upload_path = data_cache_root / "data" / filename
         upload_path.parent.mkdir(parents=True, exist_ok=True)
         file.save(str(upload_path))
         return jsonify({"message": f"File {filename} uploaded successfully"})
@@ -147,11 +143,9 @@ def upload():
 # --------------------
 
 if __name__ == "__main__":
-    # The app runs on 0.0.0.0 to be accessible from the host machine
-    # when running in a Docker container. The port is 5000.
     print(f"Starting StemmA2A Engine Service on device: {device_accelerator}")
     app.run(
         host="0.0.0.0",
-        port=5000,
+        port=5001,
         debug=True
     )

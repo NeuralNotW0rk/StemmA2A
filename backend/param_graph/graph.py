@@ -14,7 +14,7 @@ from sklearn.manifold import TSNE
 from .util import *
 from .const import *
 from .elements.base_elements import Artifact, GraphElement
-from .registry import get_class, get_key_from_attrs
+from .registry import resolve_element
 
 DEFAULT_SR = 48000
 
@@ -84,19 +84,7 @@ class ParameterGraph:
             raise ValueError(f"Node '{node_id}' not found in the graph.")
 
         attrs = self.G.nodes[node_id].copy()
-        
-        # Determine the correct class and instantiate it
-        key = get_key_from_attrs(attrs)
-        TargetClass = get_class(key)
-        
-        # Filter attrs to only include keys that are in the TargetClass's __init__
-        # This is necessary because the graph node attributes may contain extra
-        # data that is not part of the class's definition.
-        sig = inspect.signature(TargetClass)
-        allowed_keys = set(sig.parameters.keys())
-        filtered_attrs = {k: v for k, v in attrs.items() if k in allowed_keys}
-
-        return TargetClass(**filtered_attrs)
+        return resolve_element(attrs)
 
     def get_path_from_name(self, name: str, relative=False):
         if self.G.has_node(name):

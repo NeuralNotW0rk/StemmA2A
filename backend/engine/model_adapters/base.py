@@ -25,6 +25,10 @@ class ModelAdapter(ABC):
     @abstractmethod
     def register_model(self, **kwargs) -> Model:
         pass
+    
+    @abstractmethod
+    def load_model(self, info: Model):
+        pass
 
     @abstractmethod
     def generate(self) -> None:

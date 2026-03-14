@@ -1,5 +1,7 @@
 # backend/param_graph/registry.py
 from typing import Dict, Type, Any
+import inspect
+
 
 # The global registry mapping keys to dataclass types
 _DATACLASS_REGISTRY: Dict[str, Type[Any]] = {}
@@ -37,3 +39,18 @@ def get_key_from_attrs(attrs: Dict[str, Any]) -> str:
     else:
         # For all other elements, the 'type' field is the key
         return node_type
+    
+def resolve_element(attrs: Dict[str, Any]) -> Type[Any]:
+    # Determine the correct class and instantiate it
+    key = get_key_from_attrs(attrs)
+    TargetClass = get_class(key)
+    
+    # Filter attrs to only include keys that are in the TargetClass's __init__
+    # This is necessary because the graph node attributes may contain extra
+    # data that is not part of the class's definition.
+    sig = inspect.signature(TargetClass)
+    allowed_keys = set(sig.parameters.keys())
+    filtered_attrs = {k: v for k, v in attrs.items() if k in allowed_keys}
+
+    return TargetClass(**filtered_attrs)
+

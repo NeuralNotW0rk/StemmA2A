@@ -13,8 +13,6 @@ from pydantic_util import create_dynamic_model
 from param_graph.util import load_audio
 from param_graph.graph import ParameterGraph
 from param_graph.elements.models.base import Model
-from engine.model_adapter import ModelAdapter
-from engine.stable_audio_tools import StableAudioAdapter
 from engine.engine_provider import EngineProvider
 from export_util import export_project
 
@@ -28,37 +26,12 @@ device_accelerator = torch.device(device_type_accelerator)
 APP_SAMPLE_RATE = 48000
 
 param_graph: ParameterGraph = None
-adapter: ModelAdapter = None
-engine_provider: EngineProvider = None
-
-adapter_registry = {
-    'stable_audio_tools': StableAudioAdapter
-}
-
-def set_adapter(adapter_name: str) -> bool:
-    """
-    Sets the global adapter instance. Avoids re-initializing the adapter if it's already active.
-    Returns True on success, False on failure.
-    """
-    global adapter
-    
-    if adapter and adapter.name == adapter_name:
-        return True
-
-    adapter_class = adapter_registry.get(adapter_name)
-    if not adapter_class:
-        print(f"Error: Adapter '{adapter_name}' not found in adapter_registry.")
-        return False
-
-    try:
-        adapter = adapter_class()
-        print(f"Adapter activated: {adapter.name}")
-        return True
-    except Exception as e:
-        print(f"Error initializing adapter '{adapter_name}': {e}")
-        traceback.print_exc()
-        adapter = None
-        return False
+execution_url = os.environ.get("ENGINE_URL")
+engine_provider = EngineProvider(remote_url=execution_url)
+if execution_url:
+    print(f"Engine: Using remote engine at {execution_url}")
+else:
+    print("Engine: Using local engine")
 
 
 # --------------------
@@ -86,7 +59,7 @@ def load_project():
     """
     Load a project from an absolute path.
     """
-    global param_graph, engine_provider
+    global param_graph
     
     try:
         data = request.get_json()
@@ -102,10 +75,6 @@ def load_project():
             return jsonify({"error": f"Project path '{project_path_str}' does not exist or is not a directory."}), 404
 
         param_graph = ParameterGraph(str(project_path))
-        
-        # Initialize the engine provider
-        execution_url = os.environ.get("EXECUTION_STRATEGY_URL")
-        engine_provider = EngineProvider(remote_url=execution_url, graph=param_graph)
 
         if param_graph.load():
             return jsonify({
@@ -136,7 +105,7 @@ def create_project():
     """
     Create a new project at a given absolute path.
     """
-    global param_graph, engine_provider
+    global param_graph
     
     try:
         data = request.get_json()
@@ -156,10 +125,6 @@ def create_project():
         param_graph = ParameterGraph(str(project_path))
         param_graph.project_name = final_project_name
         param_graph.save()
-        
-        # Initialize the engine provider
-        execution_url = os.environ.get("EXECUTION_STRATEGY_URL")
-        engine_provider = EngineProvider(remote_url=execution_url, graph=param_graph)
 
         return jsonify({
             "message": f"Project '{final_project_name}' created successfully.",
@@ -264,7 +229,7 @@ def get_tsne_graph():
 # --------------------
 
 @app.route("/register_model", methods=["POST"])
-def import_model():
+async def import_model():
     """Register a model by providing absolute paths to its files."""
     if param_graph is None:
         return jsonify({"error": "No project loaded"}), 400
@@ -272,7 +237,6 @@ def import_model():
     try:
         data = request.get_json()
         adapter_name = data.pop("adapter")
-        set_adapter(adapter_name)
 
         config_path = data.get("config_path")
         checkpoint_path = data.get("checkpoint_path")
@@ -284,7 +248,10 @@ def import_model():
         data["config_path"] = str(Path(config_path))
         data["checkpoint_path"] = str(Path(checkpoint_path))
 
-        param_graph.add_artifact(adapter.register_model(**data))
+        engine = engine_provider.get_engine()
+        model_artifact = await engine.register_model(adapter_name, **data)
+
+        param_graph.add_artifact(model_artifact)
         param_graph.save()
         
         return jsonify({
@@ -298,18 +265,11 @@ def import_model():
         return jsonify({"error": str(e)}), 500
 
 @app.route("/adapter_config/<adapter_name>", methods=["GET"])
-def get_adapter_config(adapter_name):
+async def get_adapter_config(adapter_name):
     """Get the form configuration for a specific adapter."""
     try:
-        adapter_class = adapter_registry.get(adapter_name)
-        if not adapter_class:
-            return jsonify({"error": f"Adapter '{adapter_name}' not found"}), 404
-
-        adapter_instance = adapter_class()
-        if not hasattr(adapter_instance, 'get_form_config'):
-             return jsonify({"error": f"Adapter '{adapter_name}' does not have a form configuration"}), 404
-
-        config = adapter_instance.get_form_config()
+        engine = engine_provider.get_engine()
+        config = await engine.get_adapter_config(adapter_name)
         return jsonify(config)
 
     except Exception as e:
@@ -336,33 +296,28 @@ async def generate():
         if not isinstance(model_element, Model):
             return jsonify({"error": f"Node '{model_id}' is not a valid model."}), 400
         
-        # 3. Set adapter and load the model object
-        if not set_adapter(model_element.adapter):
-            return jsonify({"error": f"Failed to set adapter '{model_element.adapter}'."}), 500
-        
-        adapter.load_model(model_element) # Pass the dataclass instance
-            
-        # 4. Get adapter config for validation
-        form_config = adapter.get_form_config().get("generate")
+        # 3. Get adapter config for validation
+        engine = engine_provider.get_engine()
+        form_config = await engine.get_adapter_config(model_element.adapter)
+        form_config = form_config.get("generate")
         if not form_config:
-            return jsonify({"error": f"Adapter '{adapter.name}' has no 'generate' configuration"}), 404
+            return jsonify({"error": f"Adapter '{model_element.adapter}' has no 'generate' configuration"}), 404
 
-        # 5. Validate the request body
+        # 4. Validate the request body
         DynamicArgsModel = create_dynamic_model(form_config)
         validated_params = DynamicArgsModel.model_validate(json_data)
 
-        # 6. Call actual generation using the provider
+        # 5. Call actual generation using the provider
         output_dir = param_graph.root / "generated"
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        engine = engine_provider.get_engine()
         audio_artifact = await engine.execute(
-            adapter,
+            model_element,
             output_dir=str(output_dir),
             **validated_params.model_dump()
         )
         
-        # 7. Add the new audio artifact to the graph
+        # 6. Add the new audio artifact to the graph
         param_graph.add_artifact(audio_artifact)
         param_graph.save()
         

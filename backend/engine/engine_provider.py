@@ -1,13 +1,16 @@
-from .engine import LocalEngine, RemoteEngine
-from param_graph.graph import ParameterGraph
+from .engine import Engine
+from .local_engine import LocalEngine
+from .remote_engine import RemoteEngine
 
 class EngineProvider:
-    def __init__(self, remote_url: str = None, graph: ParameterGraph = None):
-        self.remote_url = remote_url
-        self.graph = graph
+    _engine_instance: Engine = None
 
-    def get_engine(self):
-        if self.remote_url:
-            return RemoteEngine(self.remote_url, self.graph)
-        else:
-            return LocalEngine()
+    def __init__(self, remote_url: str = None):
+        if EngineProvider._engine_instance is None:
+            if remote_url:
+                EngineProvider._engine_instance = RemoteEngine(remote_url)
+            else:
+                EngineProvider._engine_instance = LocalEngine()
+    
+    def get_engine(self) -> Engine:
+        return EngineProvider._engine_instance

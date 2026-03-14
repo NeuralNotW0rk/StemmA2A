@@ -13,3 +13,12 @@ class StableAudioModel(Model):
     config: dict
     model_type: str
     adapter: str = 'stable_audio_tools'
+
+    def get_asset_map(self) -> dict[str, str]:
+        assets = super().get_asset_map()
+        assets.update({
+            "checkpoint_path": self.checkpoint_hash,
+            "config_path": self.config_hash,
+        })
+        return assets
+    
