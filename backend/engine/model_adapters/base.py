@@ -4,7 +4,7 @@ import os
 import inspect
 
 from param_graph.elements.models.base import Model
-from param_graph.uid_gen import UIDGenerator, XXH3_64
+from utils.uid_gen import UIDGenerator, XXH3_64
 
 class ModelAdapter(ABC):
     def __init__(self, uid_generator: UIDGenerator = None) -> None:

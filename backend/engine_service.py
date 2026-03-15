@@ -6,7 +6,8 @@ import traceback
 from pathlib import Path
 
 from pydantic import ValidationError
-from pydantic_util import create_dynamic_model
+
+from asset_cache import AssetCache
 from engine.engine_provider import EngineProvider
 from param_graph.registry import resolve_element
 
@@ -21,7 +22,7 @@ device_accelerator = torch.device(device_type_accelerator)
 # The engine service acts as a simple, remote executor.
 # It maintains a local file cache for assets required for generation.
 data_cache_root = Path("/app/data")
-data_cache_root.mkdir(parents=True, exist_ok=True)
+asset_cache = AssetCache(data_cache_root)
 
 # Initialize the engine provider. Since this is the engine service,
 # it will always use the local engine implementation.
@@ -43,69 +44,64 @@ def health_check():
 #  Engine API
 # --------------------
 
-@app.route("/adapter_config/<adapter_name>", methods=["GET"])
-async def get_adapter_config(adapter_name):
-    """Get the form configuration for a specific adapter."""
-    try:
-        engine = engine_provider.get_engine()
-        config = await engine.get_adapter_config(adapter_name)
-        return jsonify(config)
-    except Exception as e:
-        traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/register_model", methods=["POST"])
-async def register_model():
-    """Register a model with the engine."""
-    try:
-        data = request.get_json()
-        adapter_name = data.get("adapter")
-        params = data.get("params")
-
-        engine = engine_provider.get_engine()
-        model_artifact = await engine.register_model(adapter_name, **params)
-        return jsonify(model_artifact.to_dict())
-    except Exception as e:
-        traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
-
-
 @app.route("/execute", methods=["POST"])
 async def execute():
     """
-    Execute a generation task.
+    Execute a generic operation.
     This is the primary endpoint for the remote execution engine.
     """
     try:
         data = request.get_json()
-        adapter_params = data.get("adapter_params") # This is the model dataclass
-        generation_params = data.get("generation_params")
-        output_dir = data.get("output_dir")
+        operation_id = data.get("operation")
+        params = data.get("params")
 
-        if not all([adapter_params, generation_params, output_dir]):
-            return jsonify({"error": "Missing required parameters in request."}), 400
+        if not all([operation_id, params]):
+            return jsonify({"error": "Missing 'operation' or 'params' in request."}), 400
 
         engine = engine_provider.get_engine()
 
-        # The remote engine now handles its own asset checking if needed,
-        # but the local engine (which this service runs) will assume assets are present.
-        model_element = resolve_element(adapter_params)
+        # Find all graph elements in the params and resolve them from dicts to objects
+        resolved_params = params.copy()
+        all_elements = {}
+        for key, value in params.items():
+            # This is a simple check. We might need a more robust way to identify
+            # dicts that are meant to be graph elements.
+            if isinstance(value, dict) and 'id' in value and 'type' in value:
+                element = resolve_element(value)
+                resolved_params[key] = element
+                all_elements[key] = element
+                print(f"Received {key}: {element.type} {element.id}")
+        
+        # Check for missing assets across all resolved elements
+        required_hashes = set()
+        for element in all_elements.values():
+            required_hashes.update(element.get_hashes())
+        print(f"Required hashes: {list(required_hashes)}")
 
-        # Compare the model's required hashes against local storage.
-        required_hashes = set(model_element.get_hashes())
-        missing_hashes = [hsh for hsh in required_hashes if not (data_cache_root / hsh).exists()]
-        print(f"Missing assets: {missing_hashes}")
+        missing_hashes = [hsh for hsh in required_hashes if not asset_cache.exists(hsh)]
         if missing_hashes:
+            print(f"Missing assets: {missing_hashes}")
             return jsonify({"error": "Missing assets", "missing_hashes": missing_hashes}), 422
+        print("All assets present")
         
-        # Execute generation
-        audio_artifact = await engine.execute(
-            model_element.anchor(data_cache_root),
-            output_dir=output_dir,
-            **generation_params
-        )
+        # Anchor all elements with the local asset cache paths
+        anchored_params = resolved_params.copy()
+        for key, element in all_elements.items():
+            # This anchor logic might need to be more sophisticated if elements have multiple assets
+            # For now, we assume the first hash is representative for finding the anchor root.
+            if element.get_hashes():
+                 anchored_params[key] = element.anchor(asset_cache.get_anchor(element.get_hashes()[0]))
+
+        # If the operation is an element, get its ID
+        op_id_str = operation_id
+        if isinstance(operation_id, dict) and 'id' in operation_id:
+            op_id_str = operation_id['id']
+
+        # Execute the operation
+        result_artifact = await engine.execute(op_id_str, **anchored_params)
         
-        return jsonify(audio_artifact.to_dict())
+        # De-anchor the result before sending it back
+        return jsonify(result_artifact.de_anchor().to_dict())
 
     except (ValidationError, ValueError) as e:
         traceback.print_exc()
@@ -129,12 +125,9 @@ def upload():
 
     if file:
         # The filename is expected to be the hash of the file
-        filename = file.filename
-        # Assets are saved in a 'data' subdirectory of our mock project root
-        upload_path = data_cache_root / "data" / filename
-        upload_path.parent.mkdir(parents=True, exist_ok=True)
-        file.save(str(upload_path))
-        return jsonify({"message": f"File {filename} uploaded successfully"})
+        hsh = file.filename
+        asset_cache.save_file(file, hsh)
+        return jsonify({"message": f"File {hsh} uploaded successfully"})
 
     return jsonify({"error": "File upload failed"}), 500
 

@@ -9,12 +9,12 @@ from pathlib import Path
 import os
 
 from pydantic import ValidationError
-from pydantic_util import create_dynamic_model
+from utils.pydantic_util import create_dynamic_model
 from param_graph.util import load_audio
 from param_graph.graph import ParameterGraph
 from param_graph.elements.models.base import Model
 from engine.engine_provider import EngineProvider
-from export_util import export_project
+from utils.export_util import export_project
 
 app = Flask(__name__)
 CORS(app)
@@ -312,7 +312,8 @@ async def generate():
         output_dir.mkdir(parents=True, exist_ok=True)
 
         audio_artifact = await engine.execute(
-            model_element,
+            "generate",
+            model_element=model_element,
             output_dir=str(output_dir),
             **validated_params.model_dump()
         )

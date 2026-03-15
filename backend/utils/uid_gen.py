@@ -10,10 +10,10 @@ class UIDMismatchError(Exception):
     pass
 
 class UIDGenerator(ABC):
-    DELIMITER = "-"
+    DELIMITER = "."
 
     @abstractmethod
-    def get_prefix(self) -> str:
+    def get_method_name(self) -> str:
         pass
     
     @abstractmethod
@@ -39,13 +39,13 @@ class UIDGenerator(ABC):
 
 class XXH3_64(UIDGenerator):
 
-    def get_prefix(self):
-        return "XXH3_64"
+    def get_method_name(self):
+        return "xxh3_64"
     
     def from_string(self, data: str) -> str:
         """Generates a hex string UID using XXH3."""
         h = xxhash.xxh3_64
-        return f"{self.get_prefix()}{self.DELIMITER}{xxhash.xxh3_64_hexdigest(data)}"
+        return f"{xxhash.xxh3_64_hexdigest(data)}{self.DELIMITER}{self.get_method_name()}"
     
     def from_tensor(self, tensor: Tensor) -> str:
         """
@@ -56,7 +56,7 @@ class XXH3_64(UIDGenerator):
         # 3. Pass directly to xxhash (handles the buffer protocol)
         data = tensor.detach().cpu().contiguous().numpy()
         
-        return f"{self.get_prefix()}{self.DELIMITER}{xxhash.xxh3_64(data).hexdigest()}"
+        return f"{xxhash.xxh3_64(data).hexdigest()}{self.DELIMITER}{self.get_method_name()}"
     
     def from_module(self, module: Module) -> str:
         """
@@ -72,7 +72,7 @@ class XXH3_64(UIDGenerator):
             data = state_dict[key].detach().cpu().contiguous().numpy().tobytes()
             h.update(data)
             
-        return f"{self.get_prefix()}{self.DELIMITER}{h.hexdigest()}"
+        return f"{h.hexdigest()}{self.DELIMITER}{self.get_method_name()}"
 
     def from_dict(self, data: dict) -> str:
         """

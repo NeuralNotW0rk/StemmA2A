@@ -20,6 +20,18 @@ class GraphElement:
     def get_hashes(self) -> list[str]:
         """Automatically derived from the asset map."""
         return list(self.get_asset_map().values())
+
+    def get_local_assets(self) -> dict[str, str]:
+        """Returns a mapping of {hash_value: local_path} for all assets in the element."""
+        asset_map = self.get_asset_map() # This gives {field_name: hash_value}
+        local_assets = {}
+        for field_name, hash_value in asset_map.items():
+            if not hasattr(self, field_name):
+                continue
+            local_path = getattr(self, field_name)
+            if local_path and hash_value:
+                local_assets[hash_value] = local_path
+        return local_assets
     
     def de_anchor(self) -> GraphElement:
         """

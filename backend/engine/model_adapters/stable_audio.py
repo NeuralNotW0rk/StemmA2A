@@ -8,7 +8,7 @@ from stable_audio_tools.models.utils import load_ckpt_state_dict
 from stable_audio_tools.inference.generation import generate_diffusion_cond
 
 from .base import ModelAdapter
-from param_graph.uid_gen import UIDMismatchError
+from utils.uid_gen import UIDMismatchError
 from param_graph.elements.artifacts.audio import Audio
 from param_graph.elements.models.stable_audio import StableAudioModel
 

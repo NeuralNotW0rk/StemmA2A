@@ -1,87 +1,107 @@
 import aiohttp
-
-from param_graph.elements.models.base import Model
+from param_graph.elements.base_elements import GraphElement
 
 from .engine import Engine
-from param_graph.elements.artifacts.audio import Audio
+from param_graph.registry import resolve_element
+
+def find_elements(d: dict) -> dict[str, GraphElement]:
+    elements = {}
+    for k, v in d.items():
+        if isinstance(v, GraphElement):
+            elements[k] = v
+        elif isinstance(v, dict):
+            # For now, we won't recurse into dicts.
+            # This can be expanded if we have nested elements.
+            pass 
+    return elements
 
 
 class RemoteEngine(Engine):
     def __init__(self, remote_url: str):
+        super().__init__()
         self.remote_url = remote_url
 
-    async def get_adapter_config(self, adapter_name: str) -> dict:
-        """Get the form configuration for a specific adapter from the remote engine."""
-        async with aiohttp.ClientSession() as session:
-            async with session.get(f"{self.remote_url}/adapter_config/{adapter_name}") as response:
-                response.raise_for_status()
-                return await response.json()
+    async def register_model(self, adapter_name: str, **kwargs) -> GraphElement:
+        """Register a model by providing absolute paths to its files."""
+        adapter_class = self._get_adapter_class(adapter_name)
+        adapter_instance = adapter_class()
+        model = adapter_instance.register_model(**kwargs)
+        # The adapter_instance is temporary and will be garbage collected.
+        # This should release any memory it was using.
+        return model
 
-    async def register_model(self, adapter_name: str, **kwargs) -> Model:
-        """Register a model on the remote engine."""
+    async def execute(self, operation: str, **kwargs) -> GraphElement:
+        # 1. Gather all local assets from all graph elements in the parameters.
+        # This gives us a complete hash -> path mapping for anything we might need to upload.
+        print(kwargs)
+        all_elements = find_elements(kwargs)
+        local_assets = {}
+        for element in all_elements.values():
+            local_assets.update(element.get_local_assets())
+
+        # 2. De-anchor all elements before serialization.
+        # This removes local paths, which are not meaningful on the remote server.
+        anchored_params = kwargs.copy()
+        for name, element in all_elements.items():
+            anchored_params[name] = element.de_anchor()
+
+        # 3. Prepare the payload for the remote execution endpoint.
         payload = {
-            "adapter": adapter_name,
-            "params": kwargs
-        }
-        async with aiohttp.ClientSession() as session:
-            async with session.post(f"{self.remote_url}/register_model", json=payload) as response:
-                response.raise_for_status()
-                json_response = await response.json()
-                return Model(**json_response)
-
-    async def execute(self, model_element: Model, output_dir: str, **kwargs) -> Audio:
-        # Remove local paths
-        model_element = model_element.de_anchor()
-
-        # Prepare the payload
-        payload = {
-            "adapter_params": model_element.to_dict(),
-            "generation_params": kwargs,
-            "output_dir": output_dir
+            "operation": operation,
+            "params": anchored_params,
         }
 
         async with aiohttp.ClientSession() as session:
             while True:
-                try:
-                    async with session.post(f"{self.remote_url}/execute", json=payload) as response:
-                        response.raise_for_status()
-                        json_response = await response.json()
-                        return Audio(**json_response)
-                except aiohttp.ClientResponseError as e:
-                    if e.status == 422: # Missing assets
-                        error_details = await e.json()
+                # Use a custom json serializer that can handle dataclasses
+                # This is a bit of a hack, we should probably have a proper serializer
+                import json
+                from dataclasses import is_dataclass, asdict
+                class DataclassEncoder(json.JSONEncoder):
+                    def default(self, o):
+                        if is_dataclass(o):
+                            return asdict(o)
+                        return super().default(o)
+                
+                async with session.post(f"{self.remote_url}/execute", data=json.dumps(payload, cls=DataclassEncoder),
+                                        headers={'Content-Type': 'application/json'}) as response:
+                    if response.status == 422: # Missing assets
+                        error_details = await response.json()
                         missing_hashes = error_details.get("missing_hashes", [])
                         if not missing_hashes:
-                            raise e # Re-raise if the error is not about missing assets
+                            response.raise_for_status() # Re-raise if the error is not about missing assets
                         
-                        await self.upload_missing_assets(model_element, missing_hashes, session)
+                        can_retry = await self.upload_missing_assets(missing_hashes, local_assets, session)
+                        if not can_retry:
+                            # If we couldn't upload all missing assets, we're in a bad state.
+                            # Re-raise the original error instead of looping.
+                            response.raise_for_status()
+                        
                         # Retry the request after uploading
                         continue
-                    else:
-                        raise e
-
-    async def upload_missing_assets(self, model_element: Model, missing_hashes: list, session: aiohttp.ClientSession):
-        # Create a mapping from hash to path from the model_element
-        hash_to_path = {}
-        # This could be more generic, but for now we'll handle the known asset types
-        if hasattr(model_element, 'checkpoint_hash') and hasattr(model_element, 'checkpoint_path'):
-            hash_to_path[model_element.checkpoint_hash] = model_element.checkpoint_path
-        if hasattr(model_element, 'config_hash') and hasattr(model_element, 'config_path'):
-            hash_to_path[model_element.config_hash] = model_element.config_path
-
-        for asset_hash in missing_hashes:
-            asset_path = hash_to_path.get(asset_hash)
-            if asset_path:
-                data = aiohttp.FormData()
-                data.add_field('file',
-                               open(asset_path, 'rb'),
-                               filename=asset_hash,
-                               content_type='application/octet-stream')
-
-                async with session.post(f"{self.remote_url}/upload", data=data) as response:
+                    
                     response.raise_for_status()
-            else:
-                # Handle cases where the asset is not found in the graph
-                # This could be an error condition
-                print(f"Warning: could not find path for missing hash {asset_hash} in model_element")
-                pass
+                    json_response = await response.json()
+                    # Re-create the graph element from the JSON response
+                    return resolve_element(**json_response)
+
+    async def upload_missing_assets(self, missing_hashes: list[str], local_assets: dict[str, str], session: aiohttp.ClientSession) -> bool:
+        paths_to_upload = []
+        for asset_hash in missing_hashes:
+            asset_path = local_assets.get(asset_hash)
+            if not asset_path:
+                print(f"Warning: could not find path for missing hash {asset_hash}")
+                return False # Abort if any asset is missing.
+            paths_to_upload.append((asset_hash, asset_path))
+
+        for asset_hash, asset_path in paths_to_upload:
+            data = aiohttp.FormData()
+            data.add_field('file',
+                           open(asset_path, 'rb'),
+                           filename=asset_hash,
+                           content_type='application/octet-stream')
+
+            async with session.post(f"{self.remote_url}/upload", data=data) as response:
+                response.raise_for_status()
+        
+        return True

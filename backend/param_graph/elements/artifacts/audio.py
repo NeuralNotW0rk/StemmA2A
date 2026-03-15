@@ -7,4 +7,12 @@ from param_graph.registry import register
 @dataclass(kw_only=True)
 class Audio(Artifact):
     path: str
+    hash: str
     type: str = 'audio'
+
+    def get_asset_map(self) -> dict[str, str]:
+        assets = super().get_asset_map()
+        assets.update({
+            "path": self.hash,
+        })
+        return assets
