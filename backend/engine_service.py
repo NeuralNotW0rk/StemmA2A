@@ -22,7 +22,6 @@ device_accelerator = torch.device(device_type_accelerator)
 # The engine service acts as a simple, remote executor.
 # It maintains a local file cache for assets required for generation.
 data_cache_root = Path("/app/data")
-asset_cache = AssetCache(data_cache_root)
 
 # Initialize the engine provider. Since this is the engine service,
 # it will always use the local engine implementation.
@@ -78,7 +77,7 @@ async def execute():
             required_hashes.update(element.get_hashes())
         print(f"Required hashes: {list(required_hashes)}")
 
-        missing_hashes = [hsh for hsh in required_hashes if not asset_cache.exists(hsh)]
+        missing_hashes = [hsh for hsh in required_hashes if not (data_cache_root / hsh[:2] / hsh).exists()]
         if missing_hashes:
             print(f"Missing assets: {missing_hashes}")
             return jsonify({"error": "Missing assets", "missing_hashes": missing_hashes}), 422
@@ -87,10 +86,7 @@ async def execute():
         # Anchor all elements with the local asset cache paths
         anchored_params = resolved_params.copy()
         for key, element in all_elements.items():
-            # This anchor logic might need to be more sophisticated if elements have multiple assets
-            # For now, we assume the first hash is representative for finding the anchor root.
-            if element.get_hashes():
-                 anchored_params[key] = element.anchor(asset_cache.get_anchor(element.get_hashes()[0]))
+            anchored_params[key] = element.anchor(data_cache_root)
 
         # If the operation is an element, get its ID
         op_id_str = operation_id
@@ -126,7 +122,7 @@ def upload():
     if file:
         # The filename is expected to be the hash of the file
         hsh = file.filename
-        asset_cache.save_file(file, hsh)
+        file.save(data_cache_root / hsh[:2] / hsh)
         return jsonify({"message": f"File {hsh} uploaded successfully"})
 
     return jsonify({"error": "File upload failed"}), 500
