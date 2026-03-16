@@ -9,7 +9,7 @@ from pathlib import Path
 import os
 
 from pydantic import ValidationError
-from backend.utils.validation import create_dynamic_model
+from utils.validation import create_dynamic_model
 from param_graph.util import load_audio
 from param_graph.graph import ParameterGraph
 from param_graph.elements.models.base import Model

@@ -3,7 +3,7 @@ from dataclasses import dataclass, asdict, field, replace
 from pathlib import Path
 from time import time
 
-from backend.utils.uid import path_from_uid
+from utils.uid import path_from_uid
 from ..registry import register
 
 @dataclass(kw_only=True)
