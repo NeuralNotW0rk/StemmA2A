@@ -1,4 +1,5 @@
 import aiohttp
+import os
 from param_graph.elements.base_elements import GraphElement
 
 from .engine import Engine
@@ -20,6 +21,8 @@ class RemoteEngine(Engine):
     def __init__(self, remote_url: str):
         super().__init__()
         self.remote_url = remote_url
+        self.cf_client_id = os.environ.get("CF_ACCESS_CLIENT_ID")
+        self.cf_client_secret = os.environ.get("CF_ACCESS_CLIENT_SECRET")
 
     async def register_model(self, adapter_name: str, **kwargs) -> GraphElement:
         """Register a model by providing absolute paths to its files."""
@@ -30,10 +33,16 @@ class RemoteEngine(Engine):
         # This should release any memory it was using.
         return model
 
+    def _get_auth_headers(self) -> dict:
+        headers = {}
+        if self.cf_client_id and self.cf_client_secret:
+            headers["CF-Access-Client-Id"] = self.cf_client_id
+            headers["CF-Access-Client-Secret"] = self.cf_client_secret
+        return headers
+
     async def execute(self, operation: str, **kwargs) -> GraphElement:
         # 1. Gather all local assets from all graph elements in the parameters.
         # This gives us a complete uid -> path mapping for anything we might need to upload.
-        print(kwargs)
         all_elements = find_elements(kwargs)
         local_assets = {}
         for element in all_elements.values():
@@ -51,7 +60,9 @@ class RemoteEngine(Engine):
             "params": anchored_params,
         }
 
-        async with aiohttp.ClientSession() as session:
+        auth_headers = self._get_auth_headers()
+        
+        async with aiohttp.ClientSession(headers=auth_headers) as session:
             while True:
                 # Use a custom json serializer that can handle dataclasses
                 # This is a bit of a hack, we should probably have a proper serializer

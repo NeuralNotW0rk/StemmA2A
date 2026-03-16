@@ -1,5 +1,4 @@
-# backend/param_graph/registry.py
-from typing import Dict, Type, Any
+from typing import Dict, Type, Any, get_type_hints
 import inspect
 
 
@@ -44,13 +43,31 @@ def resolve_element(attrs: Dict[str, Any]) -> Type[Any]:
     # Determine the correct class and instantiate it
     key = get_key_from_attrs(attrs)
     TargetClass = get_class(key)
-    
-    # Filter attrs to only include keys that are in the TargetClass's __init__
-    # This is necessary because the graph node attributes may contain extra
-    # data that is not part of the class's definition.
+
+    # Get constructor signature and type hints for the target class
     sig = inspect.signature(TargetClass)
-    allowed_keys = set(sig.parameters.keys())
-    filtered_attrs = {k: v for k, v in attrs.items() if k in allowed_keys}
+    try:
+        type_hints = get_type_hints(TargetClass)
+    except (NameError, TypeError):
+        type_hints = {} # Fallback if hints can't be resolved
 
-    return TargetClass(**filtered_attrs)
+    constructor_attrs = {}
+    for param_name in sig.parameters:
+        if param_name in attrs:
+            value = attrs[param_name]
+            param_type = type_hints.get(param_name)
 
+            # If the parameter is typed as a class and the value is a dictionary,
+            # we attempt to instantiate the class with the dictionary's values.
+            # This handles nested objects like the 'Asset' dataclass.
+            if inspect.isclass(param_type) and isinstance(value, dict):
+                try:
+                    # This assumes the nested dict keys match the nested class's __init__ args
+                    constructor_attrs[param_name] = param_type(**value)
+                except TypeError:
+                    # If instantiation fails, we pass the dictionary as is.
+                    constructor_attrs[param_name] = value
+            else:
+                constructor_attrs[param_name] = value
+
+    return TargetClass(**constructor_attrs)
