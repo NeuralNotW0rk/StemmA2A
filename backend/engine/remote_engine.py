@@ -32,7 +32,7 @@ class RemoteEngine(Engine):
 
     async def execute(self, operation: str, **kwargs) -> GraphElement:
         # 1. Gather all local assets from all graph elements in the parameters.
-        # This gives us a complete hash -> path mapping for anything we might need to upload.
+        # This gives us a complete uid -> path mapping for anything we might need to upload.
         print(kwargs)
         all_elements = find_elements(kwargs)
         local_assets = {}
@@ -67,11 +67,11 @@ class RemoteEngine(Engine):
                                         headers={'Content-Type': 'application/json'}) as response:
                     if response.status == 422: # Missing assets
                         error_details = await response.json()
-                        missing_hashes = error_details.get("missing_hashes", [])
-                        if not missing_hashes:
+                        missing_uids = error_details.get("missing_uids", [])
+                        if not missing_uids:
                             response.raise_for_status() # Re-raise if the error is not about missing assets
                         
-                        can_retry = await self.upload_missing_assets(missing_hashes, local_assets, session)
+                        can_retry = await self.upload_missing_assets(missing_uids, local_assets, session)
                         if not can_retry:
                             # If we couldn't upload all missing assets, we're in a bad state.
                             # Re-raise the original error instead of looping.
@@ -85,20 +85,20 @@ class RemoteEngine(Engine):
                     # Re-create the graph element from the JSON response
                     return resolve_element(**json_response)
 
-    async def upload_missing_assets(self, missing_hashes: list[str], local_assets: dict[str, str], session: aiohttp.ClientSession) -> bool:
+    async def upload_missing_assets(self, missing_uids: list[str], local_assets: dict[str, str], session: aiohttp.ClientSession) -> bool:
         paths_to_upload = []
-        for asset_hash in missing_hashes:
-            asset_path = local_assets.get(asset_hash)
+        for asset_uid in missing_uids:
+            asset_path = local_assets.get(asset_uid)
             if not asset_path:
-                print(f"Warning: could not find path for missing hash {asset_hash}")
+                print(f"Warning: could not find path for missing uid {asset_uid}")
                 return False # Abort if any asset is missing.
-            paths_to_upload.append((asset_hash, asset_path))
+            paths_to_upload.append((asset_uid, asset_path))
 
-        for asset_hash, asset_path in paths_to_upload:
+        for asset_uid, asset_path in paths_to_upload:
             data = aiohttp.FormData()
             data.add_field('file',
                            open(asset_path, 'rb'),
-                           filename=asset_hash,
+                           filename=asset_uid,
                            content_type='application/octet-stream')
 
             async with session.post(f"{self.remote_url}/upload", data=data) as response:

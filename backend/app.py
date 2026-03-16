@@ -9,12 +9,11 @@ from pathlib import Path
 import os
 
 from pydantic import ValidationError
-from utils.pydantic_util import create_dynamic_model
+from backend.utils.validation import create_dynamic_model
 from param_graph.util import load_audio
 from param_graph.graph import ParameterGraph
 from param_graph.elements.models.base import Model
 from engine.engine_provider import EngineProvider
-from utils.export_util import export_project
 
 app = Flask(__name__)
 CORS(app)
@@ -138,32 +137,6 @@ def create_project():
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
-@app.route("/export_project", methods=["POST"])
-def export_project_route():
-    """Export a project to a specified directory."""
-    try:
-        data = request.get_json()
-        if not data:
-            return jsonify({"error": "Request body is required"}), 400
-
-        project_path = data.get("project_path")
-        export_path = data.get("export_path")
-
-        if not project_path or not export_path:
-            return jsonify({"error": "project_path and export_path are required"}), 400
-        
-        destination = export_project(project_path, export_path)
-        
-        return jsonify({
-            "message": "Project exported successfully.",
-            "destination": destination,
-            "success": True
-        })
-        
-    except Exception as e:
-        print(f"Failed to export project: {e}")
-        traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
 
 @app.route("/project", methods=["GET"])
 def get_project():

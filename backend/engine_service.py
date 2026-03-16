@@ -7,9 +7,9 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from asset_cache import AssetCache
 from engine.engine_provider import EngineProvider
 from param_graph.registry import resolve_element
+from backend.utils.uid import path_from_uid
 
 
 app = Flask(__name__)
@@ -72,15 +72,15 @@ async def execute():
                 print(f"Received {key}: {element.type} {element.id}")
         
         # Check for missing assets across all resolved elements
-        required_hashes = set()
+        required_uids = set()
         for element in all_elements.values():
-            required_hashes.update(element.get_hashes())
-        print(f"Required hashes: {list(required_hashes)}")
+            required_uids.update(element.get_uids())
+        print(f"Required uids: {list(required_uids)}")
 
-        missing_hashes = [hsh for hsh in required_hashes if not (data_cache_root / hsh[:2] / hsh).exists()]
-        if missing_hashes:
-            print(f"Missing assets: {missing_hashes}")
-            return jsonify({"error": "Missing assets", "missing_hashes": missing_hashes}), 422
+        missing_uids = [uid for uid in required_uids if not (data_cache_root / path_from_uid(uid)).exists()]
+        if missing_uids:
+            print(f"Missing assets: {missing_uids}")
+            return jsonify({"error": "Missing assets", "missing_uids": missing_uids}), 422
         print("All assets present")
         
         # Anchor all elements with the local asset cache paths
@@ -120,10 +120,10 @@ def upload():
         return jsonify({"error": "No selected file"}), 400
 
     if file:
-        # The filename is expected to be the hash of the file
-        hsh = file.filename
-        file.save(data_cache_root / hsh[:2] / hsh)
-        return jsonify({"message": f"File {hsh} uploaded successfully"})
+        # The filename is expected to be the uid of the file
+        uid = file.filename
+        file.save(data_cache_root / path_from_uid(uid))
+        return jsonify({"message": f"File {uid} uploaded successfully"})
 
     return jsonify({"error": "File upload failed"}), 500
 

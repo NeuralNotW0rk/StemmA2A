@@ -4,7 +4,7 @@ import os
 import inspect
 
 from param_graph.elements.models.base import Model
-from utils.uid_gen import UIDGenerator, XXH3_64
+from backend.utils.uid import UIDGenerator, XXH3_64
 
 class ModelAdapter(ABC):
     def __init__(self, uid_generator: UIDGenerator = None) -> None:
@@ -27,7 +27,7 @@ class ModelAdapter(ABC):
         pass
     
     @abstractmethod
-    def load_model(self, info: Model):
+    def load_model(self, info: Model, verify: bool = True):
         pass
 
     @abstractmethod

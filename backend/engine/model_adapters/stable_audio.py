@@ -2,13 +2,15 @@ import json
 import os
 import torch
 import torchaudio
+from pathlib import Path
+
 from einops import rearrange
-from stable_audio_tools import get_pretrained_model, create_model_from_config
+from stable_audio_tools import create_model_from_config
 from stable_audio_tools.models.utils import load_ckpt_state_dict
 from stable_audio_tools.inference.generation import generate_diffusion_cond
 
 from .base import ModelAdapter
-from utils.uid_gen import UIDMismatchError
+from backend.utils.uid import UIDMismatchError, path_from_uid
 from param_graph.elements.artifacts.audio import Audio
 from param_graph.elements.models.stable_audio import StableAudioModel
 
@@ -29,26 +31,26 @@ class StableAudioAdapter(ModelAdapter):
             config_json = cf.read()
             config = json.loads(config_json)
         
-        config_hash = self.uid_generator.from_dict(config)
+        config_uid = self.uid_generator.from_dict(config)
 
         # Create a temporary model object to generate a UID from
         model = create_model_from_config(config)
         model.load_state_dict(load_ckpt_state_dict(kwargs.get("checkpoint_path")))
 
-        checkpoint_hash = self.uid_generator.from_module(model)
+        checkpoint_uid = self.uid_generator.from_module(model)
 
-        # Combine the hashes to create a single ID
-        model_id = self.uid_generator.from_hashes([checkpoint_hash, config_hash])
+        # Combine the UIDs to create a single ID
+        model_id = self.uid_generator.from_uids([checkpoint_uid, config_uid])
 
         return StableAudioModel(
             **kwargs,
             config=config,
-            config_hash=config_hash,
+            config_uid=config_uid,
             id=model_id,
-            checkpoint_hash=checkpoint_hash
+            checkpoint_uid=checkpoint_uid
         )
-
-    def load_model(self, info: StableAudioModel):
+        
+    def load_model(self, info: StableAudioModel, verify: bool = True):
         # If a model is loaded, check if it's the same one
         if self.model and self.model_info.id == info.id:
             return # Same model, do nothing
@@ -58,12 +60,24 @@ class StableAudioAdapter(ModelAdapter):
             del self.model
             self.model = None
 
+        # Load the config
+        with open(self.model_info.config_path, 'r') as cf:
+            config_json = cf.read()
+            config = json.loads(config_json)
+        
+        if verify and self.uid_generator.from_dict(config) != info.config_uid:
+            raise UIDMismatchError("Config UID mismatch")
+
         # Load the new model
         self.model = create_model_from_config(info.config)
         self.model.load_state_dict(load_ckpt_state_dict(info.checkpoint_path))
         self.model_info = info
 
-    def generate(self, output_dir: str, **kwargs) -> Audio:
+        if verify and self.uid_generator.from_module(self.model) != info.checkpoint_uid:
+            raise UIDMismatchError("Checkpoint UID mismatch")
+            
+
+    def generate(self, output_dir: Path, **kwargs) -> Audio:
         model = self.model.to(self.device)
         sample_rate = self.model_info.config["sample_rate"]
         sample_size = self.model_info.config["sample_size"]
@@ -101,13 +115,12 @@ class StableAudioAdapter(ModelAdapter):
 
         # Save to file
         id = self.uid_generator.from_tensor(output)
-        filename = f"{id}.wav"
-        output_path = os.path.join(output_dir, id[:2], filename)
-        torchaudio.save(output_path, output, sample_rate)
+        path = output_dir / path_from_uid(id)
+        torchaudio.save(path, output, sample_rate)
 
         # Create audio artifact
         return Audio(
-            id=self.uid_generator.from_tensor(output),
+            id=id,
+            path=str(path),
             name=generate_slug(2),
-            path=output_path,
         )
