@@ -1,20 +1,36 @@
 import json
-import os
-import torch
-import torchaudio
+import struct
 from pathlib import Path
 
+import torch
+import torchaudio
 from einops import rearrange
 from stable_audio_tools import create_model_from_config
-from stable_audio_tools.models.utils import load_ckpt_state_dict
 from stable_audio_tools.inference.generation import generate_diffusion_cond
+from safetensors.torch import load_file
+from coolname import generate_slug
 
 from .base import ModelAdapter
 from utils.uid import UIDMismatchError, path_from_uid
 from param_graph.elements.artifacts.audio import Audio
 from param_graph.elements.models.stable_audio import StableAudioModel
 
-from coolname import generate_slug
+
+# Workaround for the file extension-based safetensors loading in stable audio tools
+def load_ckpt_state_dict(ckpt_path):
+    with open(ckpt_path, "rb") as f:
+        # Check for Safetensors: 8-byte header length + starts with '{'
+        header = f.read(9)
+        is_safetensors = (len(header) == 9 and 
+                          header[8:9] == b'{' and 
+                          struct.unpack("<Q", header[:8])[0] < 100_000_000)
+        
+    if is_safetensors:
+        state_dict = load_file(ckpt_path)
+    else:
+        state_dict = torch.load(ckpt_path, map_location="cpu", weights_only=True)["state_dict"]
+    
+    return state_dict
 
 
 class StableAudioAdapter(ModelAdapter):
