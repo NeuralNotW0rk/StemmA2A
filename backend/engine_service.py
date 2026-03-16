@@ -9,7 +9,7 @@ from pydantic import ValidationError
 
 from engine.engine_provider import EngineProvider
 from param_graph.registry import resolve_element
-from backend.utils.uid import path_from_uid
+from utils.uid import path_from_uid
 
 
 app = Flask(__name__)

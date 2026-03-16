@@ -10,7 +10,8 @@ services:
               count: 1
               capabilities: [gpu]
     volumes:
-      - ./backend:/app
+      - ./backend:/app          # Maps your code folder
+      - ~/stemma2a/cache:/app/data    # Maps to C:\Users\<YourName>\app-data
     environment:
       PYTHONUNBUFFERED: 1
     networks:
