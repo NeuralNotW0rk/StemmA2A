@@ -1,6 +1,12 @@
 import inspect
+import tempfile
+from pathlib import Path
+import torchaudio
+import torch
+
 from param_graph.elements.base_elements import GraphElement
 from param_graph.elements.models.base import Model
+from utils.uid import path_from_uid
 
 from .engine import Engine
 from .model_cache import ModelCache
@@ -23,11 +29,36 @@ class LocalEngine(Engine):
     async def generate(self, **kwargs) -> GraphElement:
         """
         Gets a cached model adapter and uses it to generate an output.
+        Saves the output to a temporary file and returns the artifact
+        anchored to that file.
         """
         model_element = kwargs["model_element"]
         adapter_class = self._get_adapter_class(model_element.adapter)
         adapter = self.model_cache.get(model_element, adapter_class)
-        return adapter.generate(**kwargs)
+
+        artifact, tensor = adapter.generate(**kwargs)
+
+        # We need to save the tensor to a temporary file.
+        temp_dir = tempfile.TemporaryDirectory()
+        temp_dir_path = Path(temp_dir.name)
+        
+        # We assume the model info needed for saving is on the adapter.
+        # This might need to be more robust.
+        sample_rate = adapter.model_info.config["sample_rate"]
+        
+        # Construct the path and save the file
+        local_path = temp_dir_path / path_from_uid(artifact.file.uid)
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        torchaudio.save(local_path, tensor, sample_rate)
+
+        # Update the artifact with the temporary path
+        artifact.file.path = str(local_path)
+        
+        # Store a reference to the TemporaryDirectory object to prevent
+        # it from being garbage collected and deleting the file.
+        artifact._temp_dir_ref = temp_dir
+
+        return artifact
 
     async def execute(self, operation_id: str, **kwargs) -> GraphElement:
         """

@@ -14,6 +14,7 @@ from param_graph.util import load_audio
 from param_graph.graph import ParameterGraph
 from param_graph.elements.models.base import Model
 from engine.engine_provider import EngineProvider
+from utils.asset_utils import save_artifact_asset
 
 app = Flask(__name__)
 CORS(app)
@@ -281,17 +282,17 @@ async def generate():
         validated_params = DynamicArgsModel.model_validate(json_data)
 
         # 5. Call actual generation using the provider
-        output_dir = param_graph.root / "generated"
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        audio_artifact = await engine.execute(
+        temp_artifact = await engine.execute(
             "generate",
             model_element=model_element,
-            output_dir=str(output_dir),
             **validated_params.model_dump()
         )
         
-        # 6. Add the new audio artifact to the graph
+        # 6. Save the temporary artifact to a permanent location
+        output_dir = param_graph.root / "generated"
+        audio_artifact = save_artifact_asset(temp_artifact, output_dir, asset_name="file")
+
+        # 7. Add the new audio artifact to the graph
         param_graph.add_artifact(audio_artifact)
         param_graph.save()
         

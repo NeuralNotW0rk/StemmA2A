@@ -1,5 +1,6 @@
 # backend/engine_service.py
-from flask import Flask, request, jsonify
+import json
+from flask import Flask, make_response, request, jsonify, send_file
 from flask_cors import CORS
 import torch
 import traceback
@@ -96,8 +97,29 @@ async def execute():
         # Execute the operation
         result_artifact = await engine.execute(op_id_str, **anchored_params)
         
-        # De-anchor the result before sending it back
-        return jsonify(result_artifact.de_anchor().to_dict())
+        # The result is anchored to a local file. We need to send this file
+        # back, along with the de-anchored graph element.
+        
+        # 1. Get the de-anchored element and serialize it to JSON
+        element_dict = result_artifact.de_anchor().to_dict()
+        element_json = json.dumps(element_dict)
+
+        # 2. Get the path to the local file asset
+        # This is a bit of a simplification. We're assuming the first asset
+        # is the one we want to send.
+        asset_path = result_artifact.file.path
+
+        # 3. Use send_file to prepare the file part of the response
+        import os
+        response = make_response(send_file(asset_path, as_attachment=True, download_name=result_artifact.file.uid))
+        
+        # 4. Add the JSON as a custom header
+        response.headers['X-Graph-Element'] = element_json
+        
+        # 5. Expose the custom header so the client can access it
+        response.headers['Access-Control-Expose-Headers'] = 'X-Graph-Element'
+        
+        return response
 
     except (ValidationError, ValueError) as e:
         traceback.print_exc()

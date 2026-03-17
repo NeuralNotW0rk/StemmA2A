@@ -31,5 +31,5 @@ class ModelAdapter(ABC):
         pass
 
     @abstractmethod
-    def generate(self) -> None:
+    def generate(self, **kwargs) -> tuple[GraphElement, torch.Tensor]:
         pass

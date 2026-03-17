@@ -85,7 +85,7 @@ class StableAudioAdapter(ModelAdapter):
             raise UIDMismatchError("Checkpoint UID mismatch")
             
 
-    def generate(self, output_dir: Path, **kwargs) -> Audio:
+    def generate(self, **kwargs) -> tuple[Audio, torch.Tensor]:
         model = self.model.to(self.device)
         sample_rate = self.model_info.config["sample_rate"]
         sample_size = self.model_info.config["sample_size"]
@@ -121,14 +121,12 @@ class StableAudioAdapter(ModelAdapter):
         # Peak normalize, clip, convert to int16
         output = output.to(torch.float32).div(torch.max(torch.abs(output))).clamp(-1, 1).mul(32767).to(torch.int16).cpu()
 
-        # Save to file
-        content_uid = self.uid_generator.from_tensor(output)
-        path = output_dir / path_from_uid(content_uid)
-        torchaudio.save(path, output, sample_rate)
-
         # Create audio artifact
-        return Audio(
+        content_uid = self.uid_generator.from_tensor(output)
+        artifact = Audio(
             id=content_uid,
             name=generate_slug(2),
-            file=Asset(path=str(path), uid=content_uid),
+            file=Asset(path=None, uid=content_uid),
         )
+
+        return artifact, output

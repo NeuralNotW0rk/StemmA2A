@@ -1,9 +1,13 @@
 import aiohttp
 import os
+import json
+from pathlib import Path
+import tempfile
 from param_graph.elements.base_elements import GraphElement
 
 from .engine import Engine
 from param_graph.registry import resolve_element
+from utils.uid import path_from_uid
 
 def find_elements(d: dict) -> dict[str, GraphElement]:
     elements = {}
@@ -92,9 +96,35 @@ class RemoteEngine(Engine):
                         continue
                     
                     response.raise_for_status()
-                    json_response = await response.json()
-                    # Re-create the graph element from the JSON response
-                    return resolve_element(**json_response)
+
+                    # 1. Get the de-anchored graph element from the header
+                    element_json = response.headers.get('X-Graph-Element')
+                    if not element_json:
+                        raise Exception("Missing 'X-Graph-Element' header in response.")
+                    element_dict = json.loads(element_json)
+                    result_element = resolve_element(**element_dict)
+                    
+                    # 2. Get the file data from the body
+                    file_data = await response.read()
+
+                    # 3. Save the file to a local temporary directory
+                    temp_dir = tempfile.TemporaryDirectory()
+                    temp_dir_path = Path(temp_dir.name)
+
+                    # We assume the first UID is the one for the file we just downloaded
+                    uid = result_element.get_uids()[0]
+                    local_path = temp_dir_path / path_from_uid(uid)
+                    local_path.parent.mkdir(parents=True, exist_ok=True)
+                    local_path.write_bytes(file_data)
+                    
+                    # 4. Anchor the element to the new local path
+                    anchored_element = result_element.anchor(temp_dir_path)
+
+                    # 5. Store a reference to the TemporaryDirectory object to prevent
+                    # it from being garbage collected and deleting the file.
+                    anchored_element._temp_dir_ref = temp_dir
+
+                    return anchored_element
 
     async def upload_missing_assets(self, missing_uids: list[str], local_assets: dict[str, str], session: aiohttp.ClientSession) -> bool:
         paths_to_upload = []
