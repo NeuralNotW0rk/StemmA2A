@@ -7,6 +7,7 @@ import torchaudio
 from einops import rearrange
 from stable_audio_tools import create_model_from_config
 from stable_audio_tools.inference.generation import generate_diffusion_cond
+import soundfile as sf
 from safetensors.torch import load_file
 from coolname import generate_slug
 
@@ -122,7 +123,7 @@ class StableAudioAdapter(ModelAdapter):
 
         # Save to file
         content_uid = self.uid_generator.from_tensor(output)
-        path = output_dir / path_from_uid(content_uid)
+        path = (output_dir / path_from_uid(content_uid)).with_suffix(".wav")
         torchaudio.save(path, output, sample_rate, backend="soundfile")
 
         # Create audio artifact
