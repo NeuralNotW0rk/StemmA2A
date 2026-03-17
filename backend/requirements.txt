@@ -12,4 +12,5 @@ xxhash
 coolname
 
 # Engine
+torchcodec
 stable-audio-tools

@@ -123,8 +123,8 @@ class StableAudioAdapter(ModelAdapter):
 
         # Save to file
         content_uid = self.uid_generator.from_tensor(output)
-        path = (output_dir / path_from_uid(content_uid)).with_suffix(".wav")
-        torchaudio.save(path, output, sample_rate, backend="soundfile")
+        path = output_dir / path_from_uid(content_uid)
+        torchaudio.save(path, output, sample_rate)
 
         # Create audio artifact
         return Audio(
