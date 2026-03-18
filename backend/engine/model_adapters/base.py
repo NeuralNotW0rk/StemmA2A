@@ -2,7 +2,9 @@ from abc import ABC, abstractmethod
 import json
 import os
 import inspect
+import torch
 
+from param_graph.elements.base_elements import GraphElement
 from param_graph.elements.models.base import Model
 from utils.uid import UIDGenerator, XXH3_64
 
