@@ -4,6 +4,8 @@ from pathlib import Path
 import torchaudio
 import torch
 
+from dataclasses import replace
+
 from param_graph.elements.base_elements import GraphElement
 from param_graph.elements.models.base import Model
 from utils.uid_utils import path_from_uid
@@ -51,7 +53,8 @@ class LocalEngine(Engine):
         torchaudio.save(local_path, tensor, sample_rate)
 
         # Update the artifact with the temporary path
-        artifact.file.path = str(local_path)
+        new_file_asset = replace(artifact.file, path=str(local_path))
+        artifact = replace(artifact, file=new_file_asset)
         
         # Store a reference to the TemporaryDirectory object to prevent
         # it from being garbage collected and deleting the file.
