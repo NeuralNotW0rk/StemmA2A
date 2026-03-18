@@ -9,12 +9,12 @@ from pathlib import Path
 import os
 
 from pydantic import ValidationError
-from utils.validation import create_dynamic_model
 from param_graph.util import load_audio
 from param_graph.graph import ParameterGraph
 from param_graph.elements.models.base import Model
 from engine.engine_provider import EngineProvider
 from utils.asset_utils import save_artifact_asset
+from utils.pydantic_utils import create_dynamic_model
 
 app = Flask(__name__)
 CORS(app)

@@ -7,7 +7,7 @@ from param_graph.elements.base_elements import GraphElement
 
 from .engine import Engine
 from param_graph.registry import resolve_element
-from utils.uid import path_from_uid
+from utils.uid_utils import path_from_uid
 
 def find_elements(d: dict) -> dict[str, GraphElement]:
     elements = {}

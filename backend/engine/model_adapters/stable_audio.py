@@ -12,10 +12,10 @@ from safetensors.torch import load_file
 from coolname import generate_slug
 
 from .base import ModelAdapter
-from utils.uid import UIDMismatchError, path_from_uid
 from param_graph.elements.base_elements import Asset
 from param_graph.elements.artifacts.audio import Audio
 from param_graph.elements.models.stable_audio import StableAudioModel
+from utils.uid_utils import UIDMismatchError
 
 
 # Workaround for the file extension-based safetensors loading in stable audio tools

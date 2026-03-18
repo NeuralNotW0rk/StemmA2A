@@ -6,7 +6,7 @@ import torch
 
 from param_graph.elements.base_elements import GraphElement
 from param_graph.elements.models.base import Model
-from utils.uid import path_from_uid
+from utils.uid_utils import path_from_uid
 
 from .engine import Engine
 from .model_cache import ModelCache
