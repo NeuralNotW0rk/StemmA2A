@@ -10,7 +10,7 @@ from pydantic import ValidationError
 
 from engine.engine_provider import EngineProvider
 from param_graph.registry import resolve_element
-from utils.uid import path_from_uid
+from utils.uid_utils import path_from_uid
 
 
 app = Flask(__name__)
@@ -111,7 +111,7 @@ async def execute():
 
         # 3. Use send_file to prepare the file part of the response
         import os
-        response = make_response(send_file(asset_path, as_attachment=True, download_name=result_artifact.file.uid))
+        response = make_response(send_file(asset_path, as_attachment=True, download_name=f"{result_artifact.name}{Path(asset_path).suffix}"))
         
         # 4. Add the JSON as a custom header
         response.headers['X-Graph-Element'] = element_json

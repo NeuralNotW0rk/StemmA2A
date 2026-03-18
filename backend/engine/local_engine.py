@@ -47,8 +47,7 @@ class LocalEngine(Engine):
         sample_rate = adapter.model_info.config["sample_rate"]
         
         # Construct the path and save the file
-        local_path = temp_dir_path / path_from_uid(artifact.file.uid)
-        local_path.parent.mkdir(parents=True, exist_ok=True)
+        local_path = temp_dir_path / "output.wav"
         torchaudio.save(local_path, tensor, sample_rate)
 
         # Update the artifact with the temporary path

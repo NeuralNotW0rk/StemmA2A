@@ -22,11 +22,19 @@ def save_artifact_asset(artifact: GraphElement, destination_dir: Path, asset_nam
         raise ValueError(f"Artifact does not have a valid asset at '{asset_name}' with a path to save from.")
 
     temp_path = Path(asset_to_save.path)
-    file_name = temp_path.name
+    
+    # Use artifact's name for a human-readable filename, handling collisions
+    base_name = artifact.name
+    suffix = temp_path.suffix
+    permanent_path = destination_dir / f"{base_name}{suffix}"
+    
+    counter = 1
+    while permanent_path.exists():
+        permanent_path = destination_dir / f"{base_name}_{counter}{suffix}"
+        counter += 1
     
     # Ensure the destination directory exists
     destination_dir.mkdir(parents=True, exist_ok=True)
-    permanent_path = destination_dir / file_name
 
     # Move the file
     shutil.move(str(temp_path), permanent_path)
