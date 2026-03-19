@@ -71,6 +71,8 @@ if (-not $CudaVersion) {
 Write-Host "Step 5: Installing PyTorch..."
 $arguments = @("-m", "pip", "install", "--verbose", "torch", "torchvision", "torchaudio")
 if ($CudaVersion) {
+    # Force cuda version 12.1 for now
+    $CudaVersion = "12.1"
     $CudaVersionFormatted = "cu" + $CudaVersion.Replace(".", "")
     $IndexUrl = "https://download.pytorch.org/whl/$CudaVersionFormatted"
     $arguments += "--index-url", $IndexUrl

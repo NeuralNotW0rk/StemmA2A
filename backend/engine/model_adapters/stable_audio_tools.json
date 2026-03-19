@@ -11,29 +11,37 @@
             "name": "steps",
             "label": "Steps",
             "type": "integer",
-            "defaultValue": 8,
+            "defaultValue": 100,
             "placeholder": "Enter number of steps"
         },
         {
             "name": "cfg_scale",
             "label": "CFG Scale",
             "type": "float",
-            "defaultValue": 1.0,
+            "defaultValue": 7,
             "placeholder": "Enter CFG scale"
+        },
+        {
+            "name": "seconds_start",
+            "label": "Seconds",
+            "type": "float",
+            "defaultValue": 0,
+            "placeholder": "Enter start time in seconds"
         },
         {
             "name": "seconds_total",
             "label": "Seconds",
             "type": "float",
-            "defaultValue": 11,
+            "defaultValue": 30,
             "placeholder": "Enter duration in seconds"
         },
         {
             "name": "k_sampler_type",
             "label": "K-Sampler",
             "type": "select",
-            "defaultValue": "dpmpp_2m",
+            "defaultValue": "dpmpp-3m-sde",
             "options": [
+                { "label": "DPM++ 3M SDE", "value": "dpmpp-3m-sde" },
                 { "label": "DPM++ 2M", "value": "dpmpp_2m" },
                 { "label": "DPM++ SDE", "value": "dpmpp_sde" },
                 { "label": "k-Heun", "value": "k_heun" },
@@ -57,6 +65,22 @@
 
             ],
             "show_if": {"model_type": "rectified_flow"}
+        },
+        {
+            "name": "sigma_min",
+            "label": "Sigma Min",
+            "type": "float",
+            "defaultValue": 0.3,
+            "placeholder": "Enter sigma min",
+            "show_if": {"model_type": "k_diffusion"}
+        },
+        {
+            "name": "sigma_max",
+            "label": "Sigma Max",
+            "type": "float",
+            "defaultValue": 500,
+            "placeholder": "Enter sigma max",
+            "show_if": {"model_type": "k_diffusion"}
         },
         {
             "name": "seed",

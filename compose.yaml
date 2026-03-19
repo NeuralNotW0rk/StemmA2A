@@ -11,9 +11,10 @@ services:
               capabilities: [gpu]
     volumes:
       - ./backend:/app          # Maps your code folder
-      - ~/stemma2a/cache:/app/data    # Maps to C:\Users\<YourName>\app-data
+      - ${LOCAL_DATA_PATH}:${CONTAINER_DATA_PATH}
     environment:
       PYTHONUNBUFFERED: 1
+      RUNNING_IN_CONTAINER: "true"
     networks:
       - app-net
 

@@ -94,12 +94,24 @@ class StableAudioAdapter(ModelAdapter):
         # Set up text and timing conditioning
         conditioning = [{
             "prompt": kwargs.get("prompt", ""),
+            "seconds_start": kwargs.get("seconds_start", 0),
             "seconds_total": kwargs.get("seconds_total", 11)
         }]
 
         print(f"Generating with conditioning:{str(conditioning)}")
         print(f"Sample Rate: {sample_rate}")
         print(f"Sample Size: {sample_size}")
+
+        sampler_type = "pingpong" # default
+        if self.model_info.model_type == "k_diffusion":
+            # The key from the form is 'k_sampler_type'
+            sampler_type = kwargs.get("k_sampler_type")
+        elif self.model_info.model_type == "rectified_flow":
+            # The key from the form is 'rf_sampler_type'
+            sampler_type = kwargs.get("rf_sampler_type")
+        
+        if not sampler_type:
+            sampler_type = "pingpong"
 
         # Generate stereo audio
         output = generate_diffusion_cond(
@@ -108,7 +120,9 @@ class StableAudioAdapter(ModelAdapter):
             cfg_scale=kwargs.get("cfg_scale", 1.0),
             conditioning=conditioning,
             sample_size=sample_size,
-            sampler_type=kwargs.get("sampler_type", "pingpong"),
+            sigma_min=kwargs.get("sigma_min", 0.3),
+            sigma_max=kwargs.get("sigma_max", 500),
+            sampler_type=sampler_type,
             device=self.device,
             seed=kwargs.get("seed", 0)
         )

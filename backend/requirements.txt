@@ -1,6 +1,7 @@
 # Core
 flask[async]
 flask-cors
+python-dotenv
 soundfile
 librosa
 setuptools<60

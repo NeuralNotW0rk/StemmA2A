@@ -1,10 +1,16 @@
 # backend/engine_service.py
 import json
+import os
 from flask import Flask, make_response, request, jsonify, send_file
 from flask_cors import CORS
 import torch
 import traceback
 from pathlib import Path
+
+from dotenv import load_dotenv
+
+# Load environment variables from .env file for local development
+load_dotenv()
 
 from pydantic import ValidationError
 
@@ -22,7 +28,29 @@ device_accelerator = torch.device(device_type_accelerator)
 
 # The engine service acts as a simple, remote executor.
 # It maintains a local file cache for assets required for generation.
-data_cache_root = Path("/app/data")
+#
+# The data cache path is determined by the execution environment.
+#
+# - When running in a container, the `RUNNING_IN_CONTAINER` environment variable
+#   should be set to "true", and `CONTAINER_DATA_PATH` must be provided.
+# - When running locally, `LOCAL_DATA_PATH` must be provided.
+#
+# This allows for both variables to be present in the environment (e.g. in a .env file),
+# while still allowing the code to robustly determine the correct path to use.
+is_container = os.environ.get("RUNNING_IN_CONTAINER") == "true"
+
+if is_container:
+    data_path_str = os.environ.get("CONTAINER_DATA_PATH")
+    if not data_path_str:
+        raise ValueError("CONTAINER_DATA_PATH must be set when running in a container.")
+else:
+    data_path_str = os.environ.get("LOCAL_DATA_PATH")
+    if not data_path_str:
+        raise ValueError("LOCAL_DATA_PATH must be set when running locally.")
+
+# expanduser to handle '~' in local paths
+data_cache_root = Path(data_path_str).expanduser()
+data_cache_root.mkdir(parents=True, exist_ok=True)
 
 # Initialize the engine provider. Since this is the engine service,
 # it will always use the local engine implementation.
@@ -144,7 +172,13 @@ def upload():
     if file:
         # The filename is expected to be the uid of the file
         uid = file.filename
-        file.save(data_cache_root / path_from_uid(uid))
+        destination = data_cache_root / path_from_uid(uid)
+
+        # Create parent directory if it doensn't exist
+        destination.parent.mkdir(parents=True, exist_ok=True)
+
+        # Save the file
+        file.save(destination)
         return jsonify({"message": f"File {uid} uploaded successfully"})
 
     return jsonify({"error": "File upload failed"}), 500
