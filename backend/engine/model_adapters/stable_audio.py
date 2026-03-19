@@ -141,6 +141,7 @@ class StableAudioAdapter(ModelAdapter):
             id=content_uid,
             name=generate_slug(2),
             file=Asset(path=None, uid=content_uid),
+            context=kwargs
         )
 
         return artifact, output

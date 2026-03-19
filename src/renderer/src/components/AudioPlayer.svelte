@@ -266,6 +266,9 @@
     cursor: pointer;
     transition: all 0.2s;
     flex-shrink: 0;
+    padding: 0;
+    min-width: 0;
+    min-height: 0;
   }
 
   .play-button:hover,

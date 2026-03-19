@@ -22,8 +22,8 @@ const api = {
     ipcRenderer.invoke('get_import_form_config', adapterName),
   getAdapterConfig: (adapterName: string): Promise<any> =>
     ipcRenderer.invoke('getAdapterConfig', adapterName),
-  getAudioFile: (filename: string): Promise<string | null> =>
-    ipcRenderer.invoke('getAudioFile', filename),
+  getAudioFile: (audio_id: string): Promise<string | null> =>
+    ipcRenderer.invoke('getAudioFile', audio_id),
   openFile: (options: unknown) => ipcRenderer.invoke('dialog:openFile', options),
   importModel: (data: unknown) => ipcRenderer.invoke('importModel', data),
   generate: (data: unknown) => ipcRenderer.invoke('generate', data),

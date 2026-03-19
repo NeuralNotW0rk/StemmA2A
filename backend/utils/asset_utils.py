@@ -39,8 +39,13 @@ def save_artifact_asset(artifact: GraphElement, destination_dir: Path, asset_nam
     # Move the file
     shutil.move(str(temp_path), permanent_path)
 
+    # Make the path relative to the project root for portability
+    # The project root is the parent of the destination_dir (e.g., 'generated/')
+    project_root = destination_dir.parent
+    relative_path = permanent_path.relative_to(project_root)
+
     # Create a new asset object with the updated path
-    updated_asset = replace(asset_to_save, path=str(permanent_path))
+    updated_asset = replace(asset_to_save, path=str(relative_path))
     
     # Create a new artifact with the updated asset
     updated_artifact = replace(artifact, **{asset_name: updated_asset})

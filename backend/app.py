@@ -289,11 +289,12 @@ async def generate():
         )
         
         # 6. Save the temporary artifact to a permanent location
-        output_dir = param_graph.root / "generated"
+        output_dir = param_graph.root / "generate"
         audio_artifact = save_artifact_asset(temp_artifact, output_dir, asset_name="file")
 
         # 7. Add the new audio artifact to the graph
-        param_graph.add_artifact(audio_artifact)
+        param_graph.add_element(audio_artifact)
+        param_graph.link(model_element, audio_artifact, "generate")
         param_graph.save()
         
         return jsonify({
@@ -374,8 +375,8 @@ def rescan_source():
 #  Audio Operations
 # --------------------
 
-@app.route("/audio_data/<path:filename>", methods=["GET"])
-def serve_audio_data(filename):
+@app.route("/audio_data/<string:audio_id>", methods=["GET"])
+def serve_audio_data(audio_id):
     """
     Loads an audio file, processes it, and returns the raw audio data.
     This ensures a consistent format (stereo WAV) for playback.
@@ -384,7 +385,7 @@ def serve_audio_data(filename):
         return jsonify({"error": "No project loaded"}), 400
     
     try:
-        audio_path = param_graph.get_path_from_name(filename, relative=False)
+        audio_path = param_graph.get_path_from_id(audio_id, relative=False)
         if not audio_path or not Path(audio_path).exists():
             return jsonify({"error": "Audio file not found"}), 404
 
@@ -403,16 +404,16 @@ def serve_audio_data(filename):
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
-@app.route("/audio_path/<path:filename>", methods=["GET"])
-def get_audio_path(filename):
+@app.route("/audio_path/<string:audio_id>", methods=["GET"])
+def get_audio_path(audio_id):
     """Get the absolute path of an audio file"""
-    print(f"get_audio_path called with filename: {filename}")
+    print(f"get_audio_path called with id: {audio_id}")
     if param_graph is None:
         print("get_audio_path: param_graph is None. No project loaded.")
         return jsonify({"error": "No project loaded"}), 400
     
     try:
-        audio_path = param_graph.get_path_from_name(filename, relative=False)
+        audio_path = param_graph.get_path_from_id(audio_id, relative=False)
         print(f"Path retrieved from graph: {audio_path}")
 
         if not audio_path or not Path(audio_path).exists():
@@ -427,14 +428,14 @@ def get_audio_path(filename):
         traceback.print_exc()
         return jsonify({"error": f"An unexpected error occurred in get_audio_path: {str(e)}"}), 500
 
-@app.route("/audio/<path:filename>", methods=["GET"])
-def serve_audio(filename):
+@app.route("/audio/<string:audio_id>", methods=["GET"])
+def serve_audio(audio_id):
     """Serve audio files"""
     if param_graph is None:
         return jsonify({"error": "No project loaded"}), 400
     
     try:
-        audio_path = param_graph.get_path_from_name(filename, relative=False)
+        audio_path = param_graph.get_path_from_id(audio_id, relative=False)
         if not audio_path or not Path(audio_path).exists():
             return jsonify({"error": "Audio file not found"}), 404
         

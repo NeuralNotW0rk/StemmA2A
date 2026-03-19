@@ -68,7 +68,7 @@ const defaultStyle: CssStyleDeclaration[] = [
   {
     selector: 'node[type="audio"]',
     style: {
-      label: 'data(alias)',
+      label: 'data(name)',
       'background-color': audioColor,
       width: 30,
       height: 30
