@@ -17,7 +17,7 @@ class UIDMismatchError(Exception):
     pass
 
 class UIDGenerator(ABC):
-    DELIMITER = "-"
+    DELIMITER = "."
 
     @abstractmethod
     def get_method_name(self) -> str:
