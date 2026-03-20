@@ -70,22 +70,12 @@ class GraphElement:
 @dataclass(kw_only=True)
 class Artifact(GraphElement):
     name: str
+    context: dict
     type: str = 'artifact'
 
-@register('external')
 @dataclass(kw_only=True)
-class ExternalSource(GraphElement):
-    path: str
-    type: str = 'external'
-
-@register('set')
-@dataclass(kw_only=True)
-class Set(GraphElement):
-    alias: str
-    type: str = 'set'
-
-@register('batch')
-@dataclass(kw_only=True)
-class Batch(GraphElement):
-    alias: str
-    type: str = 'batch'
+class Edge(GraphElement):
+    source: str
+    target: str
+    action: str
+    type: str = 'edge'

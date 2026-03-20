@@ -70,10 +70,13 @@ class ParameterGraph:
                     C.nodes[node].pop('parent', None)
             return nx.cytoscape.cytoscape_data(C, ident='id')
         
-    def add_artifact(self, ele: Artifact):
-        node_attrs = ele.to_dict()
-        node_id = node_attrs.get('id', None)
-        self.G.add_node(node_id, **node_attrs)
+    def add_element(self, ele: GraphElement):
+        ele_attrs = ele.to_dict()
+        ele_id = ele_attrs.get('id', None)
+        self.G.add_node(ele_id, **ele_attrs)
+
+    def link(self, source: GraphElement, target: GraphElement, action: str):
+        self.G.add_edge(source.id, target.id, action=action)
 
     def get_element(self, node_id: str) -> GraphElement:
         """
@@ -86,14 +89,26 @@ class ParameterGraph:
         attrs = self.G.nodes[node_id].copy()
         return resolve_element(attrs)
 
-    def get_path_from_name(self, name: str, relative=False):
-        if self.G.has_node(name):
-            path_str = self.G.nodes[name].get('path')
+    def get_path_from_id(self, node_id: str, relative=False):
+        if self.G.has_node(node_id):
+            node_data = self.G.nodes[node_id]
+            file_info = node_data.get('file')
+            if not file_info:
+                return None
+            
+            path_str = file_info.get('path')
             if path_str:
                 path = Path(path_str)
                 if not path.is_absolute():
                     path = self.root / path
                 
+                # Check if the path exists, if not, try adding a .wav extension
+                # for backwards compatibility with old projects.
+                if not path.exists():
+                    path_with_ext = path.with_suffix(".wav")
+                    if path_with_ext.exists():
+                        path = path_with_ext
+
                 if relative:
                     # This is tricky because the "relative" path needs to be
                     # relative to the VFS root, not the graph's root.
@@ -156,7 +171,12 @@ class ParameterGraph:
         for node, data in self.G.nodes(data=True):
             if data['type'] == 'audio':
                 try:
-                    path_str = data.get('path')
+                    file_info = data.get('file')
+                    if not file_info:
+                        print(f"Node {node} has no file info, skipping.")
+                        continue
+
+                    path_str = file_info.get('path')
                     if not path_str:
                         print(f"Node {node} has no path, skipping.")
                         continue

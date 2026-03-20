@@ -102,7 +102,7 @@ class RemoteEngine(Engine):
                     if not element_json:
                         raise Exception("Missing 'X-Graph-Element' header in response.")
                     element_dict = json.loads(element_json)
-                    result_element = resolve_element(**element_dict)
+                    result_element = resolve_element(element_dict)
                     
                     # 2. Get the file data from the body
                     file_data = await response.read()

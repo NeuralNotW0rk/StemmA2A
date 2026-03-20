@@ -141,12 +141,12 @@
     }
 
     try {
-      const result = await window.api.getAudioFile(audioData.name)
+      const result = await window.api.getAudioFile(audioData.id)
       if (result && result.buffer) {
         const { buffer, mimeType } = result
         const blob = new Blob([new Uint8Array(buffer)], { type: mimeType })
         audioSrc = URL.createObjectURL(blob)
-        audioTitle = audioData.alias
+        audioTitle = audioData.name
       } else {
         throw new Error('Failed to get audio file buffer.')
       }

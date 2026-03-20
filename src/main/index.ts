@@ -299,10 +299,10 @@ app.whenReady().then(async () => {
     store.set('recentProjects', recentProjects.slice(0, 10))
   })
 
-  ipcMain.handle('getAudioFile', async (_event, filename) => {
+  ipcMain.handle('getAudioFile', async (_event, audio_id) => {
     try {
       // 1. Get path from Python backend
-      const pathResponse = await fetchWithAuth(`${BACKEND_URL}/audio_path/${filename}`)
+      const pathResponse = await fetchWithAuth(`${BACKEND_URL}/audio_path/${audio_id}`)
       if (!pathResponse.ok) {
         const errorBody = await pathResponse.text()
         throw new Error(
