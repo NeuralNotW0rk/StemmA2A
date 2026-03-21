@@ -20,18 +20,18 @@
     onexport?: (data: { names: string[] }) => void
     onrescanSource?: (name: string) => void
     onnodeSelect?: (data: any) => void
+    onedgeSelect?: (data: any) => void
     onnodeRemove?: (data: any) => void
   }
 
   let {
     graphData = null,
-    viewMode = 'batch',
     onmodelSelect,
     onaudioSelect,
     onaudioNodeSelectForGeneration,
-    onexport,
     onrescanSource,
     onnodeSelect,
+    onedgeSelect,
     onnodeRemove
   }: Props = $props()
 
@@ -141,16 +141,8 @@
       selector: 'node[type="audio"]',
       commands: [
         {
-          content: 'Play/Select',
-          select: (ele: any) => onaudioSelect?.(ele.data())
-        },
-        {
-          content: 'Create Variation',
+          content: 'Generate Variation',
           select: (ele: any) => onaudioNodeSelectForGeneration?.(ele.data())
-        },
-        {
-          content: 'Export',
-          select: (ele: any) => onexport?.({ names: [ele.data().name] })
         },
         {
           content: 'Remove',
@@ -165,7 +157,12 @@
         {
           content: 'Expand/Collapse',
           select: (ele: any) => {
-            cy?.expandCollapse('get').collapse(ele).run()
+            const api = cy?.expandCollapse('get')
+            if (ele.hasClass('cy-expand-collapse-collapsed')) {
+              api.expand(ele)
+            } else {
+              api.collapse(ele)
+            }
           }
         }
       ]
@@ -192,6 +189,7 @@
     cy.on('tap', (evt: EventObject) => {
       if (evt.target === cy) {
         onnodeSelect?.(null)
+        onedgeSelect?.(null)
       }
     })
 
@@ -214,6 +212,11 @@
       if (nodeData.type === 'audio') {
         onaudioSelect?.(nodeData)
       }
+    })
+
+    cy.on('tap', 'edge', (evt: EventObject) => {
+      const edge = evt.target
+      onedgeSelect?.(edge.data())
     })
 
     cy.on('dblclick', () => cy?.fit())

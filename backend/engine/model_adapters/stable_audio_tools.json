@@ -8,10 +8,18 @@
             "placeholder": "Enter a prompt for the model..."
         },
         {
+            "name": "negative_prompt",
+            "label": "Negative Prompt",
+            "type": "textarea",
+            "defaultValue": "low fidelity",
+            "placeholder": "Enter a negative prompt for the model...",
+            "show_if": {"model_type": "k_diffusion"}
+        },
+        {
             "name": "steps",
             "label": "Steps",
             "type": "integer",
-            "defaultValue": 100,
+            "defaultValue": 50,
             "placeholder": "Enter number of steps"
         },
         {
@@ -88,6 +96,22 @@
             "type": "integer",
             "defaultValue": 0,
             "placeholder": "Enter a seed"
+        },
+        {
+            "name": "init_audio",
+            "label": "Initial Audio",
+            "type": "node",
+            "selectionType": "audio",
+            "defaultValue": null
+        },
+        {
+            "name": "noise_level",
+            "label": "Noise Level",
+            "type": "float",
+            "defaultValue": 0.7,
+            "show_if": {
+                "init_audio": "exists"
+            }
         }
     ],
     "import": [

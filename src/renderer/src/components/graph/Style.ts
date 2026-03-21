@@ -112,7 +112,7 @@ const defaultStyle: CssStyleDeclaration[] = [
 
   // Edge-specific style configuration
   {
-    selector: 'edge[type="dd_generation"]',
+    selector: 'edge[type="model"]',
     style: {
       label: 'data(seed)',
       'line-color': modelColor,
@@ -120,28 +120,12 @@ const defaultStyle: CssStyleDeclaration[] = [
     }
   },
   {
-    selector: 'edge[type="dd_variation"]',
-    style: {
-      label: 'data(seed)',
-      'line-color': modelColor,
-      'target-arrow-color': modelColor,
-      'line-style': 'dashed'
-    }
-  },
-  {
-    selector: 'edge[type="audio_source"]',
+    selector: 'edge[type="audio"]',
     style: {
       label: 'data(strength)',
       'line-color': audioColor,
       'target-arrow-color': audioColor,
       'line-style': 'dashed'
-    }
-  },
-  {
-    selector: 'edge[type="import"]',
-    style: {
-      'line-color': externalColor,
-      'target-arrow-color': externalColor
     }
   },
 

@@ -12,6 +12,7 @@ from pydantic import ValidationError
 from param_graph.util import load_audio
 from param_graph.graph import ParameterGraph
 from param_graph.elements.models.base import Model
+from param_graph.elements.artifacts.audio import Audio
 from engine.engine_provider import EngineProvider
 from utils.asset_utils import save_artifact_asset
 from utils.pydantic_utils import create_dynamic_model
@@ -225,7 +226,7 @@ async def import_model():
         engine = engine_provider.get_engine()
         model_artifact = await engine.register_model(adapter_name, **data)
 
-        param_graph.add_artifact(model_artifact)
+        param_graph.add_element(model_artifact)
         param_graph.save()
         
         return jsonify({
@@ -281,11 +282,23 @@ async def generate():
         DynamicArgsModel = create_dynamic_model(form_config)
         validated_params = DynamicArgsModel.model_validate(json_data)
 
+        dumped_params = validated_params.model_dump()
+        init_audio = dumped_params.pop("init_audio", None)
+        init_audio_element = None
+        if init_audio and isinstance(init_audio, dict):
+            init_audio_id = init_audio.get("id")
+            if init_audio_id:
+                element = param_graph.get_element(init_audio_id)
+                if not isinstance(element, Audio):
+                    return jsonify({"error": f"Node '{init_audio_id}' is not a valid audio artifact."}), 400
+                init_audio_element = element
+
         # 5. Call actual generation using the provider
         temp_artifact = await engine.execute(
             "generate",
             model_element=model_element,
-            **validated_params.model_dump()
+            init_audio_element=init_audio_element,
+            **dumped_params
         )
         
         # 6. Save the temporary artifact to a permanent location
@@ -294,7 +307,9 @@ async def generate():
 
         # 7. Add the new audio artifact to the graph
         param_graph.add_element(audio_artifact)
-        param_graph.link(model_element, audio_artifact, "generate")
+        param_graph.link(model_element, audio_artifact)
+        if init_audio_element:
+            param_graph.link(init_audio_element, audio_artifact)
         param_graph.save()
         
         return jsonify({

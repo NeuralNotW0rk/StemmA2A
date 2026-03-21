@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { ModelData } from '../utils/forms'
+  import type { ModelData, AudioData } from '../utils/forms'
   import { selectionStore } from '../utils/stores'
 
   type NodeData = ModelData | AudioData

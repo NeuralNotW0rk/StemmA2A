@@ -13,6 +13,7 @@ def create_dynamic_model(config: List[Dict[str, Any]]) -> Type[BaseModel]:
         "boolean": bool,
         "select": str,
         "file": str, # Assuming file path is passed as string
+        "node": (Dict, None),
     }
 
     for item in config:

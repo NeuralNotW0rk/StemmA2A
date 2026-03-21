@@ -25,7 +25,7 @@
   let viewMode: 'batch' | 'cluster' = $state('batch')
   let audioSrc: string | null = $state(null)
   let audioTitle: string | null = $state(null)
-  let selectedNodeData: Record<string, any> | null = $state(null)
+  let selectedElementData: Record<string, any> | null = $state(null)
   let generationNode: any = $state(null)
   let actionPanelView: ActionPanelView = $state('none')
   let errorInInfoPanel: { title: string; message: string } | null = $state(null)
@@ -158,10 +158,10 @@
     }
   }
 
-  function handleNodeSelect(nodeData: any): void {
-    selectedNodeData = nodeData
-    errorInInfoPanel = null // Clear any existing errors when a new node is selected
-    console.log(`Node selected: ${selectedNodeData?.name || 'Unknown'}`)
+  function handleElementSelect(elementData: any): void {
+    selectedElementData = elementData
+    errorInInfoPanel = null // Clear any existing errors when a new element is selected
+    console.log(`Element selected: ${selectedElementData?.name || 'Unknown'}`)
   }
 
   function handleModelSelect(modelData: any): void {
@@ -224,15 +224,15 @@
     >
       <ErrorView title={errorInInfoPanel.title} message={errorInInfoPanel.message} />
     </ContentPanel>
-  {:else if selectedNodeData}
+  {:else if selectedElementData}
     <ContentPanel
-      title={selectedNodeData.alias || selectedNodeData.name || 'Element Details'}
+      title={selectedElementData.alias || selectedElementData.name || 'Element Details'}
       onclose={() => {
-        selectedNodeData = null
+        selectedElementData = null
       }}
       position="right"
     >
-      <ElementInfoView {selectedNodeData} />
+      <ElementInfoView selectedElementData={selectedElementData} />
     </ContentPanel>
   {/if}
 
@@ -302,7 +302,8 @@
     onaudioSelect={handleAudioSelect}
     onmodelSelect={handleModelSelect}
     onaudioNodeSelectForGeneration={handleAudioNodeSelectForGeneration}
-    onnodeSelect={handleNodeSelect}
+    onnodeSelect={handleElementSelect}
+    onedgeSelect={handleElementSelect}
     onnodeRemove={handleNodeRemove}
   />
   {#if audioSrc}

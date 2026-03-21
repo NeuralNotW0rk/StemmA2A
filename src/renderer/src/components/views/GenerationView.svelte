@@ -1,7 +1,7 @@
 <script lang="ts">
   import { tick } from 'svelte'
-  import type { FormConfig, ModelData } from '../../utils/forms'
-  import { activeNodeStore } from '../../utils/stores'
+  import type { FormConfig, ModelData, AudioData } from '../../utils/forms'
+  import { activeNodeStore, lastUsedModelStore } from '../../utils/stores'
   import DynamicForm from '../DynamicForm.svelte'
   import NodeSelector from '../NodeSelector.svelte'
 
@@ -14,7 +14,7 @@
     onError: (error: { title: string; message: string }) => void
   }>()
 
-  let formFields: FormConfig | null = $state(null)
+  let adapterFields: FormConfig | null = $state(null)
   let formData: Record<string, unknown> = $state({})
   let isLoading = $state(true)
   let error: string | null = $state(null)
@@ -27,14 +27,14 @@
     try {
       isLoading = true
       error = null
-      formFields = null
+      adapterFields = null
       await tick()
 
       const config = await window.api.getAdapterConfig(adapter)
       if (config && config.generate && Array.isArray(config.generate)) {
-        formFields = config.generate
-        const newFormData = { ...formData }
-        for (const field of formFields) {
+        adapterFields = config.generate
+        const newFormData = {}
+        for (const field of adapterFields) {
           if (newFormData[field.name] === undefined || newFormData[field.name] === null) {
             newFormData[field.name] = field.defaultValue as string | number | boolean | null
           }
@@ -56,47 +56,44 @@
   $effect(() => {
     if (node && node.id !== lastNodeId) {
       lastNodeId = node.id
-      // Reset component state when the input node changes
       error = null
       inProgress = false
+      formData = {}
 
       if (node.type === 'model') {
         selectedModel = node as ModelData
-        // Base form data on the node, existing data is merged in loadAdapterConfig
-        formData = { ...node }
-        if (selectedModel.adapter) {
-          loadAdapterConfig(selectedModel.adapter)
-        } else {
-          isLoading = false
-          formFields = null
-        }
       } else if (node.type === 'audio') {
-        selectedModel = null
-        formFields = null
-        formData = { init_audio: node.name }
-        isLoading = false // Not loading adapter config until a model is selected
+        // If an audio node is opened, use the last used model
+        selectedModel = $lastUsedModelStore
+        // And set this audio as the init_audio in the form, if the form has such a field
+        if (adapterFields?.some((f) => f.name === 'init_audio')) {
+          formData.init_audio = node
+        }
       }
     }
   })
 
   $effect(() => {
     if (selectedModel) {
-      console.log('GenerationView: Setting active node store to:', selectedModel.id)
       activeNodeStore.set(selectedModel)
+      if (selectedModel.adapter) {
+        loadAdapterConfig(selectedModel.adapter)
+      } else {
+        isLoading = false
+        adapterFields = null
+      }
     } else {
-      console.log('GenerationView: Setting active node store to (from node prop):', node?.id)
       activeNodeStore.set(node)
+      isLoading = false
+      adapterFields = null
     }
   })
 
-  function handleModelSelect(newNode: ModelData): void {
-    const newModel = newNode as ModelData
+  function handleModelSelect(newModel: ModelData): void {
     const oldAdapter = selectedModel?.adapter
     selectedModel = newModel
 
     if (newModel.adapter !== oldAdapter) {
-      // If the adapter is different, we need to load new config.
-      // Keep existing form data where field names overlap.
       loadAdapterConfig(newModel.adapter)
     }
   }
@@ -108,24 +105,18 @@
       return
     }
 
-    // Construct a clean payload, including only the model name and the fields
-    // defined by the engine's configuration. This avoids sending the entire
-    // (and potentially non-serializable) formData object.
-    const payload: Record<string, unknown> = {
-      model_id: selectedModel.id
-    }
+    lastUsedModelStore.set(selectedModel)
 
-    if (formFields) {
-      for (const field of formFields) {
-        if (formData[field.name] !== undefined) {
-          payload[field.name] = formData[field.name]
-        }
-      }
-    }
+    const payload: Record<string, unknown> = { ...formData, model_id: selectedModel.id }
 
-    // Handle special cases like `init_audio` that are not part of the dynamic form
-    if (formData.init_audio) {
-      payload.init_audio = formData.init_audio
+    // Handle node objects in payload
+    if (
+      payload.init_audio &&
+      typeof payload.init_audio === 'object' &&
+      'id' in payload.init_audio
+    ) {
+      payload.init_audio_id = (payload.init_audio as AudioData).id
+      delete payload.init_audio
     }
 
     inProgress = true
@@ -157,9 +148,9 @@
       <div class="error-message">
         <p>Error: {error}</p>
       </div>
-    {:else if formFields}
-      <DynamicForm config={formFields} bind:formData bind:isFormValid />
-    {:else if node.type === 'audio'}
+    {:else if adapterFields}
+      <DynamicForm config={adapterFields} bind:formData bind:isFormValid />
+    {:else if !selectedModel}
       <p class="centered-text">Select a model to see its generation options.</p>
     {/if}
   </div>

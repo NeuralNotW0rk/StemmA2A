@@ -75,8 +75,8 @@ class ParameterGraph:
         ele_id = ele_attrs.get('id', None)
         self.G.add_node(ele_id, **ele_attrs)
 
-    def link(self, source: GraphElement, target: GraphElement, action: str):
-        self.G.add_edge(source.id, target.id, action=action)
+    def link(self, source: GraphElement, target: GraphElement):
+        self.G.add_edge(source.id, target.id, type=source.type)
 
     def get_element(self, node_id: str) -> GraphElement:
         """

@@ -1,5 +1,6 @@
 <script lang="ts">
-  import type { FormConfig, FormField } from '../utils/forms'
+  import type { FormConfig, FormField, ModelData, AudioData } from '../utils/forms'
+  import NodeSelector from './NodeSelector.svelte'
 
   let {
     config,
@@ -37,8 +38,15 @@
       }
 
       for (const key in field.show_if) {
-        if (formData[key] !== field.show_if[key]) {
-          return false
+        const condition = field.show_if[key]
+        if (condition === 'exists') {
+          if (!formData[key]) {
+            return false
+          }
+        } else {
+          if (formData[key] !== condition) {
+            return false
+          }
         }
       }
 
@@ -54,11 +62,12 @@
 >
   {#each visibleFields as field (field.name)}
     <div class="form-field">
-      <label for={field.name}>{field.label}</label>
       {#if field.type === 'textarea'}
+        <label for={field.name}>{field.label}</label>
         <textarea bind:value={formData[field.name]} id={field.name} placeholder={field.placeholder}
         ></textarea>
       {:else if field.type === 'integer'}
+        <label for={field.name}>{field.label}</label>
         <input
           type="number"
           step="1"
@@ -73,6 +82,7 @@
           placeholder={field.placeholder}
         />
       {:else if field.type === 'float'}
+        <label for={field.name}>{field.label}</label>
         <input
           type="number"
           step="any"
@@ -81,6 +91,7 @@
           placeholder={field.placeholder}
         />
       {:else if field.type === 'boolean'}
+        <label for={field.name}>{field.label}</label>
         <input
           type="checkbox"
           checked={formData[field.name] === 'true' || formData[field.name] === true}
@@ -89,17 +100,30 @@
           id={field.name}
         />
       {:else if field.type === 'file'}
+        <label for={field.name}>{field.label}</label>
         <div class="path-input">
           <input type="text" bind:value={formData[field.name]} placeholder={field.placeholder} />
           <button onclick={() => selectFieldFile(field.name, field.filters)}>Browse</button>
         </div>
       {:else if field.type === 'select'}
+        <label for={field.name}>{field.label}</label>
         <select bind:value={formData[field.name]} id={field.name}>
           {#each field.options as option (option.value)}
             <option value={option.value}>{option.label}</option>
           {/each}
         </select>
+      {:else if field.type === 'node'}
+        <NodeSelector
+          label={field.label}
+          selectionType={field.selectionType}
+          node={formData[field.name] as ModelData | AudioData}
+          id={field.name}
+          onSelect={(newNode) => {
+            formData[field.name] = newNode
+          }}
+        />
       {:else}
+        <label for={field.name}>{field.label}</label>
         <!-- Default to text input for 'string' and others -->
         <input
           type="text"

@@ -66,6 +66,7 @@ function createSelectionStore() {
 export const selectionStore = createSelectionStore()
 
 export const activeNodeStore = writable<any>(null)
+export const lastUsedModelStore = writable<ModelData | null>(null)
 
 // Types for content panel views
 export type View = 'element-info' | 'error' | 'generation' | 'import-model' | 'removal'

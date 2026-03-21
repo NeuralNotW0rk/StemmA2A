@@ -63,7 +63,8 @@ class StableAudioAdapter(ModelAdapter):
             name=kwargs.get("name"),
             checkpoint=Asset(path=checkpoint_path, uid=model_id),
             config=config,
-            model_type=kwargs.get("model_type")
+            model_type=kwargs.get("model_type"),
+            context={}
         )
         
     def load_model(self, info: StableAudioModel, verify: bool = True):
@@ -83,13 +84,11 @@ class StableAudioAdapter(ModelAdapter):
 
         if verify and self.uid_generator.from_module(self.model) != info.id:
             raise UIDMismatchError("Checkpoint UID mismatch")
-            
 
     def generate(self, **kwargs) -> tuple[Audio, torch.Tensor]:
         model = self.model.to(self.device)
         sample_rate = self.model_info.config["sample_rate"]
         sample_size = self.model_info.config["sample_size"]
-
 
         # Set up text and timing conditioning
         conditioning = [{
@@ -98,7 +97,18 @@ class StableAudioAdapter(ModelAdapter):
             "seconds_total": kwargs.get("seconds_total", 11)
         }]
 
+        negative_prompt = kwargs.get("negative_prompt", "")
+        negative_conditioning = None
+        if negative_prompt:
+            negative_conditioning = [{
+                "prompt": negative_prompt,
+                "seconds_start": kwargs.get("seconds_start", 0),
+                "seconds_total": kwargs.get("seconds_total", 11)
+            }]
+
         print(f"Generating with conditioning:{str(conditioning)}")
+        if negative_prompt:
+            print(f"Generating with negative_conditioning:{str(negative_conditioning)}")
         print(f"Sample Rate: {sample_rate}")
         print(f"Sample Size: {sample_size}")
 
@@ -112,20 +122,45 @@ class StableAudioAdapter(ModelAdapter):
         
         if not sampler_type:
             sampler_type = "pingpong"
+            
+        # Set up generation arguments
+        args = {
+            "steps": kwargs.get("steps", 8),
+            "cfg_scale": kwargs.get("cfg_scale", 1.0),
+            "conditioning": conditioning,
+            "negative_conditioning": negative_conditioning,
+            "batch_size": kwargs.get("batch_size", 1),
+            "sample_size": sample_size,
+            "sigma_min": kwargs.get("sigma_min", 0.3),
+            "sigma_max": kwargs.get("sigma_max", 500),
+            "sampler_type": sampler_type,
+            "device": self.device,
+            "seed": kwargs.get("seed", 0)
+        }
+
+        # Handle initial audio if provided
+        init_audio_element = kwargs.get("init_audio_element")
+        if init_audio_element:
+            noise_level = kwargs.get("noise_level", 0.7)
+            
+            # Load audio
+            audio_path = Path(init_audio_element.file.path)
+            if audio_path and audio_path.exists():
+                init_audio_tensor, init_audio_sample_rate = torchaudio.load(audio_path)
+
+                # Resample if necessary
+                if init_audio_sample_rate != sample_rate:
+                    resampler = torchaudio.transforms.Resample(
+                        orig_freq=init_audio_sample_rate, 
+                        new_freq=sample_rate
+                    ).to(self.device)
+                    init_audio_tensor = resampler(init_audio_tensor)
+                
+                args["init_audio"] = (sample_rate, init_audio_tensor)
+                args["init_noise_level"] = noise_level
 
         # Generate stereo audio
-        output = generate_diffusion_cond(
-            model,
-            steps=kwargs.get("steps", 8),
-            cfg_scale=kwargs.get("cfg_scale", 1.0),
-            conditioning=conditioning,
-            sample_size=sample_size,
-            sigma_min=kwargs.get("sigma_min", 0.3),
-            sigma_max=kwargs.get("sigma_max", 500),
-            sampler_type=sampler_type,
-            device=self.device,
-            seed=kwargs.get("seed", 0)
-        )
+        output = generate_diffusion_cond(model, **args)
         
         print("Generation complete, rearranging...")
 
@@ -141,6 +176,7 @@ class StableAudioAdapter(ModelAdapter):
             id=content_uid,
             name=generate_slug(2),
             file=Asset(path=None, uid=content_uid),
+            sample_rate=sample_rate,
             context=kwargs
         )
 

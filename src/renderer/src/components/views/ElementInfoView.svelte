@@ -2,19 +2,19 @@
 <script lang="ts">
   /* eslint-disable @typescript-eslint/no-explicit-any */
   interface Props {
-    selectedNodeData: Record<string, any> | null
+    selectedElementData: Record<string, any> | null
   }
 
-  let { selectedNodeData }: Props = $props()
+  let { selectedElementData }: Props = $props()
 
   // A list of keys to ignore for a cleaner display
   const ignoredKeys = new Set(['x', 'y', 'vx', 'vy', 'fx', 'fy', 'isExpanded', 'index'])
 </script>
 
 <div class="view-content">
-  {#if selectedNodeData}
+  {#if selectedElementData}
     <ul>
-      {#each Object.entries(selectedNodeData) as [key, value] (key)}
+      {#each Object.entries(selectedElementData) as [key, value] (key)}
         {#if !ignoredKeys.has(key)}
           <li>
             <strong class="key">{key}</strong>
