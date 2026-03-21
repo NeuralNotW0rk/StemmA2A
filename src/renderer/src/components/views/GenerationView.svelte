@@ -107,16 +107,20 @@
 
     lastUsedModelStore.set(selectedModel)
 
-    const payload: Record<string, unknown> = { ...formData, model_id: selectedModel.id }
+    const payload: Record<string, unknown> = { model_id: selectedModel.id }
+    if (adapterFields) {
+      for (const field of adapterFields) {
+        const fieldName = field.name
+        const value = formData[fieldName]
 
-    // Handle node objects in payload
-    if (
-      payload.init_audio &&
-      typeof payload.init_audio === 'object' &&
-      'id' in payload.init_audio
-    ) {
-      payload.init_audio_id = (payload.init_audio as AudioData).id
-      delete payload.init_audio
+        if (value !== undefined && value !== null) {
+          if (field.type === 'node' && typeof value === 'object' && 'id' in value) {
+            payload[`${fieldName}_id`] = (value as { id: string }).id
+          } else {
+            payload[fieldName] = value
+          }
+        }
+      }
     }
 
     inProgress = true
@@ -149,7 +153,12 @@
         <p>Error: {error}</p>
       </div>
     {:else if adapterFields}
-      <DynamicForm config={adapterFields} bind:formData bind:isFormValid />
+      <DynamicForm
+        config={adapterFields}
+        bind:formData
+        bind:isFormValid
+        contextData={selectedModel}
+      />
     {:else if !selectedModel}
       <p class="centered-text">Select a model to see its generation options.</p>
     {/if}

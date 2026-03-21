@@ -232,7 +232,7 @@
       }}
       position="right"
     >
-      <ElementInfoView selectedElementData={selectedElementData} />
+      <ElementInfoView {selectedElementData} />
     </ContentPanel>
   {/if}
 
@@ -250,7 +250,10 @@
           onError={(error) => {
             console.error('Generation error:', error)
             closeActionPanel()
-            errorInInfoPanel = error
+            errorInInfoPanel = {
+              title: error.title || 'Generation Failed',
+              message: error.message || 'An unknown error occurred during generation.'
+            }
           }}
         />
       {:else if actionPanelView === 'import-model'}

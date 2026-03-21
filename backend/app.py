@@ -279,10 +279,11 @@ async def generate():
             return jsonify({"error": f"Adapter '{model_element.adapter}' has no 'generate' configuration"}), 404
 
         # 4. Validate the request body
-        DynamicArgsModel = create_dynamic_model(form_config)
-        validated_params = DynamicArgsModel.model_validate(json_data)
+        #DynamicArgsModel = create_dynamic_model(form_config)
+        #validated_params = DynamicArgsModel.model_validate(json_data)
 
-        dumped_params = validated_params.model_dump()
+        #dumped_params = validated_params.model_dump()
+        dumped_params = json_data
         init_audio = dumped_params.pop("init_audio", None)
         init_audio_element = None
         if init_audio and isinstance(init_audio, dict):

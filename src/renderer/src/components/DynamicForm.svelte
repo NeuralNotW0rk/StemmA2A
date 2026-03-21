@@ -5,11 +5,13 @@
   let {
     config,
     formData = $bindable(),
-    isFormValid = $bindable()
+    isFormValid = $bindable(),
+    contextData = null
   } = $props<{
     config: FormConfig
     formData: Record<string, unknown>
     isFormValid: boolean
+    contextData?: Record<string, unknown> | null
   }>()
 
   $effect(() => {
@@ -37,14 +39,17 @@
         return true
       }
 
+      // Combine context and form data, with form data taking precedence.
+      const data = { ...contextData, ...formData }
+
       for (const key in field.show_if) {
         const condition = field.show_if[key]
         if (condition === 'exists') {
-          if (!formData[key]) {
+          if (!data[key]) {
             return false
           }
         } else {
-          if (formData[key] !== condition) {
+          if (data[key] !== condition) {
             return false
           }
         }
