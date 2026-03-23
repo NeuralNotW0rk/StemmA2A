@@ -7,7 +7,6 @@ import torchaudio
 from einops import rearrange
 from stable_audio_tools import create_model_from_config
 from stable_audio_tools.inference.generation import generate_diffusion_cond
-import soundfile as sf
 from safetensors.torch import load_file
 from coolname import generate_slug
 
@@ -15,7 +14,7 @@ from .base import ModelAdapter
 from param_graph.elements.base_elements import Asset
 from param_graph.elements.artifacts.audio import Audio
 from param_graph.elements.models.stable_audio import StableAudioModel
-from utils.uid_utils import UIDMismatchError
+from utils.uid import UIDMismatchError
 
 
 # Workaround for the file extension-based safetensors loading in stable audio tools

@@ -4,8 +4,7 @@ from pathlib import Path
 from time import time
 from typing import Iterator, Tuple
 
-from utils.uid_utils import path_from_uid
-from ..registry import register
+from utils.uid import path_from_uid
 
 @dataclass(frozen=True)
 class Asset:

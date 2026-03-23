@@ -1,20 +1,18 @@
 import os
 import json
-import inspect
 from pathlib import Path
 from time import time
-import networkx as nx
 
+import networkx as nx
 import torch
 import numpy as np
 import librosa as lr
-
 from sklearn.manifold import TSNE
 
-from backend.utils.audio import load_audio
-from backend.utils.filesystem import check_dir
+from utils.audio import load_audio
+from utils.filesystem import check_dir
 from .const import *
-from .elements.base_elements import Artifact, GraphElement
+from .elements.base_elements import GraphElement
 from .registry import resolve_element
 
 DEFAULT_SR = 48000

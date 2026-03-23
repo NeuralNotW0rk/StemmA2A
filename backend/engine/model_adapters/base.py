@@ -6,7 +6,7 @@ import torch
 
 from param_graph.elements.base_elements import GraphElement
 from param_graph.elements.models.base import Model
-from utils.uid_utils import UIDGenerator, XXH3_64
+from utils.uid import UIDGenerator, XXH3_64
 
 class ModelAdapter(ABC):
     def __init__(self, uid_generator: UIDGenerator = None) -> None:
