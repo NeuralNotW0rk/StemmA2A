@@ -12,7 +12,8 @@
   import NewProjectView from './components/views/NewProjectView.svelte'
   import { onMount } from 'svelte'
   import {
-    activeNodeStore,
+    initiatorNodeStore,
+    boundNodeStore,
     selectedForRemoval,
     backendStatus,
     isCreatingNewProject
@@ -26,7 +27,6 @@
   let audioSrc: string | null = $state(null)
   let audioTitle: string | null = $state(null)
   let selectedElementData: Record<string, any> | null = $state(null)
-  let generationNode: any = $state(null)
   let actionPanelView: ActionPanelView = $state('none')
   let errorInInfoPanel: { title: string; message: string } | null = $state(null)
   let toolbarComponent: Toolbar
@@ -69,8 +69,8 @@
 
   function closeActionPanel(): void {
     actionPanelView = 'none'
-    generationNode = null
-    activeNodeStore.set(null)
+    initiatorNodeStore.set(null)
+    boundNodeStore.set({})
     selectedForRemoval.set(null)
   }
 
@@ -165,15 +165,13 @@
   }
 
   function handleModelSelect(modelData: any): void {
-    generationNode = modelData
+    initiatorNodeStore.set(modelData)
     actionPanelView = 'generation'
-    activeNodeStore.set(modelData)
   }
 
   function handleAudioNodeSelectForGeneration(audioData: any): void {
-    generationNode = audioData
+    initiatorNodeStore.set(audioData)
     actionPanelView = 'generation'
-    activeNodeStore.set(audioData)
   }
 
   function handleNodeRemove(nodeData: any): void {
@@ -195,8 +193,8 @@
     if (actionPanelView === 'import-model') {
       return 'Import Model'
     }
-    if (actionPanelView === 'generation' && generationNode) {
-      return generationNode.type === 'model' ? 'Generate' : 'Variation'
+    if (actionPanelView === 'generation' && $initiatorNodeStore) {
+      return $initiatorNodeStore.type === 'model' ? 'Generate' : 'Variation'
     }
     if (actionPanelView === 'removal') {
       return 'Confirm Removal'
@@ -240,7 +238,6 @@
     <ContentPanel title={getActionPanelTitle()} onclose={closeActionPanel} position="left">
       {#if actionPanelView === 'generation'}
         <GenerationView
-          node={generationNode}
           onClose={closeActionPanel}
           onGenerate={(result) => {
             console.log('Generation result:', result)

@@ -11,7 +11,8 @@ import librosa as lr
 
 from sklearn.manifold import TSNE
 
-from .util import *
+from backend.utils.audio import load_audio
+from backend.utils.filesystem import check_dir
 from .const import *
 from .elements.base_elements import Artifact, GraphElement
 from .registry import resolve_element

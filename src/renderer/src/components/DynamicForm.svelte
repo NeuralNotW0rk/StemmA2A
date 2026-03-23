@@ -23,6 +23,23 @@
     )
   })
 
+  export function getPayload(): Record<string, unknown> {
+    const payload: Record<string, unknown> = {}
+    for (const field of config) {
+      const fieldName = field.name
+      const value = formData[fieldName]
+
+      if (value !== undefined && value !== null) {
+        if (field.type === 'node' && typeof value === 'object' && value && 'id' in value) {
+          payload[fieldName] = value.id
+        } else {
+          payload[fieldName] = value
+        }
+      }
+    }
+    return payload
+  }
+
   async function selectFieldFile(
     fieldName: string,
     filters?: { name: string; extensions: string[] }[]

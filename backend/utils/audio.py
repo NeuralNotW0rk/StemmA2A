@@ -1,14 +1,8 @@
+# backend/utils/audio.py
 import os
 import torchaudio
 
-
-def check_dir(dir):
-    if not os.path.exists(dir):
-        os.makedirs(dir, exist_ok=True)
-    return dir
-
 def load_audio(device, audio_path: str, sample_rate):
-    
     if not os.path.exists(audio_path):
         raise RuntimeError(f"Audio file not found: {audio_path}")
 

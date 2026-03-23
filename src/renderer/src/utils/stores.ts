@@ -1,7 +1,7 @@
 import { writable } from 'svelte/store'
-import type { ModelData, AudioData } from './forms'
+import type { ModelData, AudioData, NodeData } from './forms'
 
-type SelectableNodeData = ModelData | AudioData
+type SelectableNodeData = NodeData
 
 interface SelectionState {
   isSelecting: boolean
@@ -65,18 +65,24 @@ function createSelectionStore() {
 
 export const selectionStore = createSelectionStore()
 
-export const activeNodeStore = writable<any>(null)
-export const lastUsedModelStore = writable<ModelData | null>(null)
-
-// Types for content panel views
-export type View = 'element-info' | 'error' | 'generation' | 'import-model' | 'removal'
-
 // A minimal type for graph elements, to be expanded as needed.
 export interface GraphElement {
   id: string
   type: string
   [key: string]: any
 }
+
+export const initiatorNodeStore = writable<NodeData | null>(null)
+
+export interface ActiveNodes {
+  [role:string]: GraphElement | null
+}
+export const boundNodeStore = writable<ActiveNodes>({})
+
+export const lastUsedModelStore = writable<ModelData | null>(null)
+
+// Types for content panel views
+export type View = 'element-info' | 'error' | 'generation' | 'import-model' | 'removal'
 
 export type BackendStatus = {
   project_loaded: boolean

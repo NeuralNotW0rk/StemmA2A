@@ -1,22 +1,17 @@
 # backend/engine_service.py
 import json
 import os
-from flask import Flask, make_response, request, jsonify, send_file
-from flask_cors import CORS
-import torch
 import traceback
 from pathlib import Path
 
-from dotenv import load_dotenv
-
-# Load environment variables from .env file for local development
-load_dotenv()
-
+from flask import Flask, make_response, request, jsonify, send_file
+from flask_cors import CORS
+import torch
 from pydantic import ValidationError
 
 from engine.engine_provider import EngineProvider
-from param_graph.registry import resolve_element
-from utils.uid_utils import path_from_uid
+from backend.utils.uid import path_from_uid
+from param_graph.utils import resolve_elements_from_dicts
 
 
 app = Flask(__name__)
@@ -89,16 +84,9 @@ async def execute():
         engine = engine_provider.get_engine()
 
         # Find all graph elements in the params and resolve them from dicts to objects
-        resolved_params = params.copy()
-        all_elements = {}
-        for key, value in params.items():
-            # This is a simple check. We might need a more robust way to identify
-            # dicts that are meant to be graph elements.
-            if isinstance(value, dict) and 'id' in value and 'type' in value:
-                element = resolve_element(value)
-                resolved_params[key] = element
-                all_elements[key] = element
-                print(f"Received {key}: {element.type} {element.id}")
+        resolved_params, all_elements = resolve_elements_from_dicts(params)
+        for key, element in all_elements.items():
+            print(f"Received {key}: {element.type} {element.id}")
         
         # Check for missing assets across all resolved elements
         required_uids = set()

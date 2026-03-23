@@ -9,9 +9,10 @@ from ..registry import register
 
 @dataclass(frozen=True)
 class Asset:
-    """A data container for a path and a UID."""
+    """A data container for a path, a UID, and an extension."""
     path: str
     uid: str
+    extension: str = ""
 
 @dataclass(kw_only=True)
 class GraphElement:
@@ -55,14 +56,22 @@ class GraphElement:
             updates[field_name] = new_asset_obj
         return replace(self, **updates)
     
-    def anchor(self, root: Path) -> GraphElement:
+    def anchor(self, root: Path, with_extension: bool = True) -> GraphElement:
         """
         Constructs local paths for all discovered assets based on their UID
         and a given root directory.
         """
         updates = {}
         for field_name, asset_obj in self._iter_assets():
-            new_path = str(root / path_from_uid(asset_obj.uid))
+            base_path = path_from_uid(asset_obj.uid)
+            
+            if with_extension and hasattr(asset_obj, 'extension') and asset_obj.extension:
+                ext = asset_obj.extension if asset_obj.extension.startswith('.') else '.' + asset_obj.extension
+                final_path = base_path.with_suffix(ext)
+            else:
+                final_path = base_path
+
+            new_path = str(Path(root) / final_path)
             new_asset_obj = replace(asset_obj, path=new_path)
             updates[field_name] = new_asset_obj
         return replace(self, **updates)

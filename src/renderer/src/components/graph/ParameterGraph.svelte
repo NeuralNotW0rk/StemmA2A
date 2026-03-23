@@ -9,7 +9,7 @@
   import graphStyle from './Style'
   import layoutConfig from './Layout'
   import expandCollapseOptions from './Options'
-  import { selectionStore, activeNodeStore } from '../../utils/stores'
+  import { selectionStore, boundNodeStore } from '../../utils/stores'
 
   interface Props {
     graphData?: { elements: cytoscape.ElementDefinition[] } | null
@@ -48,12 +48,6 @@
     selectionBoundNodeId = store.boundNodeId
   })
 
-  let activeNode = $state<any>(null)
-  activeNodeStore.subscribe((node) => {
-    console.log('ParameterGraph: activeNode received from store:', node?.id)
-    activeNode = node
-  })
-
   $effect(() => {
     if (cy) {
       // Depend on graphData so this runs after nodes are added.
@@ -69,17 +63,16 @@
           cy.getElementById(selectionBoundNodeId).removeClass('dimmed').addClass('bound')
         }
       } else {
-        if (activeNode && activeNode.id) {
-          console.log('ParameterGraph: Highlighting active node:', activeNode.id)
-          const nodeToHighlight = cy.getElementById(activeNode.id)
-          if (nodeToHighlight.length > 0) {
-            nodeToHighlight.addClass('bound')
-            console.log('ParameterGraph: Successfully highlighted', activeNode.id)
-          } else {
-            console.log('ParameterGraph: Could not find node to highlight in graph:', activeNode.id)
-          }
-        } else {
-          console.log('ParameterGraph: No active node to highlight.')
+        const boundNodes = $boundNodeStore
+        if (Object.keys(boundNodes).length > 0) {
+          Object.values(boundNodes).forEach((node) => {
+            if (node && node.id) {
+              const nodeToHighlight = cy.getElementById(node.id)
+              if (nodeToHighlight.length > 0) {
+                nodeToHighlight.addClass('bound')
+              }
+            }
+          })
         }
       }
     }

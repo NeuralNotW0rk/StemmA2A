@@ -1,14 +1,12 @@
 <script lang="ts">
   import { tick } from 'svelte'
-  import type { FormConfig, ModelData, AudioData } from '../../utils/forms'
-  import { activeNodeStore, lastUsedModelStore } from '../../utils/stores'
+  import type { FormConfig, ModelData, NodeData } from '../../utils/forms'
+  import { initializeFormData } from '../../utils/forms'
+  import { initiatorNodeStore, boundNodeStore, lastUsedModelStore } from '../../utils/stores'
   import DynamicForm from '../DynamicForm.svelte'
   import NodeSelector from '../NodeSelector.svelte'
 
-  type NodeData = ModelData | AudioData
-
-  let { node, onClose, onGenerate, onError } = $props<{
-    node: NodeData
+  let { onClose, onGenerate, onError } = $props<{
     onClose: () => void
     onGenerate: (data: unknown) => void
     onError: (error: { title: string; message: string }) => void
@@ -20,8 +18,23 @@
   let error: string | null = $state(null)
   let inProgress = $state(false)
   let selectedModel: ModelData | null = $state(null)
-  let lastNodeId: string | null = $state(null)
   let isFormValid = $state(false)
+  let contextData = $state({})
+  let dynamicForm: DynamicForm | undefined = $state()
+
+  $effect(() => {
+    const data: Record<string, unknown> = {}
+    if (selectedModel) {
+      // Flatten model properties into the context for show_if conditions
+      Object.assign(data, selectedModel)
+    }
+
+    if ($initiatorNodeStore) {
+      data.initiator = $initiatorNodeStore
+    }
+
+    contextData = data
+  })
 
   async function loadAdapterConfig(adapter: string): Promise<void> {
     try {
@@ -33,13 +46,12 @@
       const config = await window.api.getAdapterConfig(adapter)
       if (config && config.generate && Array.isArray(config.generate)) {
         adapterFields = config.generate
-        const newFormData = {}
-        for (const field of adapterFields) {
-          if (newFormData[field.name] === undefined || newFormData[field.name] === null) {
-            newFormData[field.name] = field.defaultValue as string | number | boolean | null
-          }
-        }
+        const { formData: newFormData, boundNodes: newBoundNodes } = initializeFormData(
+          adapterFields,
+          $initiatorNodeStore
+        )
         formData = newFormData
+        boundNodeStore.set(newBoundNodes)
       } else {
         throw new Error('Invalid config format received from backend.')
       }
@@ -54,28 +66,28 @@
   }
 
   $effect(() => {
-    if (node && node.id !== lastNodeId) {
-      lastNodeId = node.id
+    // This effect runs when the component mounts and whenever initiatorNodeStore changes.
+    const initiatorNode = $initiatorNodeStore
+    if (initiatorNode) {
       error = null
       inProgress = false
       formData = {}
 
-      if (node.type === 'model') {
-        selectedModel = node as ModelData
-      } else if (node.type === 'audio') {
+      if (initiatorNode.type === 'model') {
+        selectedModel = initiatorNode as ModelData
+      } else if (initiatorNode.type === 'audio') {
         // If an audio node is opened, use the last used model
         selectedModel = $lastUsedModelStore
-        // And set this audio as the init_audio in the form, if the form has such a field
-        if (adapterFields?.some((f) => f.name === 'init_audio')) {
-          formData.init_audio = node
-        }
       }
+    } else {
+      // Reset if there's no initiator node
+      selectedModel = null
     }
   })
 
   $effect(() => {
+    // This effect runs whenever selectedModel changes, handling async loading.
     if (selectedModel) {
-      activeNodeStore.set(selectedModel)
       if (selectedModel.adapter) {
         loadAdapterConfig(selectedModel.adapter)
       } else {
@@ -83,10 +95,39 @@
         adapterFields = null
       }
     } else {
-      activeNodeStore.set(node)
+      // If no model is selected, we are not loading anything.
       isLoading = false
       adapterFields = null
     }
+  })
+
+  $effect(() => {
+    // This effect is the single source of truth for what is 'bound' in the graph.
+    const newBoundNodes = {}
+
+    // The initiator node is always bound.
+    if ($initiatorNodeStore) {
+      newBoundNodes['initiator'] = $initiatorNodeStore
+    }
+
+    // The selected model is also bound.
+    if (selectedModel) {
+      newBoundNodes['model'] = selectedModel
+    }
+
+    // Any nodes selected in the form are also bound.
+    if (adapterFields) {
+      for (const field of adapterFields) {
+        if (field.type === 'node') {
+          const node = formData[field.name] as NodeData | null
+          if (node) {
+            newBoundNodes[field.name] = node
+          }
+        }
+      }
+    }
+
+    boundNodeStore.set(newBoundNodes)
   })
 
   function handleModelSelect(newModel: ModelData): void {
@@ -107,22 +148,12 @@
 
     lastUsedModelStore.set(selectedModel)
 
-    const payload: Record<string, unknown> = { model_id: selectedModel.id }
-    if (adapterFields) {
-      for (const field of adapterFields) {
-        const fieldName = field.name
-        const value = formData[fieldName]
-
-        if (value !== undefined && value !== null) {
-          if (field.type === 'node' && typeof value === 'object' && 'id' in value) {
-            payload[`${fieldName}_id`] = (value as { id: string }).id
-          } else {
-            payload[fieldName] = value
-          }
-        }
-      }
+    const payload = {
+      ...dynamicForm.getPayload(),
+      model_id: selectedModel.id
     }
 
+    console.log('Generating with payload:', payload)
     inProgress = true
     try {
       const result = await window.api.generate(payload)
@@ -154,10 +185,11 @@
       </div>
     {:else if adapterFields}
       <DynamicForm
+        bind:this={dynamicForm}
         config={adapterFields}
         bind:formData
         bind:isFormValid
-        contextData={selectedModel}
+        {contextData}
       />
     {:else if !selectedModel}
       <p class="centered-text">Select a model to see its generation options.</p>

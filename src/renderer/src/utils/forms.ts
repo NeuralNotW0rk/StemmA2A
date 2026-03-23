@@ -41,3 +41,33 @@ export interface AudioData {
   alias?: string
   [key: string]: unknown
 }
+
+export type NodeData = ModelData | AudioData
+
+export function initializeFormData(
+  fields: FormConfig,
+  initiatorNode: NodeData | null
+): { formData: Record<string, unknown>; boundNodes: Record<string, NodeData> } {
+  const formData: Record<string, unknown> = {}
+  const boundNodes: Record<string, NodeData> = {}
+
+  if (!fields) {
+    return { formData, boundNodes }
+  }
+
+  for (const field of fields) {
+    if (field.defaultValue !== undefined) {
+      formData[field.name] = field.defaultValue
+    }
+    // Check if the initiator node can be used for a field
+    if (
+      initiatorNode &&
+      field.type === 'node' &&
+      field.selectionType === initiatorNode.type
+    ) {
+      formData[field.name] = initiatorNode
+      boundNodes[field.name] = initiatorNode
+    }
+  }
+  return { formData, boundNodes }
+}

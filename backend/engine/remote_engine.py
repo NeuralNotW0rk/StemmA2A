@@ -7,18 +7,7 @@ from param_graph.elements.base_elements import GraphElement
 
 from .engine import Engine
 from param_graph.registry import resolve_element
-from utils.uid_utils import path_from_uid
-
-def find_elements(d: dict) -> dict[str, GraphElement]:
-    elements = {}
-    for k, v in d.items():
-        if isinstance(v, GraphElement):
-            elements[k] = v
-        elif isinstance(v, dict):
-            # For now, we won't recurse into dicts.
-            # This can be expanded if we have nested elements.
-            pass 
-    return elements
+from param_graph.utils import find_elements
 
 
 class RemoteEngine(Engine):
@@ -54,31 +43,22 @@ class RemoteEngine(Engine):
 
         # 2. De-anchor all elements before serialization.
         # This removes local paths, which are not meaningful on the remote server.
-        anchored_params = kwargs.copy()
+        de_anchored_params = kwargs.copy()
         for name, element in all_elements.items():
-            anchored_params[name] = element.de_anchor()
+            de_anchored_params[name] = element.de_anchor().to_dict()
 
         # 3. Prepare the payload for the remote execution endpoint.
         payload = {
             "operation": operation,
-            "params": anchored_params,
+            "params": de_anchored_params,
         }
 
         auth_headers = self._get_auth_headers()
         
         async with aiohttp.ClientSession(headers=auth_headers) as session:
             while True:
-                # Use a custom json serializer that can handle dataclasses
-                # This is a bit of a hack, we should probably have a proper serializer
-                import json
-                from dataclasses import is_dataclass, asdict
-                class DataclassEncoder(json.JSONEncoder):
-                    def default(self, o):
-                        if is_dataclass(o):
-                            return asdict(o)
-                        return super().default(o)
                 
-                async with session.post(f"{self.remote_url}/execute", data=json.dumps(payload, cls=DataclassEncoder),
+                async with session.post(f"{self.remote_url}/execute", data=json.dumps(payload),
                                         headers={'Content-Type': 'application/json'}) as response:
                     if response.status == 422: # Missing assets
                         error_details = await response.json()
@@ -108,17 +88,39 @@ class RemoteEngine(Engine):
                     file_data = await response.read()
 
                     # 3. Save the file to a local temporary directory
-                    temp_dir = tempfile.TemporaryDirectory()
+                    # Create a tmp directory inside the backend folder to ensure write permissions
+                    tmp_root = Path(__file__).parent.parent / "tmp"
+                    tmp_root.mkdir(exist_ok=True)
+                    
+                    temp_dir = tempfile.TemporaryDirectory(dir=tmp_root)
                     temp_dir_path = Path(temp_dir.name)
 
-                    # We assume the first UID is the one for the file we just downloaded
-                    uid = result_element.get_uids()[0]
-                    local_path = temp_dir_path / path_from_uid(uid)
+                    # Inspect the element to determine the correct file extension
+                    main_asset = None
+                    for _, asset in result_element._iter_assets():
+                        if asset.uid == result_element.id:
+                            main_asset = asset
+                            break
+                    
+                    # Construct the sharded path for the asset, including extension
+                    from backend.utils.uid import path_from_uid
+                    base_path = path_from_uid(result_element.id)
+                    
+                    if main_asset and hasattr(main_asset, 'extension') and main_asset.extension:
+                        ext = main_asset.extension if main_asset.extension.startswith('.') else '.' + main_asset.extension
+                        final_path_in_temp = base_path.with_suffix(ext)
+                    else:
+                        final_path_in_temp = base_path
+                    
+                    local_path = temp_dir_path / final_path_in_temp
+                    
+                    # Ensure the parent directory for the sharded path exists and save the file
                     local_path.parent.mkdir(parents=True, exist_ok=True)
                     local_path.write_bytes(file_data)
                     
-                    # 4. Anchor the element to the new local path
-                    anchored_element = result_element.anchor(temp_dir_path)
+                    # 4. Anchor the element to the temporary directory. The anchor method
+                    # will reconstruct the same sharded path to find the asset.
+                    anchored_element = result_element.anchor(str(temp_dir_path))
 
                     # 5. Store a reference to the TemporaryDirectory object to prevent
                     # it from being garbage collected and deleting the file.
