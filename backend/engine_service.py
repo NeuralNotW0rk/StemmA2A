@@ -10,7 +10,7 @@ import torch
 from pydantic import ValidationError
 
 from engine.engine_provider import EngineProvider
-from backend.utils.uid import path_from_uid
+from utils.uid import path_from_uid
 from param_graph.utils import resolve_elements_from_dicts
 
 
