@@ -88,12 +88,14 @@ class StableAudioAdapter(ModelAdapter):
         model = self.model.to(self.device)
         sample_rate = self.model_info.config["sample_rate"]
         sample_size = self.model_info.config["sample_size"]
+        seconds_start = kwargs.get("seconds_start", 0)
+        seconds_total = kwargs.get("seconds_total", 11)
 
         # Set up text and timing conditioning
         conditioning = [{
             "prompt": kwargs.get("prompt", ""),
-            "seconds_start": kwargs.get("seconds_start", 0),
-            "seconds_total": kwargs.get("seconds_total", 11)
+            "seconds_start": seconds_start,
+            "seconds_total": seconds_total
         }]
 
         negative_prompt = kwargs.get("negative_prompt", "")
@@ -101,8 +103,8 @@ class StableAudioAdapter(ModelAdapter):
         if negative_prompt:
             negative_conditioning = [{
                 "prompt": negative_prompt,
-                "seconds_start": kwargs.get("seconds_start", 0),
-                "seconds_total": kwargs.get("seconds_total", 11)
+                "seconds_start": seconds_start,
+                "seconds_total": seconds_total
             }]
 
         print(f"Generating with conditioning:{str(conditioning)}")
@@ -161,10 +163,12 @@ class StableAudioAdapter(ModelAdapter):
 
         # Generate stereo audio
         output = generate_diffusion_cond(model, **args)
-        
-        print("Generation complete, rearranging...")
+
+        # Trim silence
+        output = output[:,:,:seconds_total*sample_rate]
 
         # Rearrange audio batch to a single sequence
+        print("Generation complete, rearranging...")
         output = rearrange(output, "b d n -> d (b n)")
 
         # Peak normalize, clip, convert to int16
