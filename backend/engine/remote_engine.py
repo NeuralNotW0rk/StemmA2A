@@ -8,12 +8,14 @@ from param_graph.elements.base_elements import GraphElement
 from .engine import Engine
 from param_graph.registry import resolve_element
 from param_graph.utils import find_elements
+from utils.uid import path_from_uid
 
 
 class RemoteEngine(Engine):
-    def __init__(self, remote_url: str):
+    def __init__(self, remote_url: str, timeout: int = 300):
         super().__init__()
         self.remote_url = remote_url
+        self.timeout = timeout
         self.cf_client_id = os.environ.get("CF_ACCESS_CLIENT_ID")
         self.cf_client_secret = os.environ.get("CF_ACCESS_CLIENT_SECRET")
 
@@ -55,7 +57,8 @@ class RemoteEngine(Engine):
 
         auth_headers = self._get_auth_headers()
         
-        async with aiohttp.ClientSession(headers=auth_headers) as session:
+        timeout = aiohttp.ClientTimeout(total=self.timeout)
+        async with aiohttp.ClientSession(headers=auth_headers, timeout=timeout) as session:
             while True:
                 
                 async with session.post(f"{self.remote_url}/execute", data=json.dumps(payload),
@@ -95,22 +98,9 @@ class RemoteEngine(Engine):
                     temp_dir = tempfile.TemporaryDirectory(dir=tmp_root)
                     temp_dir_path = Path(temp_dir.name)
 
-                    # Inspect the element to determine the correct file extension
-                    main_asset = None
-                    for _, asset in result_element._iter_assets():
-                        if asset.uid == result_element.id:
-                            main_asset = asset
-                            break
-                    
-                    # Construct the sharded path for the asset, including extension
-                    from backend.utils.uid import path_from_uid
+                    # Construct the sharded path for the asset
                     base_path = path_from_uid(result_element.id)
-                    
-                    if main_asset and hasattr(main_asset, 'extension') and main_asset.extension:
-                        ext = main_asset.extension if main_asset.extension.startswith('.') else '.' + main_asset.extension
-                        final_path_in_temp = base_path.with_suffix(ext)
-                    else:
-                        final_path_in_temp = base_path
+                    final_path_in_temp = base_path
                     
                     local_path = temp_dir_path / final_path_in_temp
                     

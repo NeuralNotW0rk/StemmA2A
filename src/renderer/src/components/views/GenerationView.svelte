@@ -1,12 +1,18 @@
 <script lang="ts">
-  import { tick } from 'svelte'
+  import { tick, onDestroy } from 'svelte'
   import type { FormConfig, ModelData, NodeData } from '../../utils/forms'
   import { initializeFormData } from '../../utils/forms'
-  import { initiatorNodeStore, boundNodeStore, lastUsedModelStore } from '../../utils/stores'
+  import {
+    initiatorNodeStore,
+    boundNodeStore,
+    lastUsedModelStore,
+    formStateStore
+  } from '../../utils/stores'
+  import { startExecution } from '../../utils/execution'
   import DynamicForm from '../DynamicForm.svelte'
   import NodeSelector from '../NodeSelector.svelte'
 
-  let { onClose, onGenerate, onError } = $props<{
+  let { onClose, onError } = $props<{
     onClose: () => void
     onGenerate: (data: unknown) => void
     onError: (error: { title: string; message: string }) => void
@@ -16,17 +22,20 @@
   let formData: Record<string, unknown> = $state({})
   let isLoading = $state(true)
   let error: string | null = $state(null)
-  let inProgress = $state(false)
-  let selectedModel: ModelData | null = $state(null)
   let isFormValid = $state(false)
   let contextData = $state({})
   let dynamicForm: DynamicForm | undefined = $state()
 
+  // Clear the store when the component is destroyed to prevent state leakage.
+  onDestroy(() => {
+    formStateStore.clearGenerationModel()
+  })
+
   $effect(() => {
     const data: Record<string, unknown> = {}
-    if (selectedModel) {
+    if ($formStateStore.generationModel) {
       // Flatten model properties into the context for show_if conditions
-      Object.assign(data, selectedModel)
+      Object.assign(data, $formStateStore.generationModel)
     }
 
     if ($initiatorNodeStore) {
@@ -66,30 +75,27 @@
   }
 
   $effect(() => {
-    // This effect runs when the component mounts and whenever initiatorNodeStore changes.
+    // This effect runs when the component mounts. It sets the initial state
+    // of the form's model in the global store.
     const initiatorNode = $initiatorNodeStore
     if (initiatorNode) {
-      error = null
-      inProgress = false
-      formData = {}
-
       if (initiatorNode.type === 'model') {
-        selectedModel = initiatorNode as ModelData
+        $formStateStore.generationModel = initiatorNode as ModelData
       } else if (initiatorNode.type === 'audio') {
         // If an audio node is opened, use the last used model
-        selectedModel = $lastUsedModelStore
+        $formStateStore.generationModel = $lastUsedModelStore
       }
     } else {
-      // Reset if there's no initiator node
-      selectedModel = null
+      $formStateStore.generationModel = null
     }
   })
 
   $effect(() => {
-    // This effect runs whenever selectedModel changes, handling async loading.
-    if (selectedModel) {
-      if (selectedModel.adapter) {
-        loadAdapterConfig(selectedModel.adapter)
+    // This effect runs whenever the model in the store changes.
+    const model = $formStateStore.generationModel
+    if (model) {
+      if (model.adapter) {
+        loadAdapterConfig(model.adapter)
       } else {
         isLoading = false
         adapterFields = null
@@ -111,8 +117,8 @@
     }
 
     // The selected model is also bound.
-    if (selectedModel) {
-      newBoundNodes['model'] = selectedModel
+    if ($formStateStore.generationModel) {
+      newBoundNodes['model'] = $formStateStore.generationModel
     }
 
     // Any nodes selected in the form are also bound.
@@ -130,40 +136,23 @@
     boundNodeStore.set(newBoundNodes)
   })
 
-  function handleModelSelect(newModel: ModelData): void {
-    const oldAdapter = selectedModel?.adapter
-    selectedModel = newModel
-
-    if (newModel.adapter !== oldAdapter) {
-      loadAdapterConfig(newModel.adapter)
-    }
-  }
-
-  async function generate(): Promise<void> {
+  function generate(): void {
     const title = 'Generation'
-    if (!selectedModel) {
+    if (!$formStateStore.generationModel) {
       onError({ title: title + ' Failed', message: 'A model must be selected for generation.' })
       return
     }
 
-    lastUsedModelStore.set(selectedModel)
+    lastUsedModelStore.set($formStateStore.generationModel)
 
     const payload = {
       ...dynamicForm.getPayload(),
-      model_id: selectedModel.id
+      model_id: $formStateStore.generationModel.id
     }
 
     console.log('Generating with payload:', payload)
-    inProgress = true
-    try {
-      const result = await window.api.generate(payload)
-      onGenerate(result)
-    } catch (e: unknown) {
-      const message = e instanceof Error ? e.message : String(e)
-      onError({ title: title + ' Failed', message })
-    } finally {
-      inProgress = false
-    }
+    startExecution(payload)
+    onClose()
   }
 </script>
 
@@ -172,9 +161,8 @@
     <NodeSelector
       label="Model"
       selectionType="model"
-      node={selectedModel}
+      bind:node={$formStateStore.generationModel}
       id="model-selector"
-      onSelect={handleModelSelect}
     />
 
     {#if isLoading}
@@ -191,7 +179,7 @@
         bind:isFormValid
         {contextData}
       />
-    {:else if !selectedModel}
+    {:else if !$formStateStore.generationModel}
       <p class="centered-text">Select a model to see its generation options.</p>
     {/if}
   </div>
@@ -202,13 +190,9 @@
     <button
       class="primary"
       onclick={generate}
-      disabled={isLoading || !!error || !selectedModel || !isFormValid}
+      disabled={isLoading || !!error || !$formStateStore.generationModel || !isFormValid}
     >
-      {#if inProgress}
-        <div class="spinner"></div>
-      {:else}
-        Generate
-      {/if}
+      Generate
     </button>
   </div>
 </div>

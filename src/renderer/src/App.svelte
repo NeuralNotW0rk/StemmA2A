@@ -10,7 +10,8 @@
   import ImportModelView from './components/views/ImportModelView.svelte'
   import RemovalView from './components/views/RemovalView.svelte'
   import NewProjectView from './components/views/NewProjectView.svelte'
-  import { onMount } from 'svelte'
+  import ExecutionView from './components/views/ExecutionView.svelte'
+  import { onMount, onDestroy } from 'svelte'
   import {
     initiatorNodeStore,
     boundNodeStore,
@@ -18,6 +19,7 @@
     backendStatus,
     isCreatingNewProject
   } from './utils/stores'
+  import { executionStore } from './utils/execution'
 
   type ActionPanelView = 'generation' | 'import-model' | 'removal' | 'none'
 
@@ -31,10 +33,35 @@
   let errorInInfoPanel: { title: string; message: string } | null = $state(null)
   let toolbarComponent: Toolbar
 
+  // Backend restart detection
+  let serverInstanceId: string | null = $state(null)
+  let healthCheckInterval: number | null = null
+
+  $effect(() => {
+    const unsub = executionStore.subscribe((value) => {
+      if (value.status === 'success') {
+        refreshGraphData()
+      }
+    })
+    return unsub
+  })
+
   onMount(async () => {
+    await initialHealthCheck()
+    setupHealthCheckPolling()
+  })
+
+  onDestroy(() => {
+    if (healthCheckInterval) {
+      clearInterval(healthCheckInterval)
+    }
+  })
+
+  async function initialHealthCheck() {
     try {
       const status = await window.api.getHealth()
       backendStatus.set(status)
+      serverInstanceId = status.server_instance_id || null
       console.log('Backend status:', status)
     } catch (error) {
       console.error('Failed to get backend health:', error)
@@ -49,6 +76,7 @@
         try {
           const status = await window.api.getHealth()
           backendStatus.set(status)
+          serverInstanceId = status.server_instance_id || null
           errorInInfoPanel = null
           return
         } catch (e) {
@@ -65,7 +93,48 @@
           'Could not connect to the backend server. Please ensure it is running and accessible.'
       }
     }
-  })
+  }
+
+  function setupHealthCheckPolling() {
+    if (healthCheckInterval) {
+      clearInterval(healthCheckInterval)
+    }
+    healthCheckInterval = setInterval(async () => {
+      try {
+        const status = await window.api.getHealth()
+        backendStatus.set(status)
+
+        if (serverInstanceId && status.server_instance_id !== serverInstanceId) {
+          console.warn('Backend has restarted. Resetting project state.')
+          handleBackendRestart()
+        }
+        serverInstanceId = status.server_instance_id || null
+      } catch (error) {
+        console.error('Health check poll failed:', error)
+        // Optionally handle polling errors, e.g., show a banner
+      }
+    }, 3000) // Poll every 3 seconds
+  }
+
+  function handleBackendRestart() {
+    currentProject = null
+    graphData = null
+    selectedElementData = null
+    audioSrc = null
+    audioTitle = null
+    actionPanelView = 'none'
+    $isCreatingNewProject = false
+
+    // Close any selection process
+    initiatorNodeStore.set(null)
+    boundNodeStore.set({})
+    selectedForRemoval.set(null)
+
+    errorInInfoPanel = {
+      title: 'Backend Restarted',
+      message: 'The backend server has restarted. Please reload your project.'
+    }
+  }
 
   function closeActionPanel(): void {
     actionPanelView = 'none'
@@ -214,7 +283,17 @@
     {viewMode}
   />
 
-  {#if errorInInfoPanel}
+  {#if $executionStore.status !== 'idle'}
+    <ContentPanel
+      title={'Generation'}
+      onclose={() => {
+        /* This panel cannot be closed directly */
+      }}
+      position="left"
+    >
+      <ExecutionView />
+    </ContentPanel>
+  {:else if errorInInfoPanel}
     <ContentPanel
       title={errorInInfoPanel.title}
       onclose={() => (errorInInfoPanel = null)}
@@ -222,7 +301,9 @@
     >
       <ErrorView title={errorInInfoPanel.title} message={errorInInfoPanel.message} />
     </ContentPanel>
-  {:else if selectedElementData}
+  {/if}
+
+  {#if selectedElementData}
     <ContentPanel
       title={selectedElementData.alias || selectedElementData.name || 'Element Details'}
       onclose={() => {
@@ -234,24 +315,13 @@
     </ContentPanel>
   {/if}
 
-  {#if actionPanelView !== 'none'}
+  {#if actionPanelView !== 'none' && $executionStore.status === 'idle'}
     <ContentPanel title={getActionPanelTitle()} onclose={closeActionPanel} position="left">
       {#if actionPanelView === 'generation'}
         <GenerationView
           onClose={closeActionPanel}
-          onGenerate={(result) => {
-            console.log('Generation result:', result)
-            closeActionPanel()
-            refreshGraphData()
-          }}
-          onError={(error) => {
-            console.error('Generation error:', error)
-            closeActionPanel()
-            errorInInfoPanel = {
-              title: error.title || 'Generation Failed',
-              message: error.message || 'An unknown error occurred during generation.'
-            }
-          }}
+          onGenerate={closeActionPanel}
+          onError={closeActionPanel}
         />
       {:else if actionPanelView === 'import-model'}
         <ImportModelView

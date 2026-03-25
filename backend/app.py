@@ -3,6 +3,8 @@ import io
 import traceback
 from pathlib import Path
 import os
+import random
+import string
 
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
@@ -21,6 +23,9 @@ from utils.form import create_dynamic_model
 
 app = Flask(__name__)
 CORS(app)
+
+# Add a unique ID for the server instance
+SERVER_INSTANCE_ID = ''.join(random.choices(string.ascii_letters + string.digits, k=16))
 
 # Global state
 device_type_accelerator = "cpu"
@@ -48,7 +53,8 @@ def health_check():
     return jsonify({
         "status": "healthy",
         "device": str(device_accelerator),
-        "project_loaded": param_graph is not None
+        "project_loaded": param_graph is not None,
+        "server_instance_id": SERVER_INSTANCE_ID,
     })
 
 

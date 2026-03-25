@@ -120,7 +120,7 @@ def save_artifact_asset(
 
     # Use artifact's name for a human-readable filename, handling collisions
     base_name = artifact.name
-    suffix = temp_path.suffix
+    suffix = asset_to_save.extension
     permanent_path = destination_dir / f"{base_name}{suffix}"
 
     counter = 1
@@ -134,13 +134,8 @@ def save_artifact_asset(
     # Move the file
     shutil.move(str(temp_path), permanent_path)
 
-    # Make the path relative to the project root for portability
-    # The project root is the parent of the destination_dir (e.g., 'generated/')
-    project_root = destination_dir.parent
-    relative_path = permanent_path.relative_to(project_root)
-
     # Create a new asset object with the updated path
-    updated_asset = replace(asset_to_save, path=str(relative_path))
+    updated_asset = replace(asset_to_save, path=str(permanent_path))
 
     # Create a new artifact with the updated asset
     updated_artifact = replace(artifact, **{asset_name: updated_asset})

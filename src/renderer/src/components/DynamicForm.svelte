@@ -138,11 +138,8 @@
         <NodeSelector
           label={field.label}
           selectionType={field.selectionType}
-          node={formData[field.name] as ModelData | AudioData}
+          bind:node={formData[field.name] as ModelData | AudioData}
           id={field.name}
-          onSelect={(newNode) => {
-            formData[field.name] = newNode
-          }}
         />
       {:else}
         <label for={field.name}>{field.label}</label>

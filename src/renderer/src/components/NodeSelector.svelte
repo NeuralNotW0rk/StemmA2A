@@ -4,18 +4,24 @@
 
   type NodeData = ModelData | AudioData
 
-  let { label, selectionType, node, id, onSelect } = $props<{
+  let {
+    label,
+    selectionType,
+    node = $bindable(),
+    id
+  } = $props<{
     label: string
     selectionType: 'model' | 'audio'
     node: NodeData | null
     id: string
-    onSelect: (newNode: NodeData) => void
   }>()
 
   function selectNodeFromGraph(): void {
     selectionStore.startSelection(selectionType, node?.id ?? null, (selected) => {
+      // Check if the selected node is of the correct type and assign it.
+      // This will update the bound variable in the parent component.
       if (selected.type === selectionType) {
-        onSelect(selected)
+        node = selected as NodeData
       }
     })
   }

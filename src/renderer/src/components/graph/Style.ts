@@ -68,7 +68,7 @@ const defaultStyle: CssStyleDeclaration[] = [
   {
     selector: 'node[type="audio"]',
     style: {
-      label: 'data(name)',
+      label: 'data(context.prompt)',
       'background-color': audioColor,
       width: 30,
       height: 30

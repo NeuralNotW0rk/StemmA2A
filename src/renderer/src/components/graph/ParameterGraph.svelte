@@ -117,6 +117,20 @@
     if (!cy) return
 
     cy.cxtmenu({
+      selector: 'core',
+      commands: [
+        {
+          content: 'Tidy',
+          select: tidyView
+        },
+        {
+          content: 'Fit',
+          select: fitView
+        }
+      ]
+    })
+
+    cy.cxtmenu({
       selector: 'node[type="model"]',
       commands: [
         {
@@ -223,7 +237,6 @@
 
   function updateGraph(): void {
     if (!cy || !graphData) return
-    cy.elements().remove()
     if (graphData.elements) {
       cy.add(graphData.elements)
       applyLayout()

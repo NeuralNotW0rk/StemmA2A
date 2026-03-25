@@ -146,6 +146,7 @@ class StableAudioAdapter(ModelAdapter):
             audio_path = Path(init_audio_element.file.path)
             if audio_path and audio_path.exists():
                 init_audio_tensor, init_audio_sample_rate = torchaudio.load(audio_path)
+                init_audio_tensor = init_audio_tensor.to(self.device)
 
                 # Resample if necessary
                 if init_audio_sample_rate != sample_rate:
@@ -174,7 +175,7 @@ class StableAudioAdapter(ModelAdapter):
         artifact = Audio(
             id=content_uid,
             name=generate_slug(2),
-            file=Asset(path=None, uid=content_uid),
+            file=Asset(path=None, uid=content_uid, extension=".wav"),
             sample_rate=sample_rate,
             context=kwargs
         )

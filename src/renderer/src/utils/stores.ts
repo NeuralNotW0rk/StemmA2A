@@ -87,6 +87,7 @@ export type View = 'element-info' | 'error' | 'generation' | 'import-model' | 'r
 export type BackendStatus = {
   project_loaded: boolean
   device: string
+  server_instance_id?: string | null
 }
 
 export const backendStatus = writable<BackendStatus>({
@@ -99,3 +100,30 @@ export const selectedForRemoval = writable<GraphElement | null>(null)
 
 export const isCreatingNewProject = writable<boolean>(false)
 export const newProjectName = writable<string>('')
+
+// ===============================================
+// Form State Store
+// Holds state for ephemeral form interactions,
+// like selecting nodes for a form field.
+// ===============================================
+
+interface FormState {
+  generationModel: ModelData | null
+}
+
+function createFormStateStore() {
+  const { subscribe, set, update } = writable<FormState>({
+    generationModel: null
+  })
+
+  return {
+    subscribe,
+    set,
+    update,
+    clearGenerationModel: () => {
+      update((state) => ({ ...state, generationModel: null }))
+    }
+  }
+}
+
+export const formStateStore = createFormStateStore()
