@@ -103,7 +103,7 @@ async def execute():
         # Anchor all elements with the local asset cache paths
         anchored_params = resolved_params.copy()
         for key, element in all_elements.items():
-            anchored_params[key] = element.anchor(data_cache_root)
+            anchored_params[key] = element.anchor(data_cache_root, with_extension=False)
 
         # If the operation is an element, get its ID
         op_id_str = operation_id

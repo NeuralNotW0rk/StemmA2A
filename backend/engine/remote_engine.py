@@ -110,7 +110,8 @@ class RemoteEngine(Engine):
                     
                     # 4. Anchor the element to the temporary directory. The anchor method
                     # will reconstruct the same sharded path to find the asset.
-                    anchored_element = result_element.anchor(str(temp_dir_path))
+                    # The temporary file is extensionless, so we anchor without one.
+                    anchored_element = result_element.anchor(str(temp_dir_path), with_extension=False)
 
                     # 5. Store a reference to the TemporaryDirectory object to prevent
                     # it from being garbage collected and deleting the file.

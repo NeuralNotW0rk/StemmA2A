@@ -5,6 +5,7 @@ from pathlib import Path
 import os
 import random
 import string
+import logging
 
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
@@ -23,6 +24,14 @@ from utils.form import create_dynamic_model
 
 app = Flask(__name__)
 CORS(app)
+
+# Filter out health check logs
+class NoHealthCheckLogFilter(logging.Filter):
+    def filter(self, record):
+        return record.getMessage().find('/health') == -1
+
+# Add the filter to the Werkzeug logger (used by Flask's dev server)
+logging.getLogger('werkzeug').addFilter(NoHealthCheckLogFilter())
 
 # Add a unique ID for the server instance
 SERVER_INSTANCE_ID = ''.join(random.choices(string.ascii_letters + string.digits, k=16))
