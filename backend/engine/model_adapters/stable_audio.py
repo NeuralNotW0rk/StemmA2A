@@ -165,7 +165,7 @@ class StableAudioAdapter(ModelAdapter):
         output = generate_diffusion_cond(model, **args)
 
         # Trim silence
-        output = output[:,:,:seconds_total*sample_rate]
+        output = output[:,:,:int(seconds_total*sample_rate)]
 
         # Rearrange audio batch to a single sequence
         print("Generation complete, rearranging...")
