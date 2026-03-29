@@ -112,6 +112,15 @@ const defaultStyle: CssStyleDeclaration[] = [
 
   // Edge-specific style configuration
   {
+    selector: 'edge[type="spring"]',
+    style: {
+      'display': 'none', // fCoSE still calculates physics for 'display: none' elements!
+      'line-color': '#ffff00',
+      'opacity': 'data(weight)',
+      'curve-style': 'haystack' // Efficient for invisible edges
+    }
+  },
+  {
     selector: 'edge[type="model"]',
     style: {
       label: 'data(seed)',

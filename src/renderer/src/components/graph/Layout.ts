@@ -87,9 +87,19 @@ const layoutConfig: FcoseLayoutOptions = {
   // Node repulsion (non overlapping) multiplier
   nodeRepulsion: (_node) => 16000,
   // Ideal edge (non nested) length
-  idealEdgeLength: (_edge) => 400,
+  idealEdgeLength: (edge) => {
+    if (edge.data('type') === 'spring') {
+      return 1000 * (1 - edge.data('weight')); // Higher similarity = shorter distance
+    }
+    return 100; // Functional edges stay longer/clearer
+  },
   // Divisor to compute edge forces
-  edgeElasticity: (_edge) => 0.1,
+  edgeElasticity: (edge) => {
+    if (edge.data('type') === 'spring') {
+      return 1.0 * edge.data('weight'); // Stiffer springs for high similarity
+    }
+    return 0.1; // Default for your functional/audio-patch edges
+  },
   // Nesting factor (multiplier) to compute ideal edge length for nested edges
   nestingFactor: 0.1,
   // Maximum number of iterations to perform - this is a suggested value and might be adjusted by the algorithm as required
@@ -120,7 +130,7 @@ const layoutConfig: FcoseLayoutOptions = {
 
   /* constraint options */
 
-  // Fix desired nodes to predefined positions
+  // Fix desired nodes to predefined positions  
   // [{nodeId: 'n1', position: {x: 100, y: 200}}, {...}]
   fixedNodeConstraint: undefined,
   // Align desired nodes in vertical/horizontal direction
