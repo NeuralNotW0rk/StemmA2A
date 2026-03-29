@@ -24,6 +24,7 @@ interface API {
   generate: (data: any) => Promise<any>
   removeElement: (elementId: string) => Promise<any>
   logMessage: (message: string) => Promise<any>
+  updateEmbeddings: () => Promise<any>
 }
 
 declare global {

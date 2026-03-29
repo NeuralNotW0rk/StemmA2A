@@ -248,6 +248,19 @@ app.whenReady().then(async () => {
     return await response.json()
   })
 
+  ipcMain.handle('updateEmbeddings', async () => {
+    const response = await fetchWithAuth(`${BACKEND_URL}/update_embeddings`, {
+      method: 'POST'
+    })
+    if (!response.ok) {
+      const errorBody = await response.text()
+      throw new Error(
+        `Failed to update embeddings. Status: ${response.status}. Error: ${errorBody}`
+      )
+    }
+    return await response.json()
+  })
+
   async function _getAdapterConfig(adapterName: string): Promise<any> {
     try {
       const response = await fetchWithAuth(`${BACKEND_URL}/adapter_config/${adapterName}`)

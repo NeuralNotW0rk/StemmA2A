@@ -119,7 +119,9 @@ class ParameterGraph:
 
     # Simple element attribute update
     def update_element(self, name: str, attrs: dict):
-        nx.function.set_node_attributes(self.G, {name: attrs})
+        if self.G.has_node(name):
+            node_attrs = self.G.nodes[name]
+            node_attrs.update(attrs)
 
     # Slightly less simple batch attribute update
     def update_batch(self, name: str, attrs: dict):

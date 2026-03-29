@@ -1,5 +1,8 @@
 import { writable } from 'svelte/store'
-import type { ModelData, AudioData, NodeData } from './forms'
+import type { Core } from 'cytoscape'
+import type { ModelData, NodeData } from './forms'
+
+export const cyInstanceStore = writable<Core | null>(null);
 
 type SelectableNodeData = NodeData
 
@@ -10,8 +13,9 @@ interface SelectionState {
   onSelect: ((node: SelectableNodeData) => void) | null
 }
 
+
 function createSelectionStore() {
-  const { subscribe, set, update } = writable<SelectionState>({
+  const { subscribe, update } = writable<SelectionState>({
     isSelecting: false,
     selectionType: null,
     boundNodeId: null,
@@ -73,11 +77,7 @@ export interface GraphElement {
 }
 
 export const initiatorNodeStore = writable<NodeData | null>(null)
-
-export interface ActiveNodes {
-  [role:string]: GraphElement | null
-}
-export const boundNodeStore = writable<ActiveNodes>({})
+export const contextStore = writable<Record<string, any> | null>(null)
 
 export const lastUsedModelStore = writable<ModelData | null>(null)
 

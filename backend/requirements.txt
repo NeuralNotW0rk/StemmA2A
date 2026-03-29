@@ -1,4 +1,8 @@
+# Note: torch should be installed independently (using relevant CPU or CUDA version) before this list
+
+# --------------------
 # Core
+# --------------------
 flask[async]
 flask-cors
 python-dotenv
@@ -7,11 +11,15 @@ librosa
 setuptools<60
 requests
 
+# --------------------
 # Representation
+# --------------------
 networkx
 xxhash
 coolname
 
+# --------------------
 # Engine
+# --------------------
 torchcodec
 stable-audio-tools

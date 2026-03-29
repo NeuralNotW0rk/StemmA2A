@@ -43,6 +43,26 @@ class LocalEngine(Engine):
         # We assume the model info needed for saving is on the adapter.
         # This might need to be more robust.
         sample_rate = adapter.model_info.config["sample_rate"]
+
+        # --- Calculate and add embeddings ---
+        # For now, we'll hardcode the CLAP encoder.
+        # In the future, this could be made more dynamic.
+        try:
+            from .encoders.clap import CLAPEncoder
+            encoder = CLAPEncoder()
+            embedding = encoder.encode_audio(tensor, sample_rate)
+            
+            # Create a new embeddings dictionary
+            new_embeddings = artifact.embeddings.copy()
+            new_embeddings[encoder.embedding_type] = embedding
+            
+            # Replace the embeddings in the artifact
+            artifact = replace(artifact, embeddings=new_embeddings)
+
+        except ImportError:
+            print("CLAPEncoder not found, skipping embedding generation.")
+        except Exception as e:
+            print(f"Error during embedding generation: {e}")
         
         # Construct the path and save the file
         local_path = temp_dir_path / "output.wav"
@@ -77,3 +97,37 @@ class LocalEngine(Engine):
         else:
             # If we add non-async operations, we could handle them here.
             raise Exception(f"Operation '{operation_id}' is not an async function.")
+
+    async def update_embedding(self, audio_artifact: GraphElement) -> GraphElement:
+        """
+        Calculates and adds embeddings to an existing audio artifact.
+        """
+        if not audio_artifact or not hasattr(audio_artifact, 'file'):
+            raise ValueError("A valid audio artifact with a file asset is required.")
+
+        audio_path = Path(audio_artifact.file.path)
+        if not audio_path.exists():
+            raise FileNotFoundError(f"Audio file not found at {audio_path}")
+
+        try:
+            from .encoders.clap import CLAPEncoder
+            import torchaudio
+
+            tensor, sample_rate = torchaudio.load(audio_path)
+            
+            encoder = CLAPEncoder()
+            embedding = encoder.encode_audio(tensor, sample_rate)
+            
+            new_embeddings = audio_artifact.embeddings.copy()
+            new_embeddings[encoder.embedding_type] = embedding
+            
+            updated_artifact = replace(audio_artifact, embeddings=new_embeddings)
+
+            return updated_artifact
+
+        except ImportError:
+            print("CLAPEncoder not found, cannot generate embeddings.")
+            return audio_artifact
+        except Exception as e:
+            print(f"Error during embedding update: {e}")
+            return audio_artifact

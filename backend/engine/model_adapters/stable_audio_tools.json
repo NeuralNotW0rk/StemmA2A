@@ -4,7 +4,7 @@
             "name": "prompt",
             "label": "Prompt",
             "type": "textarea",
-            "defaultValue": "128 BPM tech house drum loop",
+            "defaultValue": "Amen break 174 BPM",
             "placeholder": "Enter a prompt for the model..."
         },
         {
@@ -40,7 +40,7 @@
             "name": "seconds_total",
             "label": "Seconds",
             "type": "float",
-            "defaultValue": 30,
+            "defaultValue": 12,
             "placeholder": "Enter duration in seconds"
         },
         {
@@ -78,7 +78,7 @@
             "name": "sigma_min",
             "label": "Sigma Min",
             "type": "float",
-            "defaultValue": 0.3,
+            "defaultValue": 0.03,
             "placeholder": "Enter sigma min",
             "show_if": {"model_type": "k_diffusion"}
         },
@@ -86,7 +86,7 @@
             "name": "sigma_max",
             "label": "Sigma Max",
             "type": "float",
-            "defaultValue": 500,
+            "defaultValue": 1000,
             "placeholder": "Enter sigma max",
             "show_if": {"model_type": "k_diffusion"}
         },

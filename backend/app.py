@@ -20,6 +20,7 @@ from engine.engine_provider import EngineProvider
 from param_graph.utils import extract_graph_elements, save_artifact_asset
 from utils.audio import load_audio
 from utils.form import create_dynamic_model
+from engine.encoders.clap import CLAPEncoder
 
 
 app = Flask(__name__)
@@ -45,6 +46,7 @@ APP_SAMPLE_RATE = 48000
 param_graph: ParameterGraph = None
 execution_url = os.environ.get("ENGINE_URL")
 engine_provider = EngineProvider(remote_url=execution_url)
+clap_encoder = CLAPEncoder()
 if execution_url:
     print(f"Engine: Using remote engine at {execution_url}")
 else:
@@ -194,25 +196,6 @@ def get_graph():
         })
     except Exception as e:
         print(f"Failed to get graph data: {e}")
-        traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/graph_tsne", methods=["GET"])
-def get_tsne_graph():
-    """Get graph data in cluster mode"""
-    if param_graph is None:
-        return jsonify({"error": "No project loaded"}), 400
-    
-    try:
-        # param_graph.update_tsne()
-        graph_data = param_graph.to_json(mode='cluster')
-        return jsonify({
-            "message": "success",
-            "graph_data": graph_data,
-            "success": True
-        })
-    except Exception as e:
-        print(f"Failed to get t-SNE graph data: {e}")
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
@@ -414,6 +397,45 @@ def rescan_source():
         
     except Exception as e:
         print(f"Failed to rescan source: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/update_embeddings", methods=["POST"])
+def update_embeddings():
+    """Update all embeddings"""
+    if param_graph is None:
+        return jsonify({"error": "No project loaded"}), 400
+    
+    try:
+        for node, data in param_graph.G.nodes(data=True):
+            if data['type'] == 'audio':
+                try:
+                    audio_path = param_graph.get_path_from_id(node, relative=False)
+                    if audio_path:
+                        embedding = clap_encoder.get_embedding(audio_path)
+
+                        # Get existing embeddings or create a new dict
+                        if 'embeddings' not in data:
+                            data['embeddings'] = {}
+                        
+                        # Update the clap embedding
+                        data['embeddings']['clap'] = embedding.tolist()
+
+                        # Update the graph with the modified embeddings
+                        param_graph.update_element(node, {'embeddings': data['embeddings']})
+
+                        print(f"Updated embedding for node {node}")
+                except Exception as e:
+                    print(f"Could not update embedding for node {node}. Error: {e}")
+        param_graph.save()
+        
+        return jsonify({
+            "message": "Embeddings updated successfully",
+            "success": True
+        })
+        
+    except Exception as e:
+        print(f"Failed to update embeddings: {e}")
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 

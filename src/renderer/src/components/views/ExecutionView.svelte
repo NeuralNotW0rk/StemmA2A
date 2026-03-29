@@ -1,8 +1,19 @@
 <script lang="ts">
-  import { executionStore, clearExecution } from '../../utils/execution'
+  import {
+    executionStore as defaultExecutionStore,
+    clearExecutionStore
+  } from '../../utils/execution'
+  import type { Writable } from 'svelte/store'
+  import type { ExecutionState } from '../../utils/execution'
+
+  interface Props {
+    executionStore?: Writable<ExecutionState>
+  }
+
+  let { executionStore = defaultExecutionStore }: Props = $props()
 
   function close(): void {
-    clearExecution()
+    clearExecutionStore(executionStore)
   }
 </script>
 
@@ -11,11 +22,11 @@
     {#if $executionStore.status === 'running'}
       <div class="centered-content">
         <div class="spinner"></div>
-        <p>Generation in progress...</p>
+        <p>Execution in progress...</p>
       </div>
     {:else if $executionStore.status === 'success'}
       <div class="centered-content">
-        <p>Generation successful!</p>
+        <p>Execution successful!</p>
         <!-- TODO: Display result details -->
         <pre>{JSON.stringify($executionStore.result, null, 2)}</pre>
       </div>

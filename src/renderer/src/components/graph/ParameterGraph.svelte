@@ -9,14 +9,14 @@
   import graphStyle from './Style'
   import layoutConfig from './Layout'
   import expandCollapseOptions from './Options'
-  import { selectionStore, boundNodeStore } from '../../utils/stores'
+  import { cyInstanceStore, selectionStore } from '../../utils/stores'
 
   interface Props {
     graphData?: { elements: cytoscape.ElementDefinition[] } | null
     viewMode?: 'batch' | 'cluster'
     onmodelSelect?: (data: any) => void
     onaudioSelect?: (data: any) => void
-    onaudioNodeSelectForGeneration?: (data: any) => void
+    onaudioNodeSelectForGeneration?: (data: any, useContext?: boolean) => void
     onexport?: (data: { names: string[] }) => void
     onrescanSource?: (name: string) => void
     onnodeSelect?: (data: any) => void
@@ -62,18 +62,6 @@
         if (selectionBoundNodeId) {
           cy.getElementById(selectionBoundNodeId).removeClass('dimmed').addClass('bound')
         }
-      } else {
-        const boundNodes = $boundNodeStore
-        if (Object.keys(boundNodes).length > 0) {
-          Object.values(boundNodes).forEach((node) => {
-            if (node && node.id) {
-              const nodeToHighlight = cy.getElementById(node.id)
-              if (nodeToHighlight.length > 0) {
-                nodeToHighlight.addClass('bound')
-              }
-            }
-          })
-        }
       }
     }
   })
@@ -83,6 +71,7 @@
   })
 
   onDestroy(() => {
+    cyInstanceStore.set(null) // Clean up
     if (cy) {
       cy.destroy()
     }
@@ -101,6 +90,8 @@
       maxZoom: 3,
       minZoom: 0.1
     })
+
+    cyInstanceStore.set(cy) // Share the instance globally
 
     cy.expandCollapse({ ...expandCollapseOptions, layoutBy: layoutConfig })
 
@@ -146,16 +137,27 @@
 
     cy.cxtmenu({
       selector: 'node[type="audio"]',
-      commands: [
-        {
-          content: 'Generate Variation',
-          select: (ele: any) => onaudioNodeSelectForGeneration?.(ele.data())
-        },
-        {
-          content: 'Remove',
-          select: (ele: any) => onnodeRemove?.(ele.data())
+      commands: (ele: any) => {
+        const commands = [
+          {
+            content: 'Audio to Audio',
+            select: () => onaudioNodeSelectForGeneration?.(ele.data(), false)
+          },
+          {
+            content: 'Remove',
+            select: () => onnodeRemove?.(ele.data())
+          }
+        ]
+
+        if (ele.data().context) {
+          commands.unshift({
+            content: 'Replicate',
+            select: () => onaudioNodeSelectForGeneration?.(ele.data(), true)
+          })
         }
-      ]
+
+        return commands
+      }
     })
 
     cy.cxtmenu({
@@ -237,8 +239,35 @@
 
   function updateGraph(): void {
     if (!cy || !graphData) return
-    if (graphData.elements) {
-      cy.add(graphData.elements)
+
+    // Use `as any` to bypass incorrect type definition for `elements`
+    const elements = graphData.elements as any
+    let newElements: cytoscape.ElementDefinition[] = []
+
+    if (typeof elements === 'undefined') {
+      return // No change, elements not provided.
+    }
+
+    if (Array.isArray(elements)) {
+      newElements = elements
+    } else if (elements && Array.isArray(elements.nodes) && Array.isArray(elements.edges)) {
+      newElements = elements.nodes.concat(elements.edges)
+    } else {
+      console.error('graphData.elements has an unexpected format:', elements)
+      // Clear the graph if the format is unknown or explicitly null/empty
+      cy.elements().remove()
+      return
+    }
+
+    const newElementIds = new Set(newElements.map((el) => el.data.id))
+    const elementsToRemove = cy.elements().filter((ele) => !newElementIds.has(ele.id()))
+
+    if (elementsToRemove.length > 0) {
+      cy.remove(elementsToRemove)
+    }
+
+    if (newElements.length > 0) {
+      cy.add(newElements)
       applyLayout()
     }
   }

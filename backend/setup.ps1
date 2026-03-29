@@ -69,16 +69,18 @@ if (-not $CudaVersion) {
 
 # 5. Install PyTorch
 Write-Host "Step 5: Installing PyTorch..."
-$arguments = @("-m", "pip", "install", "--verbose", "torch", "torchvision", "torchaudio")
+$arguments = @("install", "torch", "torchvision", "torchaudio", "--extra-index-url", "https://download.pytorch.org/whl/cpu")
+
 if ($CudaVersion) {
     # Force cuda version 12.1 for now
     $CudaVersion = "12.1"
     $CudaVersionFormatted = "cu" + $CudaVersion.Replace(".", "")
     $IndexUrl = "https://download.pytorch.org/whl/$CudaVersionFormatted"
-    $arguments += "--index-url", $IndexUrl
+    # Overwrite arguments for CUDA
+    $arguments = @("install", "torch", "torchvision", "torchaudio", "--index-url", $IndexUrl)
     Write-Host "Preparing to install PyTorch for CUDA $CudaVersion..."
 } else {
-    Write-Host "Preparing to install CPU-only version of PyTorch..."
+    Write-Host "Preparing to install CPU-optimized version of PyTorch..."
 }
 
 try {

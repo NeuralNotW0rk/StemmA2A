@@ -14,12 +14,12 @@
   import { onMount, onDestroy } from 'svelte'
   import {
     initiatorNodeStore,
-    boundNodeStore,
+    contextStore,
     selectedForRemoval,
     backendStatus,
     isCreatingNewProject
   } from './utils/stores'
-  import { executionStore } from './utils/execution'
+  import { executionStore, embeddingUpdateExecutionStore, startEmbeddingUpdate } from './utils/execution'
 
   type ActionPanelView = 'generation' | 'import-model' | 'removal' | 'none'
 
@@ -46,6 +46,15 @@
     return unsub
   })
 
+  $effect(() => {
+    const unsub = embeddingUpdateExecutionStore.subscribe((value) => {
+      if (value.status === 'success') {
+        refreshGraphData()
+      }
+    })
+    return unsub
+  })
+
   onMount(async () => {
     await initialHealthCheck()
     setupHealthCheckPolling()
@@ -57,7 +66,7 @@
     }
   })
 
-  async function initialHealthCheck() {
+  async function initialHealthCheck(): Promise<void> {
     try {
       const status = await window.api.getHealth()
       backendStatus.set(status)
@@ -95,11 +104,11 @@
     }
   }
 
-  function setupHealthCheckPolling() {
+  function setupHealthCheckPolling(): void {
     if (healthCheckInterval) {
       clearInterval(healthCheckInterval)
     }
-    healthCheckInterval = setInterval(async () => {
+    healthCheckInterval = window.setInterval(async () => {
       try {
         const status = await window.api.getHealth()
         backendStatus.set(status)
@@ -116,7 +125,7 @@
     }, 3000) // Poll every 3 seconds
   }
 
-  function handleBackendRestart() {
+  function handleBackendRestart(): void {
     currentProject = null
     graphData = null
     selectedElementData = null
@@ -127,7 +136,6 @@
 
     // Close any selection process
     initiatorNodeStore.set(null)
-    boundNodeStore.set({})
     selectedForRemoval.set(null)
 
     errorInInfoPanel = {
@@ -136,10 +144,14 @@
     }
   }
 
+  async function handleUpdateEmbeddings(): Promise<void> {
+    await startEmbeddingUpdate()
+  }
+
   function closeActionPanel(): void {
     actionPanelView = 'none'
     initiatorNodeStore.set(null)
-    boundNodeStore.set({})
+    contextStore.set(null)
     selectedForRemoval.set(null)
   }
 
@@ -235,17 +247,27 @@
 
   function handleModelSelect(modelData: any): void {
     initiatorNodeStore.set(modelData)
+    contextStore.set(null)
     actionPanelView = 'generation'
   }
 
-  function handleAudioNodeSelectForGeneration(audioData: any): void {
+  function handleAudioNodeSelectForGeneration(audioData: any, useContext?: boolean): void {
     initiatorNodeStore.set(audioData)
+    if (useContext) {
+      contextStore.set(audioData.context)
+    } else {
+      contextStore.set(null)
+    }
     actionPanelView = 'generation'
   }
 
   function handleNodeRemove(nodeData: any): void {
     selectedForRemoval.set(nodeData)
     actionPanelView = 'removal'
+  }
+
+  function handleGenerationError(error: { title: string; message: string }): void {
+    errorInInfoPanel = error
   }
 
   async function refreshGraphData(): Promise<void> {
@@ -262,8 +284,8 @@
     if (actionPanelView === 'import-model') {
       return 'Import Model'
     }
-    if (actionPanelView === 'generation' && $initiatorNodeStore) {
-      return $initiatorNodeStore.type === 'model' ? 'Generate' : 'Variation'
+    if (actionPanelView === 'generation') {
+      return 'Generation'
     }
     if (actionPanelView === 'removal') {
       return 'Confirm Removal'
@@ -279,13 +301,24 @@
     onviewModeChange={handleViewModeChange}
     onrefresh={refreshGraphData}
     onimportModel={() => (actionPanelView = 'import-model')}
+    onupdateEmbeddings={handleUpdateEmbeddings}
     {currentProject}
     {viewMode}
   />
 
-  {#if $executionStore.status !== 'idle'}
+  {#if $embeddingUpdateExecutionStore.status !== 'idle'}
     <ContentPanel
-      title={'Generation'}
+      title="Updating Embeddings"
+      onclose={() => {
+        /* This panel cannot be closed directly */
+      }}
+      position="left"
+    >
+      <ExecutionView executionStore={embeddingUpdateExecutionStore} />
+    </ContentPanel>
+  {:else if $executionStore.status !== 'idle'}
+    <ContentPanel
+      title="Generation"
       onclose={() => {
         /* This panel cannot be closed directly */
       }}
@@ -315,13 +348,13 @@
     </ContentPanel>
   {/if}
 
-  {#if actionPanelView !== 'none' && $executionStore.status === 'idle'}
+  {#if actionPanelView !== 'none' && $executionStore.status === 'idle' && !errorInInfoPanel}
     <ContentPanel title={getActionPanelTitle()} onclose={closeActionPanel} position="left">
       {#if actionPanelView === 'generation'}
         <GenerationView
           onClose={closeActionPanel}
           onGenerate={closeActionPanel}
-          onError={closeActionPanel}
+          onError={handleGenerationError}
         />
       {:else if actionPanelView === 'import-model'}
         <ImportModelView

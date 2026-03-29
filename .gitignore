@@ -14,3 +14,4 @@ backend/_exports
 # Python virtual environment
 backend/.venv
 data
+*.tmp

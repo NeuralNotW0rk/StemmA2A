@@ -1,10 +1,10 @@
 <script lang="ts">
   import { tick, onDestroy } from 'svelte'
-  import type { FormConfig, ModelData, NodeData } from '../../utils/forms'
+  import type { FormConfig, ModelData } from '../../utils/forms'
   import { initializeFormData } from '../../utils/forms'
   import {
     initiatorNodeStore,
-    boundNodeStore,
+    contextStore,
     lastUsedModelStore,
     formStateStore
   } from '../../utils/stores'
@@ -25,6 +25,12 @@
   let isFormValid = $state(false)
   let contextData = $state({})
   let dynamicForm: DynamicForm | undefined = $state()
+  let modelNodeSelector: ReturnType<typeof NodeSelector>;
+
+  function handleError(error: { title: string; message: string }): void {
+    onError(error)
+    onClose()
+  }
 
   // Clear the store when the component is destroyed to prevent state leakage.
   onDestroy(() => {
@@ -55,12 +61,12 @@
       const config = await window.api.getAdapterConfig(adapter)
       if (config && config.generate && Array.isArray(config.generate)) {
         adapterFields = config.generate
-        const { formData: newFormData, boundNodes: newBoundNodes } = initializeFormData(
+        const { formData: newFormData } = initializeFormData(
           adapterFields,
-          $initiatorNodeStore
+          $initiatorNodeStore,
+          $contextStore
         )
         formData = newFormData
-        boundNodeStore.set(newBoundNodes)
       } else {
         throw new Error('Invalid config format received from backend.')
       }
@@ -68,7 +74,7 @@
       const message = e instanceof Error ? e.message : 'Failed to load configuration.'
       console.error('Failed to fetch form config:', e)
       error = message
-      onError({ title: 'Configuration Error', message })
+      handleError({ title: 'Configuration Error', message })
     } finally {
       isLoading = false
     }
@@ -78,12 +84,27 @@
     // This effect runs when the component mounts. It sets the initial state
     // of the form's model in the global store.
     const initiatorNode = $initiatorNodeStore
+    const context = $contextStore
     if (initiatorNode) {
       if (initiatorNode.type === 'model') {
         $formStateStore.generationModel = initiatorNode as ModelData
       } else if (initiatorNode.type === 'audio') {
-        // If an audio node is opened, use the last used model
-        $formStateStore.generationModel = $lastUsedModelStore
+        if (context) {
+          // This is a replication context.
+          console.log('Replication context:', context)
+          const modelId = context.model_element.id as string
+          if (modelId) {
+            modelNodeSelector?.selectNodeById(modelId)
+          } else {
+            handleError({
+              title: 'Replication Failed',
+              message: 'Replication context is missing the original model ID.'
+            })
+          }
+        } else {
+          // If an audio node is opened, use the last used model
+          $formStateStore.generationModel = $lastUsedModelStore
+        }
       }
     } else {
       $formStateStore.generationModel = null
@@ -107,39 +128,10 @@
     }
   })
 
-  $effect(() => {
-    // This effect is the single source of truth for what is 'bound' in the graph.
-    const newBoundNodes = {}
-
-    // The initiator node is always bound.
-    if ($initiatorNodeStore) {
-      newBoundNodes['initiator'] = $initiatorNodeStore
-    }
-
-    // The selected model is also bound.
-    if ($formStateStore.generationModel) {
-      newBoundNodes['model'] = $formStateStore.generationModel
-    }
-
-    // Any nodes selected in the form are also bound.
-    if (adapterFields) {
-      for (const field of adapterFields) {
-        if (field.type === 'node') {
-          const node = formData[field.name] as NodeData | null
-          if (node) {
-            newBoundNodes[field.name] = node
-          }
-        }
-      }
-    }
-
-    boundNodeStore.set(newBoundNodes)
-  })
-
   function generate(): void {
     const title = 'Generation'
     if (!$formStateStore.generationModel) {
-      onError({ title: title + ' Failed', message: 'A model must be selected for generation.' })
+      handleError({ title: title + ' Failed', message: 'A model must be selected for generation.' })
       return
     }
 
@@ -162,6 +154,7 @@
       label="Model"
       selectionType="model"
       bind:node={$formStateStore.generationModel}
+      bind:this={modelNodeSelector}
       id="model-selector"
     />
 

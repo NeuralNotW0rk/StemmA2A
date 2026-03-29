@@ -46,7 +46,8 @@ export type NodeData = ModelData | AudioData
 
 export function initializeFormData(
   fields: FormConfig,
-  initiatorNode: NodeData | null
+  initiatorNode: Record<string, any> | null,
+  context: Record<string, any> | null
 ): { formData: Record<string, unknown>; boundNodes: Record<string, NodeData> } {
   const formData: Record<string, unknown> = {}
   const boundNodes: Record<string, NodeData> = {}
@@ -55,18 +56,24 @@ export function initializeFormData(
     return { formData, boundNodes }
   }
 
+  const isReplication = !!context
+
   for (const field of fields) {
-    if (field.defaultValue !== undefined) {
+    if (isReplication && context[field.name] !== undefined) {
+      formData[field.name] = context[field.name]
+    } else if (field.defaultValue !== undefined) {
       formData[field.name] = field.defaultValue
     }
-    // Check if the initiator node can be used for a field
+
+    // Check if the initiator node can be used for a field (but not for replication)
     if (
+      !isReplication &&
       initiatorNode &&
       field.type === 'node' &&
       field.selectionType === initiatorNode.type
     ) {
       formData[field.name] = initiatorNode
-      boundNodes[field.name] = initiatorNode
+      boundNodes[field.name] = initiatorNode as NodeData
     }
   }
   return { formData, boundNodes }

@@ -176,12 +176,21 @@ class StableAudioAdapter(ModelAdapter):
 
         # Create audio artifact
         content_uid = self.uid_generator.from_tensor(output)
+
+        # Filter context
+        context = {}
+        for k, v in kwargs.items():
+            if k.endswith('_element'):
+                context[k.replace('_element', '_id')] = v.id
+            else:
+                context[k] = v
+
         artifact = Audio(
             id=content_uid,
             name=generate_slug(2),
             file=Asset(path=None, uid=content_uid, extension=".wav"),
             sample_rate=sample_rate,
-            context=kwargs
+            context=context
         )
 
         return artifact, output
