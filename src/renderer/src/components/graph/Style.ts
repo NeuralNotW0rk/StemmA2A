@@ -35,7 +35,7 @@ const defaultStyle: CssStyleDeclaration[] = [
     }
   },
 
-  // Node-specific style configuration
+  // Artifact-specific style configuration
   {
     selector: 'node[type="model"]',
     style: {
@@ -43,26 +43,6 @@ const defaultStyle: CssStyleDeclaration[] = [
       'background-color': modelColor,
       width: 60,
       height: 60
-    }
-  },
-  {
-    selector: 'node[type="external"]',
-    style: {
-      label: 'data(name)',
-      'background-color': externalColor,
-      width: 60,
-      height: 60
-    }
-  },
-  {
-    selector: 'node[type="batch"], node[type="set"]',
-    style: {
-      label: 'data(alias)',
-      'text-valign': 'top',
-      'background-color': batchColor,
-      'background-opacity': 0.5,
-      'border-color': audioColor,
-      'border-width': 2
     }
   },
   {
@@ -110,11 +90,31 @@ const defaultStyle: CssStyleDeclaration[] = [
     }
   },
 
+  // Collection-specific style configuration
+  {
+    selector: 'node[type="batch"]',
+    style: {
+      label: 'data(id)',
+      'text-valign': 'top',
+      'background-color': batchColor,
+      'background-opacity': 0.5,
+      'border-width': 2,
+      'shape': 'rectangle',
+      'padding': '10px'
+    }
+  },
+  {
+    selector: 'node[type="batch"][member_type="audio"]',
+    style: {
+      'border-color': audioColor
+    }
+  },
+
   // Edge-specific style configuration
   {
     selector: 'edge[type="spring"]',
     style: {
-      'display': 'none', // fCoSE still calculates physics for 'display: none' elements!
+      //'display': 'none', // fCoSE still calculates physics for 'display: none' elements!
       'line-color': '#ffff00',
       'opacity': 'data(weight)',
       'curve-style': 'haystack' // Efficient for invisible edges

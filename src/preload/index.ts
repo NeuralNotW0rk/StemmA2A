@@ -30,7 +30,8 @@ const api = {
   removeElement: (elementId: string): Promise<any> =>
     ipcRenderer.invoke('removeElement', elementId),
   logMessage: (message: string): Promise<any> => ipcRenderer.invoke('logMessage', message),
-  updateEmbeddings: (): Promise<any> => ipcRenderer.invoke('updateEmbeddings')
+  updateEmbeddings: (): Promise<any> => ipcRenderer.invoke('updateEmbeddings'),
+  batchElements: (memberIds: string[]): Promise<any> => ipcRenderer.invoke('batchElements', memberIds)
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to

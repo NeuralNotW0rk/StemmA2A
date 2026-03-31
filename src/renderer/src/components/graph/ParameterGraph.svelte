@@ -5,10 +5,8 @@
   import cytoscape, { type EventObject } from 'cytoscape'
   import fcose from 'cytoscape-fcose'
   import cxtmenu from 'cytoscape-cxtmenu'
-  import expandCollapse from 'cytoscape-expand-collapse'
   import graphStyle from './Style'
   import layoutConfig from './Layout'
-  import expandCollapseOptions from './Options'
   import { cyInstanceStore, selectionStore } from '../../utils/stores'
 
   interface Props {
@@ -22,6 +20,7 @@
     onnodeSelect?: (data: any) => void
     onedgeSelect?: (data: any) => void
     onnodeRemove?: (data: any) => void
+    onstartBatching?: (data: any) => void
   }
 
   let {
@@ -32,7 +31,8 @@
     onrescanSource,
     onnodeSelect,
     onedgeSelect,
-    onnodeRemove
+    onnodeRemove,
+    onstartBatching
   }: Props = $props()
 
   let graphContainer: HTMLElement | undefined = $state()
@@ -40,24 +40,37 @@
   let isInitialized = $state(false)
 
   let isSelecting = $state(false)
-  let selectionType: 'model' | 'audio' | null = $state(null)
+  let selectionFilter: Record<string, string | number | boolean> | null = $state(null)
   let selectionBoundNodeId: string | null = $state(null)
   selectionStore.subscribe((store) => {
     isSelecting = store.isSelecting
-    selectionType = store.selectionType
+    selectionFilter = store.filter
     selectionBoundNodeId = store.boundNodeId
   })
+
+  function buildSelector(filter: Record<string, string | number | boolean>): string {
+    return Object.entries(filter)
+      .map(([key, value]) => `[${key} = "${value}"]`)
+      .join('')
+  }
 
   $effect(() => {
     if (cy) {
       // Depend on graphData so this runs after nodes are added.
       if (!graphData) return
 
-      cy.nodes().removeClass('highlighted').removeClass('dimmed').removeClass('bound')
+      cy.nodes().removeClass('highlighted').removeClass('dimmed')
 
-      if (isSelecting) {
-        cy.nodes(`[type = "${selectionType}"]`).addClass('highlighted')
-        cy.nodes(`[type != "${selectionType}"]`).addClass('dimmed')
+      if (isSelecting && selectionFilter) {
+        const selector = buildSelector(selectionFilter)
+
+        if (selector) {
+          const highlightedNodes = cy.nodes(selector)
+          const ancestorNodes = highlightedNodes.ancestors()
+
+          highlightedNodes.addClass('highlighted')
+          cy.nodes().not(highlightedNodes).not(ancestorNodes).addClass('dimmed')
+        }
 
         if (selectionBoundNodeId) {
           cy.getElementById(selectionBoundNodeId).removeClass('dimmed').addClass('bound')
@@ -80,7 +93,6 @@
   function initializeGraph(): void {
     cytoscape.use(fcose)
     cytoscape.use(cxtmenu)
-    cytoscape.use(expandCollapse)
 
     cy = cytoscape({
       container: graphContainer,
@@ -92,8 +104,6 @@
     })
 
     cyInstanceStore.set(cy) // Share the instance globally
-
-    cy.expandCollapse({ ...expandCollapseOptions, layoutBy: layoutConfig })
 
     setupContextMenus()
     setupEventListeners()
@@ -129,6 +139,10 @@
           select: (ele: any) => onmodelSelect?.(ele.data())
         },
         {
+          content: 'Group',
+          select: (ele: any) => onstartBatching?.(ele.data())
+        },
+        {
           content: 'Remove',
           select: (ele: any) => onnodeRemove?.(ele.data())
         }
@@ -142,6 +156,10 @@
           {
             content: 'Audio to Audio',
             select: () => onaudioNodeSelectForGeneration?.(ele.data(), false)
+          },
+          {
+            content: 'Group',
+            select: () => onstartBatching?.(ele.data())
           },
           {
             content: 'Remove',
@@ -158,23 +176,6 @@
 
         return commands
       }
-    })
-
-    cy.cxtmenu({
-      selector: 'node[type="batch"]',
-      commands: [
-        {
-          content: 'Expand/Collapse',
-          select: (ele: any) => {
-            const api = cy?.expandCollapse('get')
-            if (ele.hasClass('cy-expand-collapse-collapsed')) {
-              api.expand(ele)
-            } else {
-              api.collapse(ele)
-            }
-          }
-        }
-      ]
     })
 
     cy.cxtmenu({
@@ -207,11 +208,14 @@
       const nodeData = node.data()
 
       if (isSelecting) {
-        if (node.data('type') === selectionType) {
+        if (
+          selectionFilter &&
+          Object.entries(selectionFilter).every(([key, value]) => node.data(key) === value)
+        ) {
           selectionStore.resolveSelection(nodeData)
         } else {
           // Maybe provide some feedback for wrong selection
-          console.log(`Select a ${selectionType} node.`)
+          console.log(`Select a node that matches the filter.`)
         }
         return // Prevent default action
       }
@@ -237,39 +241,80 @@
     layout.run()
   }
 
-  function updateGraph(): void {
+  function updateGraph(use_proxy_edges = false): void {
     if (!cy || !graphData) return
 
-    // Use `as any` to bypass incorrect type definition for `elements`
     const elements = graphData.elements as any
+    if (typeof elements === 'undefined') return
+
     let newElements: cytoscape.ElementDefinition[] = []
-
-    if (typeof elements === 'undefined') {
-      return // No change, elements not provided.
-    }
-
     if (Array.isArray(elements)) {
       newElements = elements
-    } else if (elements && Array.isArray(elements.nodes) && Array.isArray(elements.edges)) {
-      newElements = elements.nodes.concat(elements.edges)
+    } else if (elements?.nodes && elements?.edges) {
+      newElements = [...elements.nodes, ...elements.edges]
     } else {
-      console.error('graphData.elements has an unexpected format:', elements)
-      // Clear the graph if the format is unknown or explicitly null/empty
       cy.elements().remove()
       return
     }
 
-    const newElementIds = new Set(newElements.map((el) => el.data.id))
-    const elementsToRemove = cy.elements().filter((ele) => !newElementIds.has(ele.id()))
+    // 1. Snapshot the CURRENT visual state
+    const savedPositions: Record<string, { x: number; y: number }> = {}
+    cy.nodes().forEach((node) => {
+      // Only store positions for leaf nodes to avoid compound drift
+      if (node.children().length === 0) {
+        savedPositions[node.id()] = { ...node.position() }
+      }
+    })
 
-    if (elementsToRemove.length > 0) {
-      cy.remove(elementsToRemove)
-    }
+    const wasEmpty = Object.keys(savedPositions).length === 0
 
-    if (newElements.length > 0) {
-      cy.add(newElements)
-      applyLayout()
-    }
+    cy.batch(() => {
+      cy.elements().remove()
+
+      let processedElements = newElements
+      if (use_proxy_edges) {
+        processedElements = newElements.map((ele) => {
+          if (ele.group === 'edges' || (ele as any).data.source) {
+            const edgeData = (ele as any).data
+
+            // Find the actual nodes in your newElements list to check for parents
+            const sourceNode = newElements.find((n) => n.data.id === edgeData.source)
+            const targetNode = newElements.find((n) => n.data.id === edgeData.target)
+
+            return {
+              ...ele,
+              data: {
+                ...edgeData,
+                // Redirect to parent if it exists, otherwise keep original
+                source: sourceNode?.data.parent || edgeData.source,
+                target: targetNode?.data.parent || edgeData.target
+              }
+            }
+          }
+          return ele
+        })
+      }
+      const addedElements = cy.add(processedElements)
+      let hasNewNodes = false
+
+      addedElements.nodes().forEach((node) => {
+        const isChildless = node.children().length === 0
+        const oldPos = savedPositions[node.id()]
+
+        if (isChildless) {
+          if (oldPos) {
+            node.position(oldPos)
+          } else {
+            hasNewNodes = true // Truly new leaf node
+          }
+        }
+      })
+
+      // 4. Only layout if we have nowhere to put new nodes or it's the first run
+      if (wasEmpty || hasNewNodes) {
+        applyLayout()
+      }
+    })
   }
 
   $effect(() => {

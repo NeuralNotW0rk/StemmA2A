@@ -82,6 +82,12 @@ class Artifact(GraphElement):
     type: str = 'artifact'
 
 @dataclass(kw_only=True)
+class Collection(GraphElement):
+    member_ids: list[str] = field(default_factory=list)
+    type: str = 'collection'
+
+
+@dataclass(kw_only=True)
 class Edge(GraphElement):
     source: str
     target: str

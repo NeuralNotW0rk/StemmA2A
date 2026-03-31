@@ -8,7 +8,7 @@ type SelectableNodeData = NodeData
 
 interface SelectionState {
   isSelecting: boolean
-  selectionType: 'model' | 'audio' | null
+  filter: Record<string, string | number | boolean> | null
   boundNodeId: string | null
   onSelect: ((node: SelectableNodeData) => void) | null
 }
@@ -17,7 +17,7 @@ interface SelectionState {
 function createSelectionStore() {
   const { subscribe, update } = writable<SelectionState>({
     isSelecting: false,
-    selectionType: null,
+    filter: null,
     boundNodeId: null,
     onSelect: null
   })
@@ -25,14 +25,14 @@ function createSelectionStore() {
   return {
     subscribe,
     startSelection: (
-      selectionType: 'model' | 'audio',
+      filter: Record<string, string | number | boolean>,
       boundNodeId: string | null,
       onSelect: (node: SelectableNodeData) => void
     ) =>
       update((state) => ({
         ...state,
         isSelecting: true,
-        selectionType,
+        filter,
         boundNodeId,
         onSelect
       })),
@@ -40,27 +40,29 @@ function createSelectionStore() {
       update((state) => ({
         ...state,
         isSelecting: false,
-        selectionType: null,
+        filter: null,
         boundNodeId: null,
         onSelect: null
       })),
     resolveSelection: (node: SelectableNodeData) => {
       let onSelectCallback: ((node: SelectableNodeData) => void) | null = null
+      let filter: Record<string, any> | null = null
 
       update((state) => {
         if (state.isSelecting && state.onSelect) {
           onSelectCallback = state.onSelect
+          filter = state.filter
         }
         return {
           ...state,
           isSelecting: false,
-          selectionType: null,
+          filter: null,
           boundNodeId: null,
           onSelect: null
         }
       })
 
-      if (onSelectCallback) {
+      if (onSelectCallback && (!filter || Object.entries(filter).every(([key, value]) => node[key] === value))) {
         onSelectCallback(node)
       }
     }

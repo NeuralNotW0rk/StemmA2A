@@ -1,5 +1,5 @@
 from collections import OrderedDict
-from param_graph.elements.models.base import Model
+from param_graph.elements.models.base_model_element import Model
 
 # This is a bit of a hack. We're assuming the adapter is the state.
 # A better approach would be to have the adapter be stateless and the

@@ -16,14 +16,15 @@ from sklearn.neighbors import NearestNeighbors
 from pydantic import ValidationError
 
 from param_graph.graph import ParameterGraph
-from param_graph.elements.models.base import Model
-from param_graph.elements.artifacts.audio import Audio
-from engine.engine_provider import EngineProvider
+from param_graph.elements.models.base_model_element import Model
+from param_graph.elements.artifacts.audio_element import Audio
+from param_graph.elements.collections.batch_element import Batch
 from param_graph.utils import extract_graph_elements, save_artifact_asset
+from engine.engine_provider import EngineProvider
+from engine.encoders.clap_encoder import CLAPEncoder
 from utils.audio import load_audio
 from utils.form import create_dynamic_model
-from engine.encoders.clap import CLAPEncoder
-
+from utils.uid import XXH3_64
 
 app = Flask(__name__)
 CORS(app)
@@ -50,6 +51,7 @@ SIMILARITY_GROUPS = {
 
 param_graph: ParameterGraph = None
 execution_url = os.environ.get("ENGINE_URL")
+uid_generator = XXH3_64()
 engine_provider = EngineProvider(remote_url=execution_url)
 clap_encoder = CLAPEncoder()
 if execution_url:
@@ -203,6 +205,51 @@ def get_graph():
         print(f"Failed to get graph data: {e}")
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/graph/batch", methods=["POST"])
+def batch_elements():
+    """Create a batch from a selection of nodes."""
+    if param_graph is None:
+        return jsonify({"error": "No project loaded"}), 400
+
+    try:
+        data = request.get_json()
+        member_ids = data.get("member_ids")
+        if not member_ids:
+            return jsonify({"error": "member_ids is required"}), 400
+
+        # 1. Create a new collection element
+        batch_id = uid_generator.from_uids(member_ids)
+
+        member_type = None
+        for member_id in member_ids:
+            member = param_graph.get_element(member_id)
+            if member_type is None:
+                member_type = member.type
+            elif member_type != member.type:
+                return jsonify({"error": "All members must be of the same type"}), 400
+    
+        batch = Batch(id=batch_id, member_ids=member_ids, member_type=member_type)
+        param_graph.add_element(batch)
+
+        # Update parents
+        for member_id in member_ids:
+            param_graph.update_element(member_id, {"parent": batch_id})
+        
+        param_graph.save()
+
+        return jsonify({
+            "message": "Batch created successfully",
+            "collection": batch.to_dict(),
+            "success": True
+        })
+
+    except Exception as e:
+        print(f"Failed to create batch: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
 
 # --------------------
 #  Model Operations

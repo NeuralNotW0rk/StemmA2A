@@ -261,6 +261,21 @@ app.whenReady().then(async () => {
     return await response.json()
   })
 
+  ipcMain.handle('batchElements', async (_event, memberIds) => {
+    const response = await fetchWithAuth(`${BACKEND_URL}/graph/batch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ member_ids: memberIds })
+    })
+    if (!response.ok) {
+      const errorBody = await response.text()
+      throw new Error(
+        `Failed to create batch. Status: ${response.status}. Error: ${errorBody}`
+      )
+    }
+    return await response.json()
+  })
+
   async function _getAdapterConfig(adapterName: string): Promise<any> {
     try {
       const response = await fetchWithAuth(`${BACKEND_URL}/adapter_config/${adapterName}`)

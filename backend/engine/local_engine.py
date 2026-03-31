@@ -48,7 +48,7 @@ class LocalEngine(Engine):
         # For now, we'll hardcode the CLAP encoder.
         # In the future, this could be made more dynamic.
         try:
-            from .encoders.clap import CLAPEncoder
+            from .encoders.clap_encoder import CLAPEncoder
             encoder = CLAPEncoder()
             embedding = encoder.encode_audio(tensor, sample_rate)
             
@@ -110,7 +110,7 @@ class LocalEngine(Engine):
             raise FileNotFoundError(f"Audio file not found at {audio_path}")
 
         try:
-            from .encoders.clap import CLAPEncoder
+            from .encoders.clap_encoder import CLAPEncoder
             import torchaudio
 
             tensor, sample_rate = torchaudio.load(audio_path)

@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from param_graph.elements.base_elements import GraphElement
 
-from .model_adapters.stable_audio import StableAudioAdapter
+from .model_adapters.stable_audio_adapter import StableAudioAdapter
 
 class Engine(ABC):
     def __init__(self):

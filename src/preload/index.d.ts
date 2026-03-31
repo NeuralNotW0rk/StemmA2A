@@ -25,6 +25,7 @@ interface API {
   removeElement: (elementId: string) => Promise<any>
   logMessage: (message: string) => Promise<any>
   updateEmbeddings: () => Promise<any>
+  batchElements: (memberIds: string[]) => Promise<any>
 }
 
 declare global {

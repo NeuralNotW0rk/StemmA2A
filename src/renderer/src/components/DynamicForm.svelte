@@ -137,7 +137,7 @@
       {:else if field.type === 'node'}
         <NodeSelector
           label={field.label}
-          selectionType={field.selectionType}
+          filter={field.filter}
           bind:node={formData[field.name] as ModelData | AudioData}
           id={field.name}
         />

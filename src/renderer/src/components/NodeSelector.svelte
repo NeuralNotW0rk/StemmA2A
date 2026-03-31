@@ -7,12 +7,12 @@
 
   let {
     label,
-    selectionType,
+    filter,
     node = $bindable(),
     id
   } = $props<{
     label: string
-    selectionType: 'model' | 'audio'
+    filter: Record<string, string | number | boolean>
     node: NodeData | string | null
     id: string
   }>()
@@ -49,10 +49,8 @@
   })
 
   function selectNodeFromGraph(): void {
-    selectionStore.startSelection(selectionType, resolvedNode?.id ?? null, (selected) => {
-      if (selected.type === selectionType) {
-        node = selected as NodeData
-      }
+    selectionStore.startSelection(filter, resolvedNode?.id ?? null, (selected) => {
+      node = selected as NodeData
     })
   }
 

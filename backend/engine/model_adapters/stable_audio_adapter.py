@@ -10,10 +10,10 @@ from stable_audio_tools.inference.generation import generate_diffusion_cond
 from safetensors.torch import load_file
 from coolname import generate_slug
 
-from .base import ModelAdapter
+from .base_adapter import ModelAdapter
 from param_graph.elements.base_elements import Asset
-from param_graph.elements.artifacts.audio import Audio
-from param_graph.elements.models.stable_audio import StableAudioModel
+from param_graph.elements.artifacts.audio_element import Audio
+from param_graph.elements.models.stable_audio_element import StableAudioModel
 from utils.uid import UIDMismatchError
 
 

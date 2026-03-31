@@ -11,6 +11,7 @@
   import RemovalView from './components/views/RemovalView.svelte'
   import NewProjectView from './components/views/NewProjectView.svelte'
   import ExecutionView from './components/views/ExecutionView.svelte'
+  import BatchingView from './components/views/BatchingView.svelte'
   import { onMount, onDestroy } from 'svelte'
   import {
     initiatorNodeStore,
@@ -21,7 +22,7 @@
   } from './utils/stores'
   import { executionStore, embeddingUpdateExecutionStore, startEmbeddingUpdate } from './utils/execution'
 
-  type ActionPanelView = 'generation' | 'import-model' | 'removal' | 'none'
+  type ActionPanelView = 'generation' | 'import-model' | 'removal' | 'batching' | 'none'
 
   let graphData: any = $state(null)
   let currentProject: string | null = $state(null)
@@ -266,6 +267,11 @@
     actionPanelView = 'removal'
   }
 
+  function handleStartBatching(nodeData: any): void {
+    initiatorNodeStore.set(nodeData)
+    actionPanelView = 'batching'
+  }
+
   function handleGenerationError(error: { title: string; message: string }): void {
     errorInInfoPanel = error
   }
@@ -289,6 +295,9 @@
     }
     if (actionPanelView === 'removal') {
       return 'Confirm Removal'
+    }
+    if (actionPanelView === 'batching') {
+      return 'Create Batch'
     }
     return 'Action'
   }
@@ -334,21 +343,7 @@
     >
       <ErrorView title={errorInInfoPanel.title} message={errorInInfoPanel.message} />
     </ContentPanel>
-  {/if}
-
-  {#if selectedElementData}
-    <ContentPanel
-      title={selectedElementData.alias || selectedElementData.name || 'Element Details'}
-      onclose={() => {
-        selectedElementData = null
-      }}
-      position="right"
-    >
-      <ElementInfoView {selectedElementData} />
-    </ContentPanel>
-  {/if}
-
-  {#if actionPanelView !== 'none' && $executionStore.status === 'idle' && !errorInInfoPanel}
+  {:else if actionPanelView !== 'none'}
     <ContentPanel title={getActionPanelTitle()} onclose={closeActionPanel} position="left">
       {#if actionPanelView === 'generation'}
         <GenerationView
@@ -382,11 +377,22 @@
             errorInInfoPanel = error
           }}
         />
+      {:else if actionPanelView === 'batching'}
+        <BatchingView
+          onclose={closeActionPanel}
+          onrefresh={() => {
+            closeActionPanel()
+            refreshGraphData()
+          }}
+          onerror={(error) => {
+            console.error('Batching error:', error)
+            closeActionPanel()
+            errorInInfoPanel = error
+          }}
+        />
       {/if}
     </ContentPanel>
-  {/if}
-
-  {#if $isCreatingNewProject}
+  {:else if $isCreatingNewProject}
     <ContentPanel
       title="Create New Project"
       onclose={() => ($isCreatingNewProject = false)}
@@ -399,6 +405,18 @@
     </ContentPanel>
   {/if}
 
+  {#if selectedElementData}
+    <ContentPanel
+      title={selectedElementData.alias || selectedElementData.name || 'Element Details'}
+      onclose={() => {
+        selectedElementData = null
+      }}
+      position="right"
+    >
+      <ElementInfoView {selectedElementData} />
+    </ContentPanel>
+  {/if}
+
   <ParameterGraph
     {graphData}
     {viewMode}
@@ -408,6 +426,7 @@
     onnodeSelect={handleElementSelect}
     onedgeSelect={handleElementSelect}
     onnodeRemove={handleNodeRemove}
+    onstartBatching={handleStartBatching}
   />
   {#if audioSrc}
     <AudioPlayer src={audioSrc} title={audioTitle} onclose={() => (audioSrc = null)} />

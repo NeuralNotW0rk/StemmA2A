@@ -152,7 +152,7 @@
   <div class="view-content">
     <NodeSelector
       label="Model"
-      selectionType="model"
+      filter={{ type: 'model' }}
       bind:node={$formStateStore.generationModel}
       bind:this={modelNodeSelector}
       id="model-selector"

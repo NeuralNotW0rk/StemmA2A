@@ -8,7 +8,7 @@
   let { selectedElementData }: Props = $props()
 
   // A list of keys to ignore for a cleaner display
-  const ignoredKeys = new Set(['x', 'y', 'vx', 'vy', 'fx', 'fy', 'isExpanded', 'index'])
+  const ignoredKeys = new Set(['x', 'y', 'vx', 'vy', 'fx', 'fy', 'index', 'clap', 'embeddings'])
 </script>
 
 <div class="view-content">

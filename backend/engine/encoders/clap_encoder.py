@@ -1,9 +1,7 @@
 import torch
-import torchaudio
 import laion_clap
 import laion_clap.hook # For monkey patching
-import torchaudio.transforms as T
-from .base import Encoder
+from .base_encoder import Encoder
 
 def patched_load_state_dict(checkpoint_path: str, map_location="cpu", skip_params=True):
     """

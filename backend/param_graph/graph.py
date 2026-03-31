@@ -4,12 +4,7 @@ from pathlib import Path
 from time import time
 
 import networkx as nx
-import torch
-import numpy as np
-import librosa as lr
-from sklearn.manifold import TSNE
 
-from utils.audio import load_audio
 from utils.filesystem import check_dir
 from .const import *
 from .elements.base_elements import GraphElement
@@ -77,20 +72,20 @@ class ParameterGraph:
     def link(self, source: GraphElement, target: GraphElement):
         self.G.add_edge(source.id, target.id, type=source.type)
 
-    def get_element(self, node_id: str) -> GraphElement:
+    def get_element(self, id: str) -> GraphElement:
         """
         Retrieves a node's attributes from the graph and reconstructs
         its corresponding dataclass object using the central registry.
         """
-        if not self.G.has_node(node_id):
-            raise ValueError(f"Node '{node_id}' not found in the graph.")
+        if not self.G.has_node(id):
+            raise ValueError(f"Node '{id}' not found in the graph.")
 
-        attrs = self.G.nodes[node_id].copy()
+        attrs = self.G.nodes[id].copy()
         return resolve_element(attrs)
 
-    def get_path_from_id(self, node_id: str, relative=False):
-        if self.G.has_node(node_id):
-            node_data = self.G.nodes[node_id]
+    def get_path_from_id(self, id: str, relative=False):
+        if self.G.has_node(id):
+            node_data = self.G.nodes[id]
             file_info = node_data.get('file')
             if not file_info:
                 return None
@@ -118,16 +113,16 @@ class ParameterGraph:
         return None
 
     # Simple element attribute update
-    def update_element(self, name: str, attrs: dict):
-        if self.G.has_node(name):
-            node_attrs = self.G.nodes[name]
+    def update_element(self, id: str, attrs: dict):
+        if self.G.has_node(id):
+            node_attrs = self.G.nodes[id]
             node_attrs.update(attrs)
 
     # Remove element (and children in the case of batches)
-    def remove_element(self, name: str):
-        to_remove = [name]
+    def remove_element(self, id: str):
+        to_remove = [id]
         for node, data in self.G.nodes(data=True):
-            if data.get('parent') == name:
+            if data.get('parent') == id:
                 to_remove.append(node)
 
         self.G.remove_nodes_from(to_remove)
