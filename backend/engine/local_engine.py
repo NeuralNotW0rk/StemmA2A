@@ -61,7 +61,7 @@ class LocalEngine(Engine):
         local_path.parent.mkdir(parents=True, exist_ok=True)
 
         # Create a named temp file with a .wav extension to satisfy torchaudio
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+        with tempfile.NamedTemporaryFile(suffix=".wav", dir=self.data_root, delete=False) as tmp:
             tmp_path = Path(tmp.name)
         
         try:
