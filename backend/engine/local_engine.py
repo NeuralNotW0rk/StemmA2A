@@ -56,11 +56,33 @@ class LocalEngine(Engine):
         artifact, tensor = adapter.generate(**kwargs)
 
         sample_rate = adapter.model_info.config["sample_rate"]
+        
+        local_path = self.data_root / path_from_uid(artifact.id)
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Create a named temp file with a .wav extension to satisfy torchaudio
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            tmp_path = Path(tmp.name)
+        
+        try:
+            # Save to the temp path (which torchaudio now recognizes as WAV)
+            torchaudio.save(tmp_path, tensor, sample_rate)
+            
+            # Move the temp file to the final hash-based destination
+            tmp_path.replace(local_path)
+        except Exception as e:
+            if tmp_path.exists():
+                tmp_path.unlink()
+            raise e
+
+        # Update the artifact with the persistent path
+        new_file_asset = replace(artifact.file, path=str(local_path))
+        artifact = replace(artifact, file=new_file_asset)
 
         try:
             from .encoders.clap_encoder import CLAPEncoder
             encoder = CLAPEncoder()
-            embedding = encoder.encode_audio(tensor, sample_rate)
+            embedding = encoder.get_embedding(local_path)
             new_embeddings = artifact.embeddings.copy()
             new_embeddings[encoder.embedding_type] = embedding
             artifact = replace(artifact, embeddings=new_embeddings)
@@ -68,15 +90,6 @@ class LocalEngine(Engine):
             print("CLAPEncoder not found, skipping embedding generation.")
         except Exception as e:
             print(f"Error during embedding generation: {e}")
-        
-        # Save the file to a persistent location using the content-addressable scheme
-        local_path = self.data_root / path_from_uid(artifact.id)
-        local_path.parent.mkdir(parents=True, exist_ok=True)
-        torchaudio.save(local_path, tensor, sample_rate)
-
-        # Update the artifact with the persistent path
-        new_file_asset = replace(artifact.file, path=str(local_path))
-        artifact = replace(artifact, file=new_file_asset)
 
         return artifact
 
