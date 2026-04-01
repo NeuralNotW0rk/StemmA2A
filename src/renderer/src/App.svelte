@@ -1,4 +1,5 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
+<script lang="ts">
+  /* eslint-disable @typescript-eslint/no-explicit-any */
   import ParameterGraph from './components/graph/ParameterGraph.svelte'
   import Toolbar from './components/Toolbar.svelte'
   import AudioPlayer from './components/AudioPlayer.svelte'
@@ -21,17 +22,16 @@
   } from './utils/stores'
   import { startEmbeddingUpdate } from './utils/execution'
   import { jobStore } from './utils/job-management'
-
-  type ActionPanelView = 'generation' | 'import-model' | 'removal' | 'batching' | 'none'
+  import type { ActionPanelView, ElementData, ErrorInfo } from './utils/types'
 
   let graphData: any = $state(null)
   let currentProject: string | null = $state(null)
   let viewMode: 'batch' | 'cluster' = $state('batch')
   let audioSrc: string | null = $state(null)
   let audioTitle: string | null = $state(null)
-  let selectedElementData: Record<string, any> | null = $state(null)
+  let selectedElementData: ElementData | null = $state(null)
   let actionPanelView: ActionPanelView = $state('none')
-  let errorInInfoPanel: { title: string; message: string } | null = $state(null)
+  let errorInInfoPanel: ErrorInfo | null = $state(null)
   let toolbarComponent: Toolbar
 
   // Backend restart detection

@@ -97,7 +97,7 @@ class LocalEngine(Engine):
 
             try:
                 # Get the actual operation function (e.g., self._generate_logic)
-                if not hasattr(self, operation_id) or operation_id.startswith('_'):
+                if not hasattr(self, operation_id) or not operation_id.startswith('_'):
                     raise Exception(f"Operation '{operation_id}' is not a valid or public operation.")
                 
                 func = getattr(self, operation_id)
