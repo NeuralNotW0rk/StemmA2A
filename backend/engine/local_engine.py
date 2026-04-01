@@ -1,5 +1,9 @@
 import inspect
 import tempfile
+import queue
+import threading
+import uuid
+import asyncio
 from pathlib import Path
 from dataclasses import replace
 
@@ -8,27 +12,42 @@ import torchaudio
 from param_graph.elements.base_elements import GraphElement
 from .engine import Engine
 from .model_cache import ModelCache
-
+from utils.uid import path_from_uid
 
 class LocalEngine(Engine):
-    def __init__(self):
+    def __init__(self, data_root: str = None):
         super().__init__()
         self.model_cache = ModelCache()
+        
+        if data_root:
+            self.data_root = Path(data_root)
+        else:
+            # If no data root is provided, create a temporary one for this session.
+            self.data_root = Path(tempfile.mkdtemp())
+        
+        self.data_root.mkdir(parents=True, exist_ok=True)
+        print(f"LocalEngine initialized with data root: {self.data_root}")
+
+        # --- Job Queue and Worker Setup ---
+        self.job_queue = queue.Queue()
+        self.job_statuses = {}
+        self.worker_thread = threading.Thread(target=self._worker, daemon=True)
+        self.worker_thread.start()
         
     async def register_model(self, adapter_name: str, **kwargs) -> GraphElement:
         """
         Registers a model by creating a temporary adapter and using it to 
         create the model element. The adapter is not cached.
+        This remains a direct, synchronous-style async operation as it's not expected to be long-running.
         """
         adapter_class = self._get_adapter_class(adapter_name)
         adapter = adapter_class()
         return adapter.register_model(**kwargs)
 
-    async def generate(self, **kwargs) -> GraphElement:
+    async def _generate_logic(self, **kwargs) -> GraphElement:
         """
-        Gets a cached model adapter and uses it to generate an output.
-        Saves the output to a temporary file and returns the artifact
-        anchored to that file.
+        The actual generation logic. Gets a cached model adapter and uses it to generate an output.
+        Saves the output to a persistent location within the data_root.
         """
         model_element = kwargs["model_element"]
         adapter_class = self._get_adapter_class(model_element.adapter)
@@ -36,67 +55,102 @@ class LocalEngine(Engine):
 
         artifact, tensor = adapter.generate(**kwargs)
 
-        # We need to save the tensor to a temporary file.
-        temp_dir = tempfile.TemporaryDirectory()
-        temp_dir_path = Path(temp_dir.name)
-        
-        # We assume the model info needed for saving is on the adapter.
-        # This might need to be more robust.
         sample_rate = adapter.model_info.config["sample_rate"]
 
-        # --- Calculate and add embeddings ---
-        # For now, we'll hardcode the CLAP encoder.
-        # In the future, this could be made more dynamic.
         try:
             from .encoders.clap_encoder import CLAPEncoder
             encoder = CLAPEncoder()
             embedding = encoder.encode_audio(tensor, sample_rate)
-            
-            # Create a new embeddings dictionary
             new_embeddings = artifact.embeddings.copy()
             new_embeddings[encoder.embedding_type] = embedding
-            
-            # Replace the embeddings in the artifact
             artifact = replace(artifact, embeddings=new_embeddings)
-
         except ImportError:
             print("CLAPEncoder not found, skipping embedding generation.")
         except Exception as e:
             print(f"Error during embedding generation: {e}")
         
-        # Construct the path and save the file
-        local_path = temp_dir_path / "output.wav"
+        # Save the file to a persistent location using the content-addressable scheme
+        local_path = self.data_root / path_from_uid(artifact.id)
+        local_path.parent.mkdir(parents=True, exist_ok=True)
         torchaudio.save(local_path, tensor, sample_rate)
 
-        # Update the artifact with the temporary path
+        # Update the artifact with the persistent path
         new_file_asset = replace(artifact.file, path=str(local_path))
         artifact = replace(artifact, file=new_file_asset)
-        
-        # Store a reference to the TemporaryDirectory object to prevent
-        # it from being garbage collected and deleting the file.
-        artifact._temp_dir_ref = temp_dir
 
         return artifact
 
-    async def execute(self, operation_id: str, **kwargs) -> GraphElement:
+    async def generate(self, **kwargs) -> GraphElement:
         """
-        Dispatches the operation to a method on this class.
+        Public-facing generate method. For direct calls, it executes the logic.
+        In the queued system, _generate_logic is called by the worker.
         """
-        if not hasattr(self, operation_id):
-            raise Exception(f"Operation '{operation_id}' not found on LocalEngine.")
+        return await self._generate_logic(**kwargs)
+
+    def _worker(self):
+        """The worker function that processes jobs from the queue."""
+        while True:
+            job_id, operation_id, op_kwargs = self.job_queue.get()
+            print(f"Worker: Picked up job {job_id} for operation '{operation_id}'")
+
+            self.job_statuses[job_id] = {"status": "running"}
+
+            try:
+                # Get the actual operation function (e.g., self._generate_logic)
+                if not hasattr(self, operation_id) or operation_id.startswith('_'):
+                    raise Exception(f"Operation '{operation_id}' is not a valid or public operation.")
+                
+                func = getattr(self, operation_id)
+                
+                # We need to run the async function in the current thread's event loop
+                result = asyncio.run(func(**op_kwargs))
+
+                self.job_statuses[job_id] = {"status": "completed", "result": result}
+                print(f"Worker: Job {job_id} completed successfully.")
+
+            except Exception as e:
+                print(f"Worker: Job {job_id} failed. Error: {e}")
+                import traceback
+                traceback.print_exc()
+                self.job_statuses[job_id] = {"status": "failed", "error": str(e)}
+            finally:
+                self.job_queue.task_done()
+
+    async def execute(self, operation_id: str, **kwargs) -> str:
+        """
+        Queues an operation to be executed by the worker.
+        Returns a job ID for status tracking.
+        """
+        job_id = str(uuid.uuid4())
         
-        func = getattr(self, operation_id)
+        # For 'generate', we want the worker to call the core logic
+        op_to_run = operation_id
+        if operation_id == 'generate':
+            op_to_run = '_generate_logic'
 
-        # Basic validation: ensure it's a public method intended to be an operation.
-        if operation_id.startswith('_') or not callable(func):
-            raise Exception(f"Operation '{operation_id}' is not a valid operation.")
+        self.job_queue.put((job_id, op_to_run, kwargs))
+        self.job_statuses[job_id] = {"status": "pending"}
+        print(f"Queued job {job_id} for operation '{operation_id}'")
+        
+        return job_id
 
-        # We assume all operations are async methods of this class.
-        if inspect.iscoroutinefunction(func):
-            return await func(**kwargs)
-        else:
-            # If we add non-async operations, we could handle them here.
-            raise Exception(f"Operation '{operation_id}' is not an async function.")
+    async def get_job_status(self, job_id: str) -> dict:
+        """
+
+        Returns the status and result (if available) of a job.
+        If the job is complete, the result is serialized to a dictionary.
+        """
+        status = self.job_statuses.get(job_id)
+        if not status:
+            return {"status": "not_found"}
+        
+        # If the result is a GraphElement, convert it to a dict for the response
+        if status.get("status") == "completed":
+            result = status.get("result")
+            if isinstance(result, GraphElement):
+                status["result"] = result.to_dict()
+
+        return status
 
     async def update_embedding(self, audio_artifact: GraphElement) -> GraphElement:
         """

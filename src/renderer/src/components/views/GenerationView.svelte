@@ -21,11 +21,12 @@
   let adapterFields: FormConfig | null = $state(null)
   let formData: Record<string, unknown> = $state({})
   let isLoading = $state(true)
+  let isGenerating = $state(false)
   let error: string | null = $state(null)
   let isFormValid = $state(false)
   let contextData = $state({})
   let dynamicForm: DynamicForm | undefined = $state()
-  let modelNodeSelector: ReturnType<typeof NodeSelector>;
+  let modelNodeSelector: ReturnType<typeof NodeSelector>
 
   function handleError(error: { title: string; message: string }): void {
     onError(error)
@@ -128,6 +129,48 @@
     }
   })
 
+  function parseSequence(str: string): (string | number)[] {
+    const parts = str.split(',').map((p) => p.trim())
+    const result: (string | number)[] = []
+
+    for (const part of parts) {
+      // Range with step, e.g., "1-10:2"
+      const rangeMatch = part.match(/^(-?\d+\.?\d*)-(-?\d+\.?\d*):(-?\d+\.?\d*)$/)
+      if (rangeMatch) {
+        const [, start, end, step] = rangeMatch.map(Number)
+        for (let i = start; i <= end; i += step) {
+          result.push(i)
+        }
+        continue
+      }
+
+      // Range without step, e.g., "1-5"
+      const simpleRangeMatch = part.match(/^(-?\d+\.?\d*)-(-?\d+\.?\d*)$/)
+      if (simpleRangeMatch) {
+        const [, start, end] = simpleRangeMatch.map(Number)
+        for (let i = start; i <= end; i++) {
+          result.push(i)
+        }
+        continue
+      }
+
+      // Single number
+      if (!isNaN(Number(part))) {
+        result.push(Number(part))
+        continue
+      }
+
+      // String value
+      result.push(part)
+    }
+
+    return result
+  }
+
+  function cartesian<T>(...arrays: T[][]): T[][] {
+    return arrays.reduce((a, b) => a.flatMap((x) => b.map((y) => [...x, y])), [[]] as T[][])
+  }
+
   function generate(): void {
     const title = 'Generation'
     if (!$formStateStore.generationModel) {
@@ -137,13 +180,56 @@
 
     lastUsedModelStore.set($formStateStore.generationModel)
 
-    const payload = {
-      ...dynamicForm.getPayload(),
-      model_id: $formStateStore.generationModel.id
+    const payload = dynamicForm.getPayload()
+    const batchFields = dynamicForm.getBatchFields()
+    const jobName = $formStateStore.generationModel.name || 'Generation'
+
+    if (batchFields.size === 0) {
+      // Single generation
+      const singlePayload = {
+        ...payload,
+        model_id: $formStateStore.generationModel.id
+      }
+      console.log('Generating with payload:', singlePayload)
+      startExecution(jobName, singlePayload)
+      onClose()
+      return
     }
 
-    console.log('Generating with payload:', payload)
-    startExecution(payload)
+    // Batch generation
+    isGenerating = true
+    const batchParams: Record<string, (string | number)[]> = {}
+    const staticParams: Record<string, unknown> = {}
+
+    for (const key in payload) {
+      if (batchFields.has(key)) {
+        batchParams[key] = parseSequence(String(payload[key]))
+      } else {
+        staticParams[key] = payload[key]
+      }
+    }
+
+    const paramNames = Object.keys(batchParams)
+    const paramValues = Object.values(batchParams)
+    const combinations = cartesian(...paramValues)
+
+    console.log(`Starting batch generation with ${combinations.length} combinations.`)
+
+    for (const combination of combinations) {
+      const batchPayload: Record<string, unknown> = { ...staticParams }
+      combination.forEach((value, index) => {
+        batchPayload[paramNames[index]] = value
+      })
+
+      const fullPayload = {
+        ...batchPayload,
+        model_id: $formStateStore.generationModel.id
+      }
+      console.log('Generating with payload:', fullPayload)
+      startExecution(jobName, fullPayload)
+    }
+
+    isGenerating = false
     onClose()
   }
 </script>
@@ -164,6 +250,8 @@
       <div class="error-message">
         <p>Error: {error}</p>
       </div>
+    {:else if isGenerating}
+      <p class="centered-text">Generating in batch...</p>
     {:else if adapterFields}
       <DynamicForm
         bind:this={dynamicForm}
@@ -183,9 +271,17 @@
     <button
       class="primary"
       onclick={generate}
-      disabled={isLoading || !!error || !$formStateStore.generationModel || !isFormValid}
+      disabled={isLoading ||
+        !!error ||
+        !$formStateStore.generationModel ||
+        !isFormValid ||
+        isGenerating}
     >
-      Generate
+      {#if isGenerating}
+        Generating...
+      {:else}
+        Generate
+      {/if}
     </button>
   </div>
 </div>

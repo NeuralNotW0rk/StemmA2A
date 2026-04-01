@@ -14,6 +14,18 @@
     contextData?: Record<string, unknown> | null
   }>()
 
+  let batchFields = $state<Set<string>>(new Set())
+
+  function toggleBatchMode(fieldName: string): void {
+    const newBatchFields = new Set(batchFields)
+    if (newBatchFields.has(fieldName)) {
+      newBatchFields.delete(fieldName)
+    } else {
+      newBatchFields.add(fieldName)
+    }
+    batchFields = newBatchFields
+  }
+
   $effect(() => {
     isFormValid = visibleFields.every(
       (f) =>
@@ -38,6 +50,10 @@
       }
     }
     return payload
+  }
+
+  export function getBatchFields(): Set<string> {
+    return batchFields
   }
 
   async function selectFieldFile(
@@ -83,35 +99,72 @@
   }}
 >
   {#each visibleFields as field (field.name)}
+    {@const isBatch = batchFields.has(field.name)}
     <div class="form-field">
       {#if field.type === 'textarea'}
         <label for={field.name}>{field.label}</label>
         <textarea bind:value={formData[field.name]} id={field.name} placeholder={field.placeholder}
         ></textarea>
       {:else if field.type === 'integer'}
-        <label for={field.name}>{field.label}</label>
-        <input
-          type="number"
-          step="1"
-          bind:value={formData[field.name]}
-          onchange={(e) => {
-            const value = e.currentTarget.value
-            if (value) {
-              formData[field.name] = Math.round(Number(value))
-            }
-          }}
-          id={field.name}
-          placeholder={field.placeholder}
-        />
+        <div class="label-container">
+          <label for={field.name}>{field.label}</label>
+          <button
+            class="batch-toggle"
+            onclick={() => toggleBatchMode(field.name)}
+            title="Toggle sequence mode"
+          >
+            {isBatch ? '−' : '+'}
+          </button>
+        </div>
+        {#if isBatch}
+          <input
+            type="text"
+            bind:value={formData[field.name]}
+            id={field.name}
+            placeholder="e.g. 1, 2, 5-10:2"
+          />
+        {:else}
+          <input
+            type="number"
+            step="1"
+            bind:value={formData[field.name]}
+            onchange={(e) => {
+              const value = e.currentTarget.value
+              if (value) {
+                formData[field.name] = Math.round(Number(value))
+              }
+            }}
+            id={field.name}
+            placeholder={field.placeholder}
+          />
+        {/if}
       {:else if field.type === 'float'}
-        <label for={field.name}>{field.label}</label>
-        <input
-          type="number"
-          step="any"
-          bind:value={formData[field.name]}
-          id={field.name}
-          placeholder={field.placeholder}
-        />
+        <div class="label-container">
+          <label for={field.name}>{field.label}</label>
+          <button
+            class="batch-toggle"
+            onclick={() => toggleBatchMode(field.name)}
+            title="Toggle sequence mode"
+          >
+            {isBatch ? '−' : '+'}
+          </button>
+        </div>
+        {#if isBatch}
+          <input
+            type="text"
+            bind:value={formData[field.name]}
+            id={field.name}
+            placeholder="e.g. 0.5, 1.2, 2.0-3.0:0.5"
+          />
+        {:else}
+          <input
+            type="number"
+            step="any"
+            bind:value={formData[field.name]}
+            id={field.name}
+            placeholder={field.placeholder}
+          />
+        {/if}
       {:else if field.type === 'boolean'}
         <label for={field.name}>{field.label}</label>
         <input
@@ -128,12 +181,30 @@
           <button onclick={() => selectFieldFile(field.name, field.filters)}>Browse</button>
         </div>
       {:else if field.type === 'select'}
-        <label for={field.name}>{field.label}</label>
-        <select bind:value={formData[field.name]} id={field.name}>
-          {#each field.options as option (option.value)}
-            <option value={option.value}>{option.label}</option>
-          {/each}
-        </select>
+        <div class="label-container">
+          <label for={field.name}>{field.label}</label>
+          <button
+            class="batch-toggle"
+            onclick={() => toggleBatchMode(field.name)}
+            title="Toggle sequence mode"
+          >
+            {isBatch ? '−' : '+'}
+          </button>
+        </div>
+        {#if isBatch}
+          <input
+            type="text"
+            bind:value={formData[field.name]}
+            id={field.name}
+            placeholder="e.g. value1, value2, value3"
+          />
+        {:else}
+          <select bind:value={formData[field.name]} id={field.name}>
+            {#each field.options as option (option.value)}
+              <option value={option.value}>{option.label}</option>
+            {/each}
+          </select>
+        {/if}
       {:else if field.type === 'node'}
         <NodeSelector
           label={field.label}
@@ -142,14 +213,32 @@
           id={field.name}
         />
       {:else}
-        <label for={field.name}>{field.label}</label>
-        <!-- Default to text input for 'string' and others -->
-        <input
-          type="text"
-          bind:value={formData[field.name]}
-          id={field.name}
-          placeholder={field.placeholder}
-        />
+        <div class="label-container">
+          <label for={field.name}>{field.label}</label>
+          <button
+            class="batch-toggle"
+            onclick={() => toggleBatchMode(field.name)}
+            title="Toggle sequence mode"
+          >
+            {isBatch ? '−' : '+'}
+          </button>
+        </div>
+        {#if isBatch}
+          <input
+            type="text"
+            bind:value={formData[field.name]}
+            id={field.name}
+            placeholder="e.g. value1, value2, value3"
+          />
+        {:else}
+          <!-- Default to text input for 'string' and others -->
+          <input
+            type="text"
+            bind:value={formData[field.name]}
+            id={field.name}
+            placeholder={field.placeholder}
+          />
+        {/if}
       {/if}
     </div>
   {/each}
@@ -164,9 +253,28 @@
     margin-bottom: 0;
   }
 
+  .label-container {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.5rem;
+  }
+
+  .batch-toggle {
+    background: none;
+    border: 1px solid var(--color-overlay-border-primary);
+    color: var(--color-overlay-text);
+    cursor: pointer;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    font-size: 16px;
+    line-height: 20px;
+    padding: 0;
+  }
+
   label {
     display: block;
-    margin-bottom: 0.5rem;
     font-weight: 500;
   }
 

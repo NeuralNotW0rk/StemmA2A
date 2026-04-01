@@ -6,6 +6,8 @@ import os
 import random
 import string
 import logging
+import time
+import asyncio
 
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
@@ -19,7 +21,7 @@ from param_graph.graph import ParameterGraph
 from param_graph.elements.models.base_model_element import Model
 from param_graph.elements.artifacts.audio_element import Audio
 from param_graph.elements.collections.batch_element import Batch
-from param_graph.utils import extract_graph_elements, save_artifact_asset
+from param_graph.utils import extract_graph_elements, save_artifact_asset, resolve_element
 from engine.engine_provider import EngineProvider
 from engine.encoders.clap_encoder import CLAPEncoder
 from utils.audio import load_audio
@@ -52,12 +54,9 @@ SIMILARITY_GROUPS = {
 param_graph: ParameterGraph = None
 execution_url = os.environ.get("ENGINE_URL")
 uid_generator = XXH3_64()
-engine_provider = EngineProvider(remote_url=execution_url)
+# EngineProvider is now initialized after a project is loaded
+engine_provider: EngineProvider = None
 clap_encoder = CLAPEncoder()
-if execution_url:
-    print(f"Engine: Using remote engine at {execution_url}")
-else:
-    print("Engine: Using local engine")
 
 
 # --------------------
@@ -81,6 +80,18 @@ def health_check():
 #  Project Management
 # --------------------
 
+def initialize_engine(project_path: str):
+    """Initializes the engine provider for a given project."""
+    global engine_provider, execution_url
+    # Reset the singleton instance
+    EngineProvider._engine_instance = None
+    engine_provider = EngineProvider(remote_url=execution_url, data_root=project_path)
+    if execution_url:
+        print(f"Engine: Using remote engine at {execution_url}")
+    else:
+        print(f"Engine: Using local engine with data root {project_path}")
+
+
 @app.route("/load_project", methods=["POST"])
 def load_project():
     """
@@ -102,6 +113,7 @@ def load_project():
             return jsonify({"error": f"Project path '{project_path_str}' does not exist or is not a directory."}), 404
 
         param_graph = ParameterGraph(str(project_path))
+        initialize_engine(str(project_path))
 
         if param_graph.load():
             return jsonify({
@@ -151,6 +163,7 @@ def create_project():
 
         param_graph = ParameterGraph(str(project_path))
         param_graph.project_name = final_project_name
+        initialize_engine(str(project_path))
         param_graph.save()
 
         return jsonify({
@@ -306,8 +319,11 @@ async def get_adapter_config(adapter_name):
 
 @app.route("/generate", methods=["POST"])
 async def generate():
-    """Generate audio using dynamic validation based on adapter config."""
-    if param_graph is None:
+    """
+    Handles the full audio generation lifecycle: validation, queuing,
+    polling, and final artifact processing.
+    """
+    if param_graph is None or engine_provider is None:
         return jsonify({"error": "No project loaded"}), 400
     
     try:
@@ -316,76 +332,87 @@ async def generate():
         if not model_id:
             return jsonify({"error": "'model_id' is required."}), 400
 
-        # 1. Get the full model dataclass from the graph
         model_element = param_graph.get_element(model_id)
-        
-        # 2. Validate that it's a model
         if not isinstance(model_element, Model):
             return jsonify({"error": f"Node '{model_id}' is not a valid model."}), 400
         
-        # 3. Get adapter config for validation
         engine = engine_provider.get_engine()
         form_config = await engine.get_adapter_config(model_element.adapter)
         form_config = form_config.get("generate")
         if not form_config:
             return jsonify({"error": f"Adapter '{model_element.adapter}' has no 'generate' configuration"}), 404
 
-        # 4. Validate the request body
         DynamicArgsModel = create_dynamic_model(form_config)
         validated_params = DynamicArgsModel.model_validate(json_data)
-
         dumped_params = validated_params.model_dump()
         
-        # 5. Resolve node IDs to graph elements and prepare engine arguments
         node_engine_args, resolved_elements = extract_graph_elements(
             form_config, dumped_params, param_graph
         )
 
-        # A more robust check might be needed here based on 'selectionType'
-        # from the config, but for now we check against base types.
         for arg_name, element in node_engine_args.items():
             if not isinstance(element, (Audio, Model)):
                 field_name = arg_name.removesuffix("_element")
-                return (
-                    jsonify(
-                        {
-                            "error": f"Node '{element.id}' for field '{field_name}' is not a valid Audio or Model artifact."
-                        }
-                    ),
-                    400,
-                )
+                return jsonify({"error": f"Node '{element.id}' for field '{field_name}' is not a valid artifact."}), 400
 
         engine_args = {"model_element": model_element, **node_engine_args}
-
-        # Also link the model that generated this
         linked_elements = [model_element, *resolved_elements]
 
-        # 6. Call actual generation using the provider
-        print("Generating audio with ")
-        temp_artifact = await engine.execute(
-            "generate",
-            **engine_args,
-            **dumped_params
-        )
+        # --- Execute, Poll, and Process ---
+        print("Submitting generation job to engine...")
+        job_id = await engine.execute("generate", **engine_args, **dumped_params)
         
-        # 7. Save the temporary artifact to a permanent location
-        output_dir = param_graph.root / "generate"
-        audio_artifact = save_artifact_asset(temp_artifact, output_dir, asset_name="file")
+        while True:
+            status_info = await engine.get_job_status(job_id)
+            status = status_info.get("status")
 
-        # 8. Add the new audio artifact to the graph and link it
-        param_graph.add_element(audio_artifact)
-        for element in linked_elements:
-            param_graph.link(element, audio_artifact)
-        param_graph.save()
-        
-        return jsonify({
-            "message": "Audio generated and registered successfully.",
-            "artifact": audio_artifact.to_dict(),
-            "validated_params": validated_params.model_dump()
-        }), 200
+            if status == "completed":
+                print(f"Job {job_id} completed. Processing artifact...")
+                
+                # The result from the engine contains the artifact as a dict.
+                result_dict = status_info.get("result", {})
+                
+                # With RemoteEngine, the 'artifact' is an object. With LocalEngine, it's a dict.
+                artifact_data = result_dict
+                if 'artifact' in result_dict: # Handle remote engine's structure
+                    artifact_data = result_dict['artifact']
+
+                if not artifact_data:
+                    raise Exception("Completed job did not return a valid artifact.")
+
+                # Resolve to a GraphElement object if it's a dict
+                temp_artifact = artifact_data
+                if isinstance(artifact_data, dict):
+                    temp_artifact = resolve_element(artifact_data)
+
+                # The artifact path points to the engine's cache. Copy it to our project.
+                output_dir = param_graph.root / "generate"
+                final_artifact = save_artifact_asset(temp_artifact, output_dir, asset_name="file")
+
+                param_graph.add_element(final_artifact)
+                for element in linked_elements:
+                    param_graph.link(element, final_artifact)
+                param_graph.save()
+                
+                print("Artifact processed and saved to graph successfully.")
+                return jsonify({
+                    "message": "Audio generated and registered successfully.",
+                    "artifact": final_artifact.to_dict(),
+                    "validated_params": validated_params.model_dump()
+                }), 200
+
+            elif status == "failed":
+                error_msg = status_info.get("error", "Unknown error during generation.")
+                print(f"Job {job_id} failed: {error_msg}")
+                return jsonify({"error": error_msg}), 500
+
+            elif status == "not_found":
+                return jsonify({"error": f"Job {job_id} was lost."}), 500
+
+            # For 'pending' or 'running', wait and poll again
+            await asyncio.sleep(1)
 
     except (ValidationError, ValueError) as e:
-        # Catch validation errors from Pydantic or ValueErrors from get_element
         print(f"Invalid request: {e}")
         traceback.print_exc()
         return jsonify({"error": "Invalid request", "details": str(e)}), 400

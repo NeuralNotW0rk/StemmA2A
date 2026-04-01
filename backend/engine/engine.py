@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from typing import Any
 from param_graph.elements.base_elements import GraphElement
 
 from .model_adapters.stable_audio_adapter import StableAudioAdapter
@@ -24,7 +25,13 @@ class Engine(ABC):
         return adapter_instance.get_form_config()
 
     @abstractmethod
-    async def execute(self, operation_id: str, **kwargs) -> GraphElement:
+    async def execute(self, operation_id: str, **kwargs) -> str:
+        """Queues an operation and returns a job ID."""
+        pass
+
+    @abstractmethod
+    async def get_job_status(self, job_id: str) -> dict[str, Any]:
+        """Gets the status of a job by its ID."""
         pass
 
     @abstractmethod

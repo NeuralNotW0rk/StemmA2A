@@ -1,5 +1,6 @@
 import { writable } from 'svelte/store'
 import type { Writable } from 'svelte/store'
+import { addJob, updateJob } from './job-management'
 
 export type ExecutionStatus = 'idle' | 'running' | 'success' | 'error'
 
@@ -24,59 +25,37 @@ export const embeddingUpdateExecutionStore: Writable<ExecutionState> = writable(
   error: null
 })
 
-export async function startExecution(payload: unknown): Promise<void> {
-  executionStore.set({
-    status: 'running',
-    payload,
-    result: null,
-    error: null
-  })
+export async function startExecution(name: string, payload: unknown): Promise<void> {
+  const job = addJob(name, payload)
 
   try {
     const result = await window.api.generate(payload)
-    executionStore.set({
-      status: 'success',
-      payload,
-      result,
-      error: null
-    })
+    job.status = 'success'
+    job.result = result
+    updateJob(job)
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : String(e)
     const error = { title: 'Generation Failed', message }
-    executionStore.set({
-      status: 'error',
-      payload,
-      result: null,
-      error
-    })
+    job.status = 'error'
+    job.error = error
+    updateJob(job)
   }
 }
 
 export async function startEmbeddingUpdate(): Promise<void> {
-  embeddingUpdateExecutionStore.set({
-    status: 'running',
-    payload: null,
-    result: null,
-    error: null
-  })
+  const job = addJob('Updating Embeddings', {})
 
   try {
     const result = await window.api.updateEmbeddings()
-    embeddingUpdateExecutionStore.set({
-      status: 'success',
-      payload: null,
-      result,
-      error: null
-    })
+    job.status = 'success'
+    job.result = result
+    updateJob(job)
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : String(e)
     const error = { title: 'Embedding Update Failed', message }
-    embeddingUpdateExecutionStore.set({
-      status: 'error',
-      payload: null,
-      result: null,
-      error
-    })
+    job.status = 'error'
+    job.error = error
+    updateJob(job)
   }
 }
 

@@ -2,7 +2,7 @@
 <script lang="ts">
   /* eslint-disable @typescript-eslint/no-explicit-any */
   import { onMount, onDestroy } from 'svelte'
-  import cytoscape, { type EventObject } from 'cytoscape'
+  import cytoscape, { type EventObject, type Singular } from 'cytoscape'
   import fcose from 'cytoscape-fcose'
   import cxtmenu from 'cytoscape-cxtmenu'
   import graphStyle from './Style'
@@ -19,7 +19,7 @@
     onrescanSource?: (name: string) => void
     onnodeSelect?: (data: any) => void
     onedgeSelect?: (data: any) => void
-    onnodeRemove?: (data: any) => void
+    onElementRemove?: (data: any) => void
     onstartBatching?: (data: any) => void
   }
 
@@ -31,7 +31,7 @@
     onrescanSource,
     onnodeSelect,
     onedgeSelect,
-    onnodeRemove,
+    onElementRemove,
     onstartBatching
   }: Props = $props()
 
@@ -117,79 +117,92 @@
   function setupContextMenus(): void {
     if (!cy) return
 
+    type Command = { content: string; select: () => void }
+
+    // --- Command Definitions (Inheritance-style) ---
+
+    const elementCommands = (ele: Singular): Command[] => [
+      {
+        content: 'Remove',
+        select: () => {
+          onElementRemove?.(ele.data())
+        }
+      }
+    ]
+
+    const nodeCommands = (ele: Singular): Command[] => [
+      // Inherits from elementCommands
+      ...elementCommands(ele),
+      {
+        content: 'Group',
+        select: () => onstartBatching?.(ele.data())
+      }
+    ]
+
+    const modelNodeCommands = (ele: Singular): Command[] => [
+      // Inherits from nodeCommands
+      {
+        content: 'Generate Audio',
+        select: () => onmodelSelect?.(ele.data())
+      },
+      ...nodeCommands(ele)
+    ]
+
+    const audioNodeCommands = (ele: Singular): Command[] => {
+      const specificCommands: Command[] = []
+      if (ele.data().context) {
+        specificCommands.push({
+          content: 'Replicate',
+          select: () => onaudioNodeSelectForGeneration?.(ele.data(), true)
+        })
+      }
+      specificCommands.push({
+        content: 'Audio to Audio',
+        select: () => onaudioNodeSelectForGeneration?.(ele.data(), false)
+      })
+
+      // Inherits from nodeCommands
+      return [...specificCommands, ...nodeCommands(ele)]
+    }
+
+    const externalNodeCommands = (ele: Singular): Command[] => [
+      // Inherits from elementCommands (cannot be grouped)
+      {
+        content: 'Rescan',
+        select: () => onrescanSource?.(ele.data().name)
+      },
+      ...elementCommands(ele)
+    ]
+
+    // --- Menu Instantiation ---
+
     cy.cxtmenu({
       selector: 'core',
       commands: [
-        {
-          content: 'Tidy',
-          select: tidyView
-        },
-        {
-          content: 'Fit',
-          select: fitView
-        }
+        { content: 'Tidy', select: tidyView },
+        { content: 'Fit', select: fitView }
       ]
     })
 
     cy.cxtmenu({
-      selector: 'node[type="model"]',
-      commands: [
-        {
-          content: 'Generate Audio',
-          select: (ele: any) => onmodelSelect?.(ele.data())
-        },
-        {
-          content: 'Group',
-          select: (ele: any) => onstartBatching?.(ele.data())
-        },
-        {
-          content: 'Remove',
-          select: (ele: any) => onnodeRemove?.(ele.data())
+      selector: 'node',
+      commands: (ele: Singular): Command[] => {
+        switch (ele.data('type')) {
+          case 'model':
+            return modelNodeCommands(ele)
+          case 'audio':
+            return audioNodeCommands(ele)
+          case 'external':
+            return externalNodeCommands(ele)
+          default:
+            return nodeCommands(ele) // Fallback for any other node type
         }
-      ]
-    })
-
-    cy.cxtmenu({
-      selector: 'node[type="audio"]',
-      commands: (ele: any) => {
-        const commands = [
-          {
-            content: 'Audio to Audio',
-            select: () => onaudioNodeSelectForGeneration?.(ele.data(), false)
-          },
-          {
-            content: 'Group',
-            select: () => onstartBatching?.(ele.data())
-          },
-          {
-            content: 'Remove',
-            select: () => onnodeRemove?.(ele.data())
-          }
-        ]
-
-        if (ele.data().context) {
-          commands.unshift({
-            content: 'Replicate',
-            select: () => onaudioNodeSelectForGeneration?.(ele.data(), true)
-          })
-        }
-
-        return commands
       }
     })
 
     cy.cxtmenu({
-      selector: 'node[type="external"]',
-      commands: [
-        {
-          content: 'Rescan',
-          select: (ele: any) => onrescanSource?.(ele.data().name)
-        },
-        {
-          content: 'Remove',
-          select: (ele: any) => onnodeRemove?.(ele.data())
-        }
-      ]
+      selector: 'edge',
+      commands: elementCommands
     })
   }
 

@@ -1,5 +1,4 @@
-<script lang="ts">
-  /* eslint-disable @typescript-eslint/no-explicit-any */
+/* eslint-disable @typescript-eslint/no-explicit-any */
   import ParameterGraph from './components/graph/ParameterGraph.svelte'
   import Toolbar from './components/Toolbar.svelte'
   import AudioPlayer from './components/AudioPlayer.svelte'
@@ -10,8 +9,8 @@
   import ImportModelView from './components/views/ImportModelView.svelte'
   import RemovalView from './components/views/RemovalView.svelte'
   import NewProjectView from './components/views/NewProjectView.svelte'
-  import ExecutionView from './components/views/ExecutionView.svelte'
   import BatchingView from './components/views/BatchingView.svelte'
+  import JobStatusView from './components/views/JobStatusView.svelte'
   import { onMount, onDestroy } from 'svelte'
   import {
     initiatorNodeStore,
@@ -20,7 +19,8 @@
     backendStatus,
     isCreatingNewProject
   } from './utils/stores'
-  import { executionStore, embeddingUpdateExecutionStore, startEmbeddingUpdate } from './utils/execution'
+  import { startEmbeddingUpdate } from './utils/execution'
+  import { jobStore } from './utils/job-management'
 
   type ActionPanelView = 'generation' | 'import-model' | 'removal' | 'batching' | 'none'
 
@@ -39,18 +39,16 @@
   let healthCheckInterval: number | null = null
 
   $effect(() => {
-    const unsub = executionStore.subscribe((value) => {
-      if (value.status === 'success') {
-        refreshGraphData()
-      }
-    })
-    return unsub
-  })
+    const unsub = jobStore.subscribe((jobs) => {
+      // Find jobs that have just succeeded
+      const newlySucceeded = jobs.find((job) => job.status === 'success' && !job.result?.viewed)
 
-  $effect(() => {
-    const unsub = embeddingUpdateExecutionStore.subscribe((value) => {
-      if (value.status === 'success') {
+      if (newlySucceeded) {
         refreshGraphData()
+        // Mark as viewed to prevent re-triggering
+        if (newlySucceeded.result) {
+          newlySucceeded.result.viewed = true
+        }
       }
     })
     return unsub
@@ -262,8 +260,8 @@
     actionPanelView = 'generation'
   }
 
-  function handleNodeRemove(nodeData: any): void {
-    selectedForRemoval.set(nodeData)
+  function handleElementRemove(elementData: any): void {
+    selectedForRemoval.set(elementData)
     actionPanelView = 'removal'
   }
 
@@ -315,27 +313,7 @@
     {viewMode}
   />
 
-  {#if $embeddingUpdateExecutionStore.status !== 'idle'}
-    <ContentPanel
-      title="Updating Embeddings"
-      onclose={() => {
-        /* This panel cannot be closed directly */
-      }}
-      position="left"
-    >
-      <ExecutionView executionStore={embeddingUpdateExecutionStore} />
-    </ContentPanel>
-  {:else if $executionStore.status !== 'idle'}
-    <ContentPanel
-      title="Generation"
-      onclose={() => {
-        /* This panel cannot be closed directly */
-      }}
-      position="left"
-    >
-      <ExecutionView />
-    </ContentPanel>
-  {:else if errorInInfoPanel}
+  {#if errorInInfoPanel}
     <ContentPanel
       title={errorInInfoPanel.title}
       onclose={() => (errorInInfoPanel = null)}
@@ -405,17 +383,25 @@
     </ContentPanel>
   {/if}
 
-  {#if selectedElementData}
-    <ContentPanel
-      title={selectedElementData.alias || selectedElementData.name || 'Element Details'}
-      onclose={() => {
-        selectedElementData = null
-      }}
-      position="right"
-    >
-      <ElementInfoView {selectedElementData} />
-    </ContentPanel>
-  {/if}
+  <div class="right-panel-container">
+    {#if $jobStore.length > 0}
+      <ContentPanel title="Jobs" position="right">
+        <JobStatusView />
+      </ContentPanel>
+    {/if}
+
+    {#if selectedElementData}
+      <ContentPanel
+        title={selectedElementData.alias || selectedElementData.name || 'Element Details'}
+        onclose={() => {
+          selectedElementData = null
+        }}
+        position="right"
+      >
+        <ElementInfoView {selectedElementData} />
+      </ContentPanel>
+    {/if}
+  </div>
 
   <ParameterGraph
     {graphData}
@@ -425,7 +411,7 @@
     onaudioNodeSelectForGeneration={handleAudioNodeSelectForGeneration}
     onnodeSelect={handleElementSelect}
     onedgeSelect={handleElementSelect}
-    onnodeRemove={handleNodeRemove}
+    onElementRemove={handleElementRemove}
     onstartBatching={handleStartBatching}
   />
   {#if audioSrc}
@@ -439,6 +425,18 @@
     display: flex;
     flex-direction: column;
     height: 100vh;
+  }
+
+  .right-panel-container {
+    position: absolute;
+    top: 4.5rem;
+    right: 1rem;
+    bottom: 1rem;
+    width: 320px;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    z-index: 1000;
   }
 
   :global(body) {

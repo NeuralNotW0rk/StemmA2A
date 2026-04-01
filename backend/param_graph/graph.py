@@ -38,12 +38,6 @@ class ParameterGraph:
         check_dir(self.root)
         data_path = self.root / DICT_FILE
 
-        # Backup json if it exists
-        if os.path.exists(data_path):
-            os.system(
-                f'cp "{data_path}" "{check_dir(self.root / BACKIP_DIR) / DICT_FILE}_{int(time())}"'
-            )
-
         # Write new json
         with open(data_path, 'w') as df:
             data = {
