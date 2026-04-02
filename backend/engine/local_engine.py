@@ -86,7 +86,7 @@ class LocalEngine(Engine):
             try:
                 embedding = self.encoder.get_embedding(local_path)
                 new_embeddings = artifact.embeddings.copy()
-                new_embeddings[self.encoder.embedding_type] = embedding
+                new_embeddings[self.encoder.embedding_type] = embedding.tolist()
                 artifact = replace(artifact, embeddings=new_embeddings)
             except Exception as e:
                 print(f"Error during embedding generation: {e}")
