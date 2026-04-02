@@ -12,6 +12,7 @@ from pydantic import ValidationError
 from engine.engine_provider import EngineProvider
 from utils.uid import path_from_uid
 from param_graph.utils import resolve_elements_from_dicts
+from param_graph.registry import resolve_element
 
 
 app = Flask(__name__)
@@ -105,6 +106,15 @@ async def get_job_status(job_id):
     try:
         engine = engine_provider.get_engine()
         status = await engine.get_job_status(job_id)
+
+        # De-anchor completed results before sending them over the wire
+        if status.get("status") == "completed" and "result" in status:
+            result_data = status.get("result")
+            if result_data and "id" in result_data:
+                element = resolve_element(result_data)
+                de_anchored_element = element.de_anchor()
+                status["result"] = de_anchored_element.to_dict()
+
         return jsonify(status)
     except Exception as e:
         traceback.print_exc()

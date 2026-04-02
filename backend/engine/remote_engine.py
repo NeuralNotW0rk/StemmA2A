@@ -88,17 +88,17 @@ class RemoteEngine(Engine):
         async with aiohttp.ClientSession(headers=auth_headers, timeout=timeout) as session:
             async with session.get(f"{self.remote_url}/job_status/{job_id}") as response:
                 response.raise_for_status()
-                
+
                 status_info = await response.json()
 
                 # If the job is complete and has a result, we need to download the file.
                 if status_info.get("status") == "completed" and "result" in status_info:
                     result_dict = status_info["result"]
-                    
-                    # The actual GraphElement is in a sub-field of the result
-                    element_dict = result_dict.get("artifact")
-                    if not element_dict:
-                        return status_info # Return as-is if there's no artifact
+
+                    # The result from the service IS the element dictionary.
+                    element_dict = result_dict
+                    if not element_dict or not isinstance(element_dict, dict) or "id" not in element_dict:
+                        return status_info  # Return as-is if there's no valid element
 
                     result_element = resolve_element(element_dict)
 
@@ -106,23 +106,27 @@ class RemoteEngine(Engine):
                         if file_response.status == 200:
                             file_data = await file_response.read()
 
+                            # Creating a temporary directory that we can pass to the artifact
+                            # so it gets cleaned up when the artifact is no longer in use.
                             tmp_root = Path(__file__).parent.parent / "tmp"
                             tmp_root.mkdir(exist_ok=True)
-                            
                             temp_dir = tempfile.TemporaryDirectory(dir=tmp_root)
                             temp_dir_path = Path(temp_dir.name)
 
+                            # We need to reconstruct the path from the UID to save locally
                             base_path = path_from_uid(result_element.id)
                             local_path = temp_dir_path / base_path
-                            
+
                             local_path.parent.mkdir(parents=True, exist_ok=True)
                             local_path.write_bytes(file_data)
-                            
+
+                            # Anchor the element to the new local path
                             anchored_element = result_element.anchor(str(temp_dir_path), with_extension=False)
+                            # Attach the temporary directory reference for cleanup
                             anchored_element._temp_dir_ref = temp_dir
 
-                            # Replace the dict result with the proper anchored GraphElement
-                            status_info["result"]["artifact"] = anchored_element
+                            # Replace the dict result with the anchored element's dict representation
+                            status_info["result"] = anchored_element.to_dict()
                         else:
                             # If download fails, update status to reflect that
                             status_info["status"] = "failed"

@@ -1,4 +1,4 @@
-import inspect
+import io
 import tempfile
 import queue
 import threading
@@ -33,6 +33,17 @@ class LocalEngine(Engine):
         self.job_statuses = {}
         self.worker_thread = threading.Thread(target=self._worker, daemon=True)
         self.worker_thread.start()
+
+        # --- Encoder Setup ---
+        self.encoder = None
+        try:
+            from .encoders.clap_encoder import CLAPEncoder
+            self.encoder = CLAPEncoder()
+            print("CLAPEncoder initialized.")
+        except ImportError:
+            print("CLAPEncoder not found, skipping embedding functionality.")
+        except Exception as e:
+            print(f"Error initializing CLAPEncoder: {e}")
         
     async def register_model(self, adapter_name: str, **kwargs) -> GraphElement:
         """
@@ -56,40 +67,29 @@ class LocalEngine(Engine):
         artifact, tensor = adapter.generate(**kwargs)
 
         sample_rate = adapter.model_info.config["sample_rate"]
-        
+
         local_path = self.data_root / path_from_uid(artifact.id)
         local_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Create a named temp file with a .wav extension to satisfy torchaudio
-        with tempfile.NamedTemporaryFile(suffix=".wav", dir=self.data_root, delete=False) as tmp:
-            tmp_path = Path(tmp.name)
-        
-        try:
-            # Save to the temp path (which torchaudio now recognizes as WAV)
-            torchaudio.save(tmp_path, tensor, sample_rate)
-            
-            # Move the temp file to the final hash-based destination
-            tmp_path.replace(local_path)
-        except Exception as e:
-            if tmp_path.exists():
-                tmp_path.unlink()
-            raise e
+        # Save to an in-memory buffer to avoid issues with filenames in soundfile
+        buffer = io.BytesIO()
+        torchaudio.save(buffer, tensor, sample_rate, format="wav")
+
+        # Write the buffer's content to the final destination file
+        local_path.write_bytes(buffer.getvalue())
 
         # Update the artifact with the persistent path
         new_file_asset = replace(artifact.file, path=str(local_path))
         artifact = replace(artifact, file=new_file_asset)
 
-        try:
-            from .encoders.clap_encoder import CLAPEncoder
-            encoder = CLAPEncoder()
-            embedding = encoder.get_embedding(local_path)
-            new_embeddings = artifact.embeddings.copy()
-            new_embeddings[encoder.embedding_type] = embedding
-            artifact = replace(artifact, embeddings=new_embeddings)
-        except ImportError:
-            print("CLAPEncoder not found, skipping embedding generation.")
-        except Exception as e:
-            print(f"Error during embedding generation: {e}")
+        if self.encoder:
+            try:
+                embedding = self.encoder.get_embedding(local_path)
+                new_embeddings = artifact.embeddings.copy()
+                new_embeddings[self.encoder.embedding_type] = embedding
+                artifact = replace(artifact, embeddings=new_embeddings)
+            except Exception as e:
+                print(f"Error during embedding generation: {e}")
 
         return artifact
 
@@ -169,6 +169,10 @@ class LocalEngine(Engine):
         """
         Calculates and adds embeddings to an existing audio artifact.
         """
+        if not self.encoder:
+            print("CLAPEncoder not available, cannot update embeddings.")
+            return audio_artifact
+
         if not audio_artifact or not hasattr(audio_artifact, 'file'):
             raise ValueError("A valid audio artifact with a file asset is required.")
 
@@ -177,24 +181,19 @@ class LocalEngine(Engine):
             raise FileNotFoundError(f"Audio file not found at {audio_path}")
 
         try:
-            from .encoders.clap_encoder import CLAPEncoder
             import torchaudio
 
             tensor, sample_rate = torchaudio.load(audio_path)
             
-            encoder = CLAPEncoder()
-            embedding = encoder.encode_audio(tensor, sample_rate)
+            embedding = self.encoder.encode_audio(tensor, sample_rate)
             
             new_embeddings = audio_artifact.embeddings.copy()
-            new_embeddings[encoder.embedding_type] = embedding
+            new_embeddings[self.encoder.embedding_type] = embedding
             
             updated_artifact = replace(audio_artifact, embeddings=new_embeddings)
 
             return updated_artifact
 
-        except ImportError:
-            print("CLAPEncoder not found, cannot generate embeddings.")
-            return audio_artifact
         except Exception as e:
             print(f"Error during embedding update: {e}")
             return audio_artifact

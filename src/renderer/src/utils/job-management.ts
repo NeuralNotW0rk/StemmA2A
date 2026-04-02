@@ -4,12 +4,14 @@ import { v4 as uuidv4 } from 'uuid'
 
 export type JobStatus = 'running' | 'success' | 'error' | 'cancelled'
 
+export type JobResult = Record<string, any> & { viewed?: boolean }
+
 export interface Job {
   id: string
   name: string
   status: JobStatus
   payload: unknown
-  result: unknown | null
+  result: JobResult | null
   error: { title: string; message: string } | null
   createdAt: number
   updatedAt: number
