@@ -371,9 +371,12 @@ async def generate():
         # --- Execute, Poll, and Process ---
         print("Submitting generation job to engine...")
         if job_id_from_client:
+            print(f"app.py: Using client provided job_id: {job_id_from_client}")
             job_id = await engine.execute("generate", job_id=job_id_from_client, **engine_args, **dumped_params)
         else:
+            print("app.py: No client job_id provided.")
             job_id = await engine.execute("generate", **engine_args, **dumped_params)
+        print(f"app.py: Engine returned job_id: {job_id}")
         
         while True:
             status_info = await engine.get_job_status(job_id)

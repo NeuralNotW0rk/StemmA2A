@@ -72,6 +72,8 @@ async def execute():
             job_id = params.pop("job_id")
         elif isinstance(params, dict) and "job_id" in params:
             del params["job_id"]
+            
+        print(f"engine_service.py: extracted job_id: {job_id}")
 
         if not operation_id or params is None:
             return jsonify({"error": "Missing 'operation' or 'params' in request."}), 400
@@ -96,10 +98,13 @@ async def execute():
 
         # The engine's execute method now returns a job ID. Pass job_id if provided.
         if job_id:
+            print(f"engine_service.py: calling engine.execute with job_id={job_id}")
             job_id = await engine.execute(op_id_str, job_id=job_id, **anchored_params)
         else:
+            print(f"engine_service.py: calling engine.execute without job_id")
             job_id = await engine.execute(op_id_str, **anchored_params)
         
+        print(f"engine_service.py: engine.execute returned job_id={job_id}")
         # Return the job ID to the client
         return jsonify({"job_id": job_id})
 
