@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { jobStore, removeJob } from '../../utils/job-management'
+  import { jobStore, removeJob, cancelJob } from '../../utils/job-management'
   import type { Job } from '../../utils/job-management'
 
   function getStatusClass(status: Job['status']): string {
@@ -11,6 +11,7 @@
       case 'error':
         return 'status-error'
       case 'cancelled':
+      case 'cancelling':
         return 'status-cancelled'
       default:
         return ''
@@ -28,7 +29,15 @@
           <span class="job-name">{job.name}</span>
           <div class="job-details">
             <span class="job-status {getStatusClass(job.status)}">{job.status}</span>
-            <button class="close-btn" onclick={() => removeJob(job.id)}>×</button>
+            {#if job.status === 'running' || job.status === 'cancelling'}
+              <button
+                class="cancel-btn"
+                onclick={() => cancelJob(job.id)}
+                disabled={job.status === 'cancelling'}>Cancel</button
+              >
+            {:else}
+              <button class="close-btn" onclick={() => removeJob(job.id)}>×</button>
+            {/if}
           </div>
         </li>
       {/each}
@@ -111,5 +120,18 @@
   }
   .close-btn:hover {
     opacity: 1;
+  }
+  .cancel-btn {
+    font-size: 0.8rem;
+    background-color: var(--color-background-raised);
+    border: 1px solid var(--color-border);
+    color: var(--color-text);
+    padding: 0.2rem 0.5rem;
+    border-radius: 0.25rem;
+    cursor: pointer;
+  }
+  .cancel-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
   }
 </style>

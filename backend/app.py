@@ -357,6 +357,15 @@ async def generate():
 
         engine_args = {"model_element": model_element, **node_engine_args}
         linked_elements = [model_element, *resolved_elements]
+        
+        # --- Batching Logic ---
+        batch_id = json_data.get("batch_id")
+        if batch_id:
+            if not param_graph.G.has_node(batch_id):
+                # Create the batch element if it's the first time we see this ID
+                batch_element = Batch(id=batch_id, member_type="audio")
+                param_graph.add_element(batch_element)
+                print(f"Created new batch element {batch_id}")
 
         # --- Execute, Poll, and Process ---
         print("Submitting generation job to engine...")
@@ -388,8 +397,22 @@ async def generate():
                 # The artifact path points to the engine's cache. Copy it to our project.
                 output_dir = param_graph.root / "generate"
                 final_artifact = save_artifact_asset(temp_artifact, output_dir, asset_name="file")
-
+                
                 param_graph.add_element(final_artifact)
+
+                # If part of a batch, update the batch and the artifact
+                if batch_id:
+                    # 1. Set parent on the new artifact
+                    param_graph.update_element(final_artifact.id, {"parent": batch_id})
+                    
+                    # 2. Update the batch's member_ids list
+                    batch_node_attrs = param_graph.G.nodes[batch_id]
+                    # Ensure member_ids exists and is a list
+                    if 'member_ids' not in batch_node_attrs or not isinstance(batch_node_attrs['member_ids'], list):
+                        batch_node_attrs['member_ids'] = []
+                    batch_node_attrs['member_ids'].append(final_artifact.id)
+
+
                 for element in linked_elements:
                     param_graph.link(element, final_artifact)
                 param_graph.save()
@@ -418,6 +441,27 @@ async def generate():
         return jsonify({"error": "Invalid request", "details": str(e)}), 400
     except Exception as e:
         print(f"Generation failed: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/jobs/<job_id>/cancel", methods=["POST"])
+async def cancel_job(job_id):
+    """
+    Requests cancellation of a specific job.
+    """
+    if engine_provider is None:
+        return jsonify({"error": "No project loaded"}), 400
+
+    try:
+        engine = engine_provider.get_engine()
+        await engine.cancel_job(job_id)
+        return jsonify({
+            "message": f"Cancellation requested for job {job_id}.",
+            "success": True
+        }), 202
+    except Exception as e:
+        print(f"Failed to cancel job: {e}")
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 

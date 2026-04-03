@@ -106,6 +106,12 @@ class LocalEngine(Engine):
             job_id, operation_id, op_kwargs = self.job_queue.get()
             print(f"Worker: Picked up job {job_id} for operation '{operation_id}'")
 
+            # Check if the job was cancelled while in the queue
+            if self.job_statuses.get(job_id, {}).get("status") == "cancelled":
+                print(f"Worker: Job {job_id} was cancelled before execution. Skipping.")
+                self.job_queue.task_done()
+                continue
+
             self.job_statuses[job_id] = {"status": "running"}
 
             try:
@@ -164,6 +170,21 @@ class LocalEngine(Engine):
                 status["result"] = result.to_dict()
 
         return status
+
+    async def cancel_job(self, job_id: str):
+        """
+        Requests cancellation of a job.
+        """
+        status_info = self.job_statuses.get(job_id, {})
+        current_status = status_info.get("status")
+
+        if not current_status or current_status in ["completed", "failed", "cancelled"]:
+            print(f"Job {job_id} is already in a terminal state ('{current_status}'). Cannot cancel.")
+            return
+
+        if current_status in ["pending", "running"]:
+            self.job_statuses[job_id] = {"status": "cancelled"}
+            print(f"Job {job_id} cancellation requested. Status set to 'cancelled'.")
 
     async def update_embedding(self, audio_artifact: GraphElement) -> GraphElement:
         """

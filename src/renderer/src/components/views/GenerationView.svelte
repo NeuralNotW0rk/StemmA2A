@@ -215,6 +215,9 @@
 
     console.log(`Starting batch generation with ${combinations.length} combinations.`)
 
+    // Create a unique ID for this batch operation
+    const batchId = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
+
     for (const combination of combinations) {
       const batchPayload: Record<string, unknown> = { ...staticParams }
       combination.forEach((value, index) => {
@@ -223,7 +226,8 @@
 
       const fullPayload = {
         ...batchPayload,
-        model_id: $formStateStore.generationModel.id
+        model_id: $formStateStore.generationModel.id,
+        batch_id: batchId
       }
       console.log('Generating with payload:', fullPayload)
       startExecution(jobName, fullPayload)

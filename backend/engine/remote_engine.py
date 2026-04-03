@@ -106,26 +106,21 @@ class RemoteEngine(Engine):
                         if file_response.status == 200:
                             file_data = await file_response.read()
 
-                            # Creating a temporary directory that we can pass to the artifact
-                            # so it gets cleaned up when the artifact is no longer in use.
+                            # Save the file to a stable temporary location that won't be auto-deleted.
                             tmp_root = Path(__file__).parent.parent / "tmp"
                             tmp_root.mkdir(exist_ok=True)
-                            temp_dir = tempfile.TemporaryDirectory(dir=tmp_root)
-                            temp_dir_path = Path(temp_dir.name)
 
-                            # We need to reconstruct the path from the UID to save locally
+                            # Construct the path from the UID to save locally.
                             base_path = path_from_uid(result_element.id)
-                            local_path = temp_dir_path / base_path
+                            local_path = tmp_root / base_path
 
                             local_path.parent.mkdir(parents=True, exist_ok=True)
                             local_path.write_bytes(file_data)
 
-                            # Anchor the element to the new local path
-                            anchored_element = result_element.anchor(str(temp_dir_path), with_extension=False)
-                            # Attach the temporary directory reference for cleanup
-                            anchored_element._temp_dir_ref = temp_dir
+                            # Anchor the element's path to the root of our stable temp directory.
+                            anchored_element = result_element.anchor(str(tmp_root), with_extension=False)
 
-                            # Replace the dict result with the anchored element's dict representation
+                            # Replace the dict result with the anchored element's dict representation.
                             status_info["result"] = anchored_element.to_dict()
                         else:
                             # If download fails, update status to reflect that
