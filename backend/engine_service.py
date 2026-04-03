@@ -65,6 +65,7 @@ async def execute():
         data = request.get_json()
         operation_id = data.get("operation")
         params = data.get("params")
+        job_id = data.get("job_id")
 
         if not all([operation_id, params]):
             return jsonify({"error": "Missing 'operation' or 'params' in request."}), 400
@@ -87,8 +88,11 @@ async def execute():
 
         op_id_str = operation_id['id'] if isinstance(operation_id, dict) and 'id' in operation_id else operation_id
 
-        # The engine's execute method now returns a job ID
-        job_id = await engine.execute(op_id_str, **anchored_params)
+        # The engine's execute method now returns a job ID. Pass job_id if provided.
+        if job_id:
+            job_id = await engine.execute(op_id_str, job_id=job_id, **anchored_params)
+        else:
+            job_id = await engine.execute(op_id_str, **anchored_params)
         
         # Return the job ID to the client
         return jsonify({"job_id": job_id})
