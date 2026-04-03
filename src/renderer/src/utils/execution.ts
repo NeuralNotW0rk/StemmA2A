@@ -29,7 +29,11 @@ export async function startExecution(name: string, payload: unknown): Promise<vo
   const job = addJob(name, payload)
 
   try {
-    const result = await window.api.generate(payload)
+    const payloadWithId =
+      typeof payload === 'object' && payload !== null
+        ? { ...payload, job_id: job.id }
+        : { job_id: job.id, payload }
+    const result = await window.api.generate(payloadWithId)
     job.status = 'success'
     job.result = result
     updateJob(job)

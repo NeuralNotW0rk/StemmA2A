@@ -40,6 +40,8 @@ class RemoteEngine(Engine):
         Queues a remote operation and returns a job ID.
         Handles asset synchronization before queueing.
         """
+        job_id = kwargs.pop('job_id', None)
+        
         all_elements = find_elements(kwargs)
         local_assets = {element_id: asset_path for element_id, asset_path in
                         (asset for e in all_elements.values() for asset in e.get_local_assets().items())}
@@ -49,6 +51,9 @@ class RemoteEngine(Engine):
             de_anchored_params[name] = element.de_anchor().to_dict()
 
         payload = {"operation": operation, "params": de_anchored_params}
+        if job_id:
+            payload["job_id"] = job_id
+            
         auth_headers = self._get_auth_headers()
         timeout = aiohttp.ClientTimeout(total=self.timeout)
 

@@ -328,8 +328,12 @@ async def generate():
     
     try:
         json_data = request.get_json()
+        print(f"app.py: Received /generate payload: {json_data}")
         model_id = json_data.get("model_id")
-        job_id_from_client = json_data.get("job_id")
+        job_id = json_data.get("job_id")
+        
+        if not job_id:
+            return jsonify({"error": "'job_id' is required."}), 400
         if not model_id:
             return jsonify({"error": "'model_id' is required."}), 400
 
@@ -369,13 +373,13 @@ async def generate():
                 print(f"Created new batch element {batch_id}")
 
         # --- Execute, Poll, and Process ---
-        print("Submitting generation job to engine...")
-        if job_id_from_client:
-            print(f"app.py: Using client provided job_id: {job_id_from_client}")
-            job_id = await engine.execute("generate", job_id=job_id_from_client, **engine_args, **dumped_params)
-        else:
-            print("app.py: No client job_id provided.")
-            job_id = await engine.execute("generate", **engine_args, **dumped_params)
+        print(f"Submitting generation job {job_id} to engine...")
+        returned_job_id = await engine.execute("generate", job_id=job_id, **engine_args, **dumped_params)
+        
+        if returned_job_id != job_id:
+             print(f"Warning: Engine returned different job_id {returned_job_id} than requested {job_id}")
+             job_id = returned_job_id
+             
         print(f"app.py: Engine returned job_id: {job_id}")
         
         while True:

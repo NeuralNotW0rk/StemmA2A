@@ -140,7 +140,7 @@ class LocalEngine(Engine):
         Queues an operation to be executed by the worker.
         Returns a job ID for status tracking.
         """
-        job_id = str(uuid.uuid4())
+        job_id = kwargs.pop('job_id', str(uuid.uuid4()))
         
         # For 'generate', we want the worker to call the core logic
         op_to_run = operation_id
