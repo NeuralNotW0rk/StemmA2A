@@ -120,6 +120,25 @@ async def get_job_status(job_id):
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
+
+@app.route("/jobs/<job_id>/cancel", methods=["POST"])
+async def cancel_job(job_id):
+    """
+    Requests cancellation of a specific job.
+    """
+    try:
+        engine = engine_provider.get_engine()
+        await engine.cancel_job(job_id)
+        return jsonify({
+            "message": f"Cancellation requested for job {job_id}.",
+            "success": True
+        }), 202
+    except Exception as e:
+        print(f"Failed to cancel job: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/download_asset/<asset_id>", methods=["GET"])
 def download_asset(asset_id):
     """Downloads a generated asset file from the content-addressable cache."""
