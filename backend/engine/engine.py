@@ -35,5 +35,10 @@ class Engine(ABC):
         pass
 
     @abstractmethod
+    async def cancel_job(self, job_id: str) -> None:
+        """Requests cancellation of a job."""
+        pass
+
+    @abstractmethod
     async def register_model(self, adapter_name: str, **kwargs) -> GraphElement:
         pass

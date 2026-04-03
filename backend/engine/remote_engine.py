@@ -77,6 +77,21 @@ class RemoteEngine(Engine):
                         
                     return job_id
 
+    async def cancel_job(self, job_id: str) -> None:
+        """Sends a cancellation request to the remote engine."""
+        auth_headers = self._get_auth_headers()
+        timeout = aiohttp.ClientTimeout(total=self.timeout)
+
+        async with aiohttp.ClientSession(headers=auth_headers, timeout=timeout) as session:
+            async with session.post(f"{self.remote_url}/jobs/{job_id}/cancel") as response:
+                if response.status not in [200, 202]: # Accept OK or Accepted
+                    # Log the error but don't raise for now, as the frontend might not handle it gracefully.
+                    # The job will likely just stay in a 'cancelling' state.
+                    error_text = await response.text()
+                    print(f"Failed to cancel remote job {job_id}. Status: {response.status}. Body: {error_text}")
+                else:
+                    print(f"Successfully requested cancellation for remote job {job_id}.")
+
     async def get_job_status(self, job_id: str) -> dict[str, Any]:
         """
         Polls the remote server for the status of a job.

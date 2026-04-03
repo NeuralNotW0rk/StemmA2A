@@ -57,19 +57,9 @@ export async function cancelJob(jobId: string): Promise<void> {
     job.status = 'cancelling'
     updateJob(job)
     try {
-      // Assuming the backend is running on port 5000
-      const response = await fetch(`http://127.0.0.1:5000/jobs/${jobId}/cancel`, {
-        method: 'POST'
-      })
-      if (response.ok) {
-        job.status = 'cancelled'
-        updateJob(job)
-      } else {
-        // Handle error case, maybe revert status
-        job.status = 'running' // Or 'error'
-        updateJob(job)
-        console.error('Failed to cancel job')
-      }
+      await window.api.cancelJob(jobId)
+      job.status = 'cancelled'
+      updateJob(job)
     } catch (error) {
       job.status = 'running' // Or 'error'
       updateJob(job)

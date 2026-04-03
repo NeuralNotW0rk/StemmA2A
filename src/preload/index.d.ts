@@ -26,6 +26,7 @@ interface API {
   logMessage: (message: string) => Promise<any>
   updateEmbeddings: () => Promise<any>
   batchElements: (memberIds: string[]) => Promise<any>
+  cancelJob: (jobId: string) => Promise<any>
 }
 
 declare global {

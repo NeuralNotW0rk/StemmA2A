@@ -235,6 +235,22 @@ app.whenReady().then(async () => {
     }
   })
 
+  ipcMain.handle('cancel-job', async (_event, jobId) => {
+    try {
+      const response = await fetchWithAuth(`${BACKEND_URL}/jobs/${jobId}/cancel`, {
+        method: 'POST'
+      })
+      if (!response.ok) {
+        const errorBody = await response.text()
+        throw new Error(`Failed to cancel job. Status: ${response.status}. Error: ${errorBody}`)
+      }
+      return await response.json()
+    } catch (error) {
+      console.error('Cancel Job Error:', error)
+      throw error
+    }
+  })
+
   ipcMain.handle('removeElement', async (_event, elementId) => {
     const response = await fetchWithAuth(`${BACKEND_URL}/element/${elementId}`, {
       method: 'DELETE'
