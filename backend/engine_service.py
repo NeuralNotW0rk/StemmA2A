@@ -65,9 +65,15 @@ async def execute():
         data = request.get_json()
         operation_id = data.get("operation")
         params = data.get("params")
-        job_id = data.get("job_id")
 
-        if not all([operation_id, params]):
+        # Extract job_id from top-level payload or fallback to popping it from params
+        job_id = data.get("job_id")
+        if not job_id and isinstance(params, dict) and "job_id" in params:
+            job_id = params.pop("job_id")
+        elif isinstance(params, dict) and "job_id" in params:
+            del params["job_id"]
+
+        if not operation_id or params is None:
             return jsonify({"error": "Missing 'operation' or 'params' in request."}), 400
 
         engine = engine_provider.get_engine()

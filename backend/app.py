@@ -329,6 +329,7 @@ async def generate():
     try:
         json_data = request.get_json()
         model_id = json_data.get("model_id")
+        job_id_from_client = json_data.get("job_id")
         if not model_id:
             return jsonify({"error": "'model_id' is required."}), 400
 
@@ -369,7 +370,10 @@ async def generate():
 
         # --- Execute, Poll, and Process ---
         print("Submitting generation job to engine...")
-        job_id = await engine.execute("generate", **engine_args, **dumped_params)
+        if job_id_from_client:
+            job_id = await engine.execute("generate", job_id=job_id_from_client, **engine_args, **dumped_params)
+        else:
+            job_id = await engine.execute("generate", **engine_args, **dumped_params)
         
         while True:
             status_info = await engine.get_job_status(job_id)
