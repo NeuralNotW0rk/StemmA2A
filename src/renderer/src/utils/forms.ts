@@ -8,7 +8,7 @@ export interface FormField {
   label:string;
   type: 'string' | 'number' | 'boolean' | 'textarea' | 'select' | 'file' | 'node';
   defaultValue?: any;
-  selectionType?: 'model' | 'audio';
+  filter?: Record<string, string | number | boolean>;
   options?: FormFieldOption[];
   placeholder?: string;
   validation?: {
@@ -46,35 +46,35 @@ export type NodeData = ModelData | AudioData
 
 export function initializeFormData(
   fields: FormConfig,
-  initiatorNode: Record<string, any> | null,
-  context: Record<string, any> | null
-): { formData: Record<string, unknown>; boundNodes: Record<string, NodeData> } {
+  context: Record<string, any> | null,
+  initiatorNode: Record<string, any> | null = null
+): { formData: Record<string, unknown> } {
   const formData: Record<string, unknown> = {}
-  const boundNodes: Record<string, NodeData> = {}
 
   if (!fields) {
-    return { formData, boundNodes }
+    return { formData }
   }
-
-  const isReplication = !!context
 
   for (const field of fields) {
-    if (isReplication && context[field.name] !== undefined) {
-      formData[field.name] = context[field.name]
-    } else if (field.defaultValue !== undefined) {
-      formData[field.name] = field.defaultValue
+    if (context) {
+      if (context[field.name] !== undefined) {
+        formData[field.name] = context[field.name]
+      } else if (field.type === 'node' && context[`${field.name}_id`] !== undefined) {
+        formData[field.name] = context[`${field.name}_id`]
+      }
     }
-
-    // Check if the initiator node can be used for a field (but not for replication)
     if (
-      !isReplication &&
+      formData[field.name] === undefined &&
       initiatorNode &&
       field.type === 'node' &&
-      field.selectionType === initiatorNode.type
+      field.filter &&
+      field.filter.type === initiatorNode.type
     ) {
       formData[field.name] = initiatorNode
-      boundNodes[field.name] = initiatorNode as NodeData
+    }
+    if (formData[field.name] === undefined && field.defaultValue !== undefined) {
+      formData[field.name] = field.defaultValue
     }
   }
-  return { formData, boundNodes }
+  return { formData }
 }

@@ -48,7 +48,7 @@ const defaultStyle: CssStyleDeclaration[] = [
   {
     selector: 'node[type="audio"]',
     style: {
-      label: 'data(context.prompt)',
+      label: 'data(name)',
       'background-color': audioColor,
       width: 30,
       height: 30
@@ -114,10 +114,15 @@ const defaultStyle: CssStyleDeclaration[] = [
   {
     selector: 'edge[type="spring"]',
     style: {
-      //'display': 'none', // fCoSE still calculates physics for 'display: none' elements!
       'line-color': '#ffff00',
-      'opacity': 'data(weight)',
+      'opacity': 'mapData(weight, 0, 1, 0, 1)',
       'curve-style': 'haystack' // Efficient for invisible edges
+    }
+  },
+  {
+    selector: 'edge[type="spring"].hidden',
+    style: {
+      'display': 'none'
     }
   },
   {

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tick, onDestroy } from 'svelte'
-  import type { FormConfig, ModelData } from '../../utils/forms'
+  import type { FormConfig } from '../../utils/forms'
   import { initializeFormData } from '../../utils/forms'
   import {
     initiatorNodeStore,
@@ -40,6 +40,11 @@
 
   $effect(() => {
     const data: Record<string, unknown> = {}
+
+    if ($contextStore) {
+      Object.assign(data, $contextStore)
+    }
+
     if ($formStateStore.generationModel) {
       // Flatten model properties into the context for show_if conditions
       Object.assign(data, $formStateStore.generationModel)
@@ -62,10 +67,11 @@
       const config = await window.api.getAdapterConfig(adapter)
       if (config && config.generate && Array.isArray(config.generate)) {
         adapterFields = config.generate
+        const isReplication = !!$contextStore && $initiatorNodeStore?.type === 'audio'
         const { formData: newFormData } = initializeFormData(
           adapterFields,
-          $initiatorNodeStore,
-          $contextStore
+          $contextStore,
+          isReplication ? null : $initiatorNodeStore
         )
         formData = newFormData
       } else {
@@ -84,29 +90,16 @@
   $effect(() => {
     // This effect runs when the component mounts. It sets the initial state
     // of the form's model in the global store.
-    const initiatorNode = $initiatorNodeStore
     const context = $contextStore
-    if (initiatorNode) {
-      if (initiatorNode.type === 'model') {
-        $formStateStore.generationModel = initiatorNode as ModelData
-      } else if (initiatorNode.type === 'audio') {
-        if (context) {
-          // This is a replication context.
-          console.log('Replication context:', context)
-          const modelId = context.model_element.id as string
-          if (modelId) {
-            modelNodeSelector?.selectNodeById(modelId)
-          } else {
-            handleError({
-              title: 'Replication Failed',
-              message: 'Replication context is missing the original model ID.'
-            })
-          }
-        } else {
-          // If an audio node is opened, use the last used model
-          $formStateStore.generationModel = $lastUsedModelStore
-        }
+
+    if (context && context.model_id) {
+      const modelId = context.model_id as string
+      if (modelId && modelNodeSelector) {
+        modelNodeSelector.selectNodeById(modelId)
       }
+    } else if ($initiatorNodeStore || context) {
+      // If opened without a specific model_id, use the last used model
+      $formStateStore.generationModel = $lastUsedModelStore
     } else {
       $formStateStore.generationModel = null
     }

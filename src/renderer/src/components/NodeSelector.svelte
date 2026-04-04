@@ -18,9 +18,10 @@
   }>()
 
   let resolvedNode: NodeData | null = $derived.by(() => {
-    if (!node || !$cyInstanceStore) return null
-    const targetId = typeof node === 'string' ? node : node.id
-    return ($cyInstanceStore.$id(targetId).data() as NodeData) ?? null
+    if (!node) return null
+    if (typeof node !== 'string') return node as NodeData
+    if (!$cyInstanceStore) return null
+    return ($cyInstanceStore.$id(node).data() as NodeData) ?? null
   })
 
   $effect(() => {
@@ -45,6 +46,13 @@
       if (boundElement) {
         boundElement.removeClass('bound')
       }
+    }
+  })
+
+  $effect(() => {
+    // Auto-resolve node if it was passed as a string ID (e.g., from form initialization)
+    if (typeof node === 'string' && $cyInstanceStore) {
+      selectNodeById(node)
     }
   })
 

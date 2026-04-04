@@ -16,6 +16,11 @@ def patched_load_state_dict(checkpoint_path: str, map_location="cpu", skip_param
     if skip_params:
         if next(iter(state_dict.items()))[0].startswith("module"):
             state_dict = {k[7:]: v for k, v in state_dict.items()}
+            
+    # Remove deprecated keys that cause loading errors in newer transformers versions
+    if "text_branch.embeddings.position_ids" in state_dict:
+        del state_dict["text_branch.embeddings.position_ids"]
+        
     return state_dict
 
 class CLAPEncoder(Encoder):

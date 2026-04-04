@@ -16,6 +16,7 @@ import torch
 import torchaudio
 import numpy as np
 from sklearn.neighbors import NearestNeighbors
+from sklearn.metrics.pairwise import cosine_distances
 from pydantic import ValidationError
 
 from param_graph.graph import ParameterGraph
@@ -73,7 +74,6 @@ def health_check():
         "project_loaded": param_graph is not None,
         "server_instance_id": SERVER_INSTANCE_ID,
     })
-
 
 
 # --------------------
@@ -428,6 +428,9 @@ async def generate():
                     param_graph.link(element, final_artifact)
                 param_graph.save()
                 
+                # Automatically trigger incremental embedding update for the new artifact
+                trigger_embedding_update()
+                
                 print("Artifact processed and saved to graph successfully.")
                 return jsonify({
                     "message": "Audio generated and registered successfully.",
@@ -498,6 +501,9 @@ def add_external_source():
         param_graph.add_external_source(source_path)
         param_graph.save()
         
+        # Trigger an incremental embedding update
+        trigger_embedding_update()
+        
         return jsonify({
             "message": "External source added successfully",
             "success": True
@@ -524,6 +530,9 @@ def rescan_source():
         param_graph.scan_external_source(source_name)
         param_graph.save()
         
+        # Trigger an incremental embedding update
+        trigger_embedding_update()
+        
         return jsonify({
             "message": "Source rescanned successfully",
             "success": True
@@ -535,79 +544,114 @@ def rescan_source():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/update_embeddings", methods=["POST"])
-def update_embeddings():
-    """Update all embeddings and create similarity edges."""
+def trigger_embedding_update(force_recalculate=False, background=True):
+    """
+    Background task to compute missing embeddings and recalculate similarity edges.
+    If force_recalculate is True, it will recompute embeddings for all nodes.
+    """
     if param_graph is None:
-        return jsonify({"error": "No project loaded"}), 400
+        return
 
-    def update_embeddings_task(encoder):
+    def update_embeddings_task():
         try:
-            # Configuration for similarity groups
+            # Instantiate encoder only once per task run
+            clap_encoder = CLAPEncoder()
             
             for group_type, embedding_type in SIMILARITY_GROUPS.items():
-                # Update embeddings for all nodes of the current group type
+                # 1. Compute embeddings ONLY for nodes that need them
                 for node, data in param_graph.G.nodes(data=True):
-                    if data['type'] == group_type:
-                        try:
-                            audio_path = param_graph.get_path_from_id(node, relative=False)
-                            if audio_path:
-                                # TODO: Use a factory or lookup for encoders
-                                embedding = encoder.get_embedding(audio_path)
-                                if 'embeddings' not in data:
-                                    data['embeddings'] = {}
-                                data['embeddings'][embedding_type] = embedding.tolist()
-                                param_graph.update_element(node, {'embeddings': data['embeddings']})
-                                print(f"Updated {embedding_type} embedding for node {node}")
-                        except Exception as e:
-                            print(f"Could not update {embedding_type} embedding for node {node}. Error: {e}")
+                    if data.get('type') != group_type:
+                        continue
+                        
+                    embeddings = data.get('embeddings', {})
+                    
+                    # Optimization: Skip if we already have the embedding and aren't forcing a recalculation
+                    if not force_recalculate and embedding_type in embeddings:
+                        continue
+                        
+                    try:
+                        audio_path = param_graph.get_path_from_id(node, relative=False)
+                        if not audio_path:
+                            continue
+                            
+                        embedding = clap_encoder.get_embedding(audio_path)
+                        embeddings[embedding_type] = embedding.tolist()
+                        
+                        param_graph.update_element(node, {'embeddings': embeddings})
+                        print(f"Updated {embedding_type} embedding for node {node}")
+                    except Exception as e:
+                        print(f"Could not update {embedding_type} embedding for node {node}. Error: {e}")
 
-                # Remove all existing similarity edges for this group
-                similarity_edges = [
-                    (u, v) for u, v, data in param_graph.G.edges(data=True) 
-                    if data.get('group') == group_type
+                # 2. Fast similarity edge rebuild based on cached embeddings
+                edges_to_remove = [
+                    (u, v) for u, v, d in param_graph.G.edges(data=True) 
+                    if d.get('group') == group_type
                 ]
-                param_graph.G.remove_edges_from(similarity_edges)
+                param_graph.G.remove_edges_from(edges_to_remove)
 
-                # Get all nodes of the current group type with the required embeddings
+                # Get all nodes of the current group type with the required cached embeddings
                 group_nodes = {
                     node: data['embeddings'][embedding_type]
                     for node, data in param_graph.G.nodes(data=True)
-                    if data['type'] == group_type and 'embeddings' in data and embedding_type in data['embeddings']
+                    if data.get('type') == group_type and embedding_type in data.get('embeddings', {})
                 }
 
-                if len(group_nodes) > 1:
-                    node_ids = list(group_nodes.keys())
-                    all_latents = np.array(list(group_nodes.values()))
+                if len(group_nodes) <= 1:
+                    continue
 
-                    # Build the nearest neighbors model
-                    k = min(len(node_ids), 4)  # k should not be greater than number of samples
-                    nn = NearestNeighbors(n_neighbors=k, metric='cosine', algorithm='brute')
-                    nn.fit(all_latents)
+                node_ids = list(group_nodes.keys())
+                all_latents = np.array(list(group_nodes.values()))
+                n_nodes = len(node_ids)
+                
+                # Dynamically scale k based on graph size (logarithmic scaling)
+                # e.g., 10 nodes -> k_near=2, 100 nodes -> k_near=5, 1000+ nodes -> k_near=7
+                safe_n = max(n_nodes, 1)
+                k_near = max(2, min(7, int(np.log10(safe_n) * 2.5)))
+                k_far = max(1, min(4, int(np.log10(safe_n) * 1.5)))
 
-                    # Find neighbors for each node
-                    distances, indices = nn.kneighbors(all_latents)
+                # Build the nearest neighbors model
+                nn = NearestNeighbors(n_neighbors=min(n_nodes, k_near), metric='cosine', algorithm='brute')
+                nn.fit(all_latents)
 
-                    # Add similarity edges
-                    for i, node_id in enumerate(node_ids):
-                        for j in range(len(indices[i])): # Iterate through all neighbors
-                            neighbor_idx = indices[i][j]
+                # Find neighbors for each node
+                distances, indices = nn.kneighbors(all_latents)
+                
+                # Calculate full distance matrix for distant neighbors
+                full_distances = cosine_distances(all_latents)
+                k_furthest = min(n_nodes - 1, k_far)
+
+                for i, node_id in enumerate(node_ids):
+                    near_indices = set(indices[i])
+                    
+                    # 1. Add nearest neighbors (similar nodes)
+                    for j, neighbor_idx in enumerate(indices[i]):
+                        if i == neighbor_idx:
+                            continue
                             
-                            if i == neighbor_idx:
-                                continue
-                                
-                            neighbor_id = node_ids[neighbor_idx]
-                            similarity = 1 - distances[i][j]
-
-                            if similarity > 0: # Similarity threshold
-                                param_graph.G.add_edge(
-                                    node_id, 
-                                    neighbor_id, 
-                                    type='spring', 
-                                    weight=similarity,
-                                    group=group_type
-                                )
-                                print(f"Added similarity edge: {node_id} -> {neighbor_id} (weight: {similarity:.2f})")
+                        param_graph.G.add_edge(
+                            node_id, 
+                            node_ids[neighbor_idx], 
+                            type='spring', 
+                            spring_type='near',
+                            weight=1 - distances[i][j],
+                            group=group_type
+                        )
+                        
+                    # 2. Add furthest neighbors (ghost edges for separation)
+                    furthest_indices = np.argsort(full_distances[i])[-k_furthest:]
+                    
+                    for neighbor_idx in furthest_indices:
+                        if i == neighbor_idx or neighbor_idx in near_indices:
+                            continue  # Prevent overlap on small graphs
+                        
+                        param_graph.G.add_edge(
+                            node_id, 
+                            node_ids[neighbor_idx], 
+                            type='spring', 
+                            spring_type='distant',
+                            weight=1 - full_distances[i][neighbor_idx],
+                            group=group_type
+                        )
 
             param_graph.save()
             print("Embeddings updated and similarity edges created successfully")
@@ -615,15 +659,29 @@ def update_embeddings():
         except Exception as e:
             print(f"Failed to update embeddings: {e}")
             traceback.print_exc()
+            
+    if background:
+        thread = threading.Thread(target=update_embeddings_task)
+        thread.start()
+    else:
+        update_embeddings_task()
+
+@app.route("/update_embeddings", methods=["POST"])
+def update_embeddings():
+    """Update all embeddings and create similarity edges."""
+    if param_graph is None:
+        return jsonify({"error": "No project loaded"}), 400
+
+    data = request.get_json(silent=True) or {}
+    force = data.get("force", False)
     
-    clap_encoder = CLAPEncoder()
-    thread = threading.Thread(target=update_embeddings_task, args=(clap_encoder,))
-    thread.start()
+    # Run synchronously so the frontend's HTTP request waits for completion
+    trigger_embedding_update(force_recalculate=force, background=False)
 
     return jsonify({
-        "message": "Embedding update started.",
+        "message": "Embeddings updated successfully.",
         "success": True
-    }), 202
+    }), 200
 
 # --------------------
 #  Audio Operations

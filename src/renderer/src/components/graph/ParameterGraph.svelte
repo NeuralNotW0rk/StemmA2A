@@ -254,7 +254,7 @@
     layout.run()
   }
 
-  function updateGraph(use_proxy_edges = false): void {
+  function updateGraph(use_proxy_edges = true): void {
     if (!cy || !graphData) return
 
     const elements = graphData.elements as any
@@ -289,6 +289,11 @@
         processedElements = newElements.map((ele) => {
           if (ele.group === 'edges' || (ele as any).data.source) {
             const edgeData = (ele as any).data
+
+            // Ignore spring edges so they always connect to specific nodes, not parent batches
+            if (edgeData.type === 'spring') {
+              return ele
+            }
 
             // Find the actual nodes in your newElements list to check for parents
             const sourceNode = newElements.find((n) => n.data.id === edgeData.source)

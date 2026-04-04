@@ -89,14 +89,14 @@ const layoutConfig: FcoseLayoutOptions = {
   // Ideal edge (non nested) length
   idealEdgeLength: (edge) => {
     if (edge.data('type') === 'spring') {
-      return 1000 * (1 - edge.data('weight')); // Higher similarity = shorter distance
+      return 200 * (1 - edge.data('weight')); // Higher similarity = shorter distance, low similarity = massive distance
     }
     return 100; // Functional edges stay longer/clearer
   },
   // Divisor to compute edge forces
   edgeElasticity: (edge) => {
     if (edge.data('type') === 'spring') {
-      return 1.0 * edge.data('weight'); // Stiffer springs for high similarity
+      return edge.data('spring_type') === 'distant' ? 0.05 : 1.0 * edge.data('weight');
     }
     return 0.1; // Default for your functional/audio-patch edges
   },
@@ -120,9 +120,9 @@ const layoutConfig: FcoseLayoutOptions = {
   // Gravity force (constant)
   gravity: 0.25,
   // Gravity range (constant) for compounds
-  gravityRangeCompound: 0.5,
+  gravityRangeCompound: 1.5,
   // Gravity force (constant) for compounds
-  gravityCompound: 1.0,
+  gravityCompound: 3.0,
   // Gravity range (constant)
   gravityRange: 3.8,
   // Initial cooling factor for incremental layout

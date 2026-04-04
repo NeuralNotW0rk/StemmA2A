@@ -246,7 +246,7 @@
 
   function handleModelSelect(modelData: any): void {
     initiatorNodeStore.set(modelData)
-    contextStore.set(null)
+    contextStore.set({ model_id: modelData.id })
     actionPanelView = 'generation'
   }
 
@@ -437,6 +437,29 @@
     flex-direction: column;
     gap: 1rem;
     z-index: 1000;
+    pointer-events: none;
+  }
+
+  .right-panel-container > :global(*) {
+    pointer-events: auto;
+    flex-shrink: 1;
+    min-height: 0;
+    position: relative !important;
+    top: auto !important;
+    bottom: auto !important;
+    left: auto !important;
+    right: auto !important;
+    width: 100% !important;
+    display: flex !important;
+    flex-direction: column !important;
+    overflow: hidden;
+  }
+
+  .right-panel-container > :global(*) > :global(*:not(:first-child)) {
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+    min-height: 0 !important;
+    flex-grow: 1 !important;
   }
 
   :global(body) {
@@ -444,6 +467,29 @@
     background-image: url('./assets/wavy-lines.svg');
     background-size: cover;
     user-select: none;
+  }
+
+  :global(*) {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+  }
+
+  :global(::-webkit-scrollbar) {
+    width: 8px;
+    height: 8px;
+  }
+
+  :global(::-webkit-scrollbar-track) {
+    background: transparent;
+  }
+
+  :global(::-webkit-scrollbar-thumb) {
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 4px;
+  }
+
+  :global(::-webkit-scrollbar-thumb:hover) {
+    background: rgba(255, 255, 255, 0.3);
   }
 
   :global(button) {
