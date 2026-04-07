@@ -454,6 +454,21 @@ app.whenReady().then(async () => {
     }
   })
 
+  ipcMain.handle('saveNodePositions', async (_event, projectName, positions) => {
+    const response = await fetchWithAuth(`${BACKEND_URL}/save_node_positions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ project_name: projectName, positions })
+    })
+    if (!response.ok) {
+      const errorBody = await response.text()
+      throw new Error(
+        `Failed to save node positions. Status: ${response.status}. Error: ${errorBody}`
+      )
+    }
+    return await response.json()
+  })
+
   // Default open or close DevTools by F12 in development
   // and ignore CommandOrControl + R in production.
   // see https://github.com/alex8088/electron-toolkit/tree/master/packages/utils

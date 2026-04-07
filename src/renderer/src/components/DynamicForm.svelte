@@ -26,6 +26,14 @@
     batchFields = newBatchFields
   }
 
+  function randomizeField(fieldName: string, type: string): void {
+    if (type === 'float') {
+      formData[fieldName] = Number(Math.random().toFixed(4))
+    } else {
+      formData[fieldName] = Math.floor(Math.random() * 4294967296)
+    }
+  }
+
   $effect(() => {
     isFormValid = visibleFields.every(
       (f) =>
@@ -106,65 +114,137 @@
         <textarea bind:value={formData[field.name]} id={field.name} placeholder={field.placeholder}
         ></textarea>
       {:else if field.type === 'integer'}
-        <div class="label-container">
-          <label for={field.name}>{field.label}</label>
-          <button
-            class="batch-toggle"
-            onclick={() => toggleBatchMode(field.name)}
-            title="Toggle sequence mode"
-          >
-            {isBatch ? '−' : '+'}
-          </button>
+        <label for={field.name}>{field.label}</label>
+        <div class="input-row">
+          {#if isBatch}
+            <input
+              type="text"
+              bind:value={formData[field.name]}
+              id={field.name}
+              placeholder="e.g. 1, 2, 5-10:2"
+            />
+          {:else}
+            <input
+              type="number"
+              step="1"
+              bind:value={formData[field.name]}
+              onchange={(e) => {
+                const value = e.currentTarget.value
+                if (value) {
+                  formData[field.name] = Math.round(Number(value))
+                }
+              }}
+              id={field.name}
+              placeholder={field.placeholder}
+            />
+          {/if}
+          <div class="field-actions">
+            {#if (field as any).randomizable && !isBatch}
+              <button
+                type="button"
+                class="action-btn"
+                onclick={() => randomizeField(field.name, field.type)}
+                title="Randomize value"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  ><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle
+                    cx="8.5"
+                    cy="8.5"
+                    r="1.5"
+                  ></circle><circle cx="15.5" cy="15.5" r="1.5"></circle><circle
+                    cx="15.5"
+                    cy="8.5"
+                    r="1.5"
+                  ></circle><circle cx="8.5" cy="15.5" r="1.5"></circle><circle
+                    cx="12"
+                    cy="12"
+                    r="1.5"
+                  ></circle></svg
+                >
+              </button>
+            {/if}
+            <button
+              type="button"
+              class="action-btn"
+              onclick={() => toggleBatchMode(field.name)}
+              title="Toggle sequence mode"
+            >
+              {isBatch ? '−' : '+'}
+            </button>
+          </div>
         </div>
-        {#if isBatch}
-          <input
-            type="text"
-            bind:value={formData[field.name]}
-            id={field.name}
-            placeholder="e.g. 1, 2, 5-10:2"
-          />
-        {:else}
-          <input
-            type="number"
-            step="1"
-            bind:value={formData[field.name]}
-            onchange={(e) => {
-              const value = e.currentTarget.value
-              if (value) {
-                formData[field.name] = Math.round(Number(value))
-              }
-            }}
-            id={field.name}
-            placeholder={field.placeholder}
-          />
-        {/if}
       {:else if field.type === 'float'}
-        <div class="label-container">
-          <label for={field.name}>{field.label}</label>
-          <button
-            class="batch-toggle"
-            onclick={() => toggleBatchMode(field.name)}
-            title="Toggle sequence mode"
-          >
-            {isBatch ? '−' : '+'}
-          </button>
+        <label for={field.name}>{field.label}</label>
+        <div class="input-row">
+          {#if isBatch}
+            <input
+              type="text"
+              bind:value={formData[field.name]}
+              id={field.name}
+              placeholder="e.g. 0.5, 1.2, 2.0-3.0:0.5"
+            />
+          {:else}
+            <input
+              type="number"
+              step="any"
+              bind:value={formData[field.name]}
+              id={field.name}
+              placeholder={field.placeholder}
+            />
+          {/if}
+          <div class="field-actions">
+            {#if (field as any).randomizable && !isBatch}
+              <button
+                type="button"
+                class="action-btn"
+                onclick={() => randomizeField(field.name, field.type)}
+                title="Randomize value"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  ><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle
+                    cx="8.5"
+                    cy="8.5"
+                    r="1.5"
+                  ></circle><circle cx="15.5" cy="15.5" r="1.5"></circle><circle
+                    cx="15.5"
+                    cy="8.5"
+                    r="1.5"
+                  ></circle><circle cx="8.5" cy="15.5" r="1.5"></circle><circle
+                    cx="12"
+                    cy="12"
+                    r="1.5"
+                  ></circle></svg
+                >
+              </button>
+            {/if}
+            <button
+              type="button"
+              class="action-btn"
+              onclick={() => toggleBatchMode(field.name)}
+              title="Toggle sequence mode"
+            >
+              {isBatch ? '−' : '+'}
+            </button>
+          </div>
         </div>
-        {#if isBatch}
-          <input
-            type="text"
-            bind:value={formData[field.name]}
-            id={field.name}
-            placeholder="e.g. 0.5, 1.2, 2.0-3.0:0.5"
-          />
-        {:else}
-          <input
-            type="number"
-            step="any"
-            bind:value={formData[field.name]}
-            id={field.name}
-            placeholder={field.placeholder}
-          />
-        {/if}
       {:else if field.type === 'boolean'}
         <label for={field.name}>{field.label}</label>
         <input
@@ -181,30 +261,66 @@
           <button onclick={() => selectFieldFile(field.name, field.filters)}>Browse</button>
         </div>
       {:else if field.type === 'select'}
-        <div class="label-container">
-          <label for={field.name}>{field.label}</label>
-          <button
-            class="batch-toggle"
-            onclick={() => toggleBatchMode(field.name)}
-            title="Toggle sequence mode"
-          >
-            {isBatch ? '−' : '+'}
-          </button>
+        <label for={field.name}>{field.label}</label>
+        <div class="input-row">
+          {#if isBatch}
+            <input
+              type="text"
+              bind:value={formData[field.name]}
+              id={field.name}
+              placeholder="e.g. value1, value2, value3"
+            />
+          {:else}
+            <select bind:value={formData[field.name]} id={field.name}>
+              {#each field.options as option (option.value)}
+                <option value={option.value}>{option.label}</option>
+              {/each}
+            </select>
+          {/if}
+          <div class="field-actions">
+            {#if (field as any).randomizable && !isBatch}
+              <button
+                type="button"
+                class="action-btn"
+                onclick={() => randomizeField(field.name, field.type)}
+                title="Randomize value"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  ><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle
+                    cx="8.5"
+                    cy="8.5"
+                    r="1.5"
+                  ></circle><circle cx="15.5" cy="15.5" r="1.5"></circle><circle
+                    cx="15.5"
+                    cy="8.5"
+                    r="1.5"
+                  ></circle><circle cx="8.5" cy="15.5" r="1.5"></circle><circle
+                    cx="12"
+                    cy="12"
+                    r="1.5"
+                  ></circle></svg
+                >
+              </button>
+            {/if}
+            <button
+              type="button"
+              class="action-btn"
+              onclick={() => toggleBatchMode(field.name)}
+              title="Toggle sequence mode"
+            >
+              {isBatch ? '−' : '+'}
+            </button>
+          </div>
         </div>
-        {#if isBatch}
-          <input
-            type="text"
-            bind:value={formData[field.name]}
-            id={field.name}
-            placeholder="e.g. value1, value2, value3"
-          />
-        {:else}
-          <select bind:value={formData[field.name]} id={field.name}>
-            {#each field.options as option (option.value)}
-              <option value={option.value}>{option.label}</option>
-            {/each}
-          </select>
-        {/if}
       {:else if field.type === 'node'}
         <NodeSelector
           label={field.label}
@@ -213,32 +329,68 @@
           id={field.name}
         />
       {:else}
-        <div class="label-container">
-          <label for={field.name}>{field.label}</label>
-          <button
-            class="batch-toggle"
-            onclick={() => toggleBatchMode(field.name)}
-            title="Toggle sequence mode"
-          >
-            {isBatch ? '−' : '+'}
-          </button>
+        <label for={field.name}>{field.label}</label>
+        <div class="input-row">
+          {#if isBatch}
+            <input
+              type="text"
+              bind:value={formData[field.name]}
+              id={field.name}
+              placeholder="e.g. value1, value2, value3"
+            />
+          {:else}
+            <!-- Default to text input for 'string' and others -->
+            <input
+              type="text"
+              bind:value={formData[field.name]}
+              id={field.name}
+              placeholder={field.placeholder}
+            />
+          {/if}
+          <div class="field-actions">
+            {#if (field as any).randomizable && !isBatch}
+              <button
+                type="button"
+                class="action-btn"
+                onclick={() => randomizeField(field.name, field.type)}
+                title="Randomize value"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  ><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle
+                    cx="8.5"
+                    cy="8.5"
+                    r="1.5"
+                  ></circle><circle cx="15.5" cy="15.5" r="1.5"></circle><circle
+                    cx="15.5"
+                    cy="8.5"
+                    r="1.5"
+                  ></circle><circle cx="8.5" cy="15.5" r="1.5"></circle><circle
+                    cx="12"
+                    cy="12"
+                    r="1.5"
+                  ></circle></svg
+                >
+              </button>
+            {/if}
+            <button
+              type="button"
+              class="action-btn"
+              onclick={() => toggleBatchMode(field.name)}
+              title="Toggle sequence mode"
+            >
+              {isBatch ? '−' : '+'}
+            </button>
+          </div>
         </div>
-        {#if isBatch}
-          <input
-            type="text"
-            bind:value={formData[field.name]}
-            id={field.name}
-            placeholder="e.g. value1, value2, value3"
-          />
-        {:else}
-          <!-- Default to text input for 'string' and others -->
-          <input
-            type="text"
-            bind:value={formData[field.name]}
-            id={field.name}
-            placeholder={field.placeholder}
-          />
-        {/if}
       {/if}
     </div>
   {/each}
@@ -253,29 +405,49 @@
     margin-bottom: 0;
   }
 
-  .label-container {
+  .input-row {
     display: flex;
-    justify-content: space-between;
     align-items: center;
-    margin-bottom: 0.5rem;
+    gap: 0.5rem;
   }
 
-  .batch-toggle {
+  .field-actions {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+    flex-shrink: 0;
+  }
+
+  .action-btn {
     background: none;
     border: 1px solid var(--color-overlay-border-primary);
     color: var(--color-overlay-text);
     cursor: pointer;
     width: 24px;
     height: 24px;
+    min-width: 24px;
+    min-height: 24px;
+    flex: 0 0 24px;
     border-radius: 50%;
     font-size: 16px;
-    line-height: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     padding: 0;
+    box-sizing: border-box;
   }
 
   label {
     display: block;
     font-weight: 500;
+    margin-bottom: 0.5rem;
+  }
+
+  .input-row > input[type='text'],
+  .input-row > input[type='number'],
+  .input-row > select {
+    flex: 1;
+    min-width: 0;
   }
 
   input[type='text'],

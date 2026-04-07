@@ -36,6 +36,12 @@ else:
 data_cache_root = Path(data_path_str).expanduser()
 data_cache_root.mkdir(parents=True, exist_ok=True)
 
+# Set Hugging Face cache directory to a persistent location within the data cache.
+# This prevents models like CLAP from redownloading every time the container restarts.
+hf_cache_dir = data_cache_root / "huggingface"
+hf_cache_dir.mkdir(parents=True, exist_ok=True)
+os.environ["HF_HOME"] = str(hf_cache_dir)
+
 # Initialize the engine provider with the data cache path.
 engine_provider = EngineProvider(data_root=str(data_cache_root))
 

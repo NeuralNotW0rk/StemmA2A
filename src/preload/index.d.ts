@@ -27,6 +27,7 @@ interface API {
   updateEmbeddings: () => Promise<any>
   batchElements: (memberIds: string[]) => Promise<any>
   cancelJob: (jobId: string) => Promise<any>
+  saveNodePositions: (projectName: string, positions: Record<string, { x: number; y: number }>) => Promise<void>
 }
 
 declare global {

@@ -21,6 +21,7 @@
     onedgeSelect?: (data: any) => void
     onElementRemove?: (data: any) => void
     onstartBatching?: (data: any) => void
+    onsavePositions?: (positions: Record<string, { x: number; y: number }>) => void
   }
 
   let {
@@ -32,11 +33,12 @@
     onnodeSelect,
     onedgeSelect,
     onElementRemove,
-    onstartBatching
+    onstartBatching,
+    onsavePositions
   }: Props = $props()
 
   let graphContainer: HTMLElement | undefined = $state()
-  let cy: cytoscape.Core | null = $state(null)
+  let cy: cytoscape.Core | null = null
   let isInitialized = $state(false)
 
   let isSelecting = $state(false)
@@ -246,12 +248,29 @@
     })
 
     cy.on('dblclick', () => cy?.fit())
+
+    cy.on('dragfree', 'node', extractAndSavePositions)
   }
 
   function applyLayout(randomize = false): void {
     if (!cy) return
     const layout = cy.layout({ ...layoutConfig, randomize } as any)
+    layout.on('layoutstop', () => {
+      cy?.nodes().unlock()
+      extractAndSavePositions()
+    })
     layout.run()
+  }
+
+  function extractAndSavePositions(): void {
+    if (!cy) return
+    const positions: Record<string, { x: number; y: number }> = {}
+    cy.nodes().forEach((node) => {
+      if (node.children().length === 0) {
+        positions[node.id()] = { ...node.position() }
+      }
+    })
+    onsavePositions?.(positions)
   }
 
   function updateGraph(use_proxy_edges = true): void {
@@ -260,11 +279,14 @@
     const elements = graphData.elements as any
     if (typeof elements === 'undefined') return
 
+    // Deep clone to prevent Cytoscape from mutating Svelte proxy state and causing infinite loops
+    const clonedElements = JSON.parse(JSON.stringify(elements))
+
     let newElements: cytoscape.ElementDefinition[] = []
-    if (Array.isArray(elements)) {
-      newElements = elements
-    } else if (elements?.nodes && elements?.edges) {
-      newElements = [...elements.nodes, ...elements.edges]
+    if (Array.isArray(clonedElements)) {
+      newElements = clonedElements
+    } else if (clonedElements?.nodes && clonedElements?.edges) {
+      newElements = [...clonedElements.nodes, ...clonedElements.edges]
     } else {
       cy.elements().remove()
       return
@@ -280,59 +302,75 @@
     })
 
     const wasEmpty = Object.keys(savedPositions).length === 0
+    let requiresLayout = false
 
     cy.batch(() => {
       cy.elements().remove()
 
-      let processedElements = newElements
-      if (use_proxy_edges) {
-        processedElements = newElements.map((ele) => {
-          if (ele.group === 'edges' || (ele as any).data.source) {
-            const edgeData = (ele as any).data
+      let processedElements = newElements.map((ele: any) => {
+        // Backend saves position inside element 'data' attributes, but Cytoscape expects it at the root
+        if (ele.data && ele.data.position) {
+          ele.position = { ...ele.data.position }
+        }
 
-            // Ignore spring edges so they always connect to specific nodes, not parent batches
-            if (edgeData.type === 'spring') {
-              return ele
-            }
+        if (use_proxy_edges && (ele.group === 'edges' || ele.data.source)) {
+          const edgeData = ele.data
 
-            // Find the actual nodes in your newElements list to check for parents
-            const sourceNode = newElements.find((n) => n.data.id === edgeData.source)
-            const targetNode = newElements.find((n) => n.data.id === edgeData.target)
+          // Ignore spring edges so they always connect to specific nodes, not parent batches
+          if (edgeData.type === 'spring') {
+            return ele
+          }
 
-            return {
-              ...ele,
-              data: {
-                ...edgeData,
-                // Redirect to parent if it exists, otherwise keep original
-                source: sourceNode?.data.parent || edgeData.source,
-                target: targetNode?.data.parent || edgeData.target
-              }
+          // Find the actual nodes in your newElements list to check for parents
+          const targetNode = newElements.find((n) => n.data.id === edgeData.target)
+
+          return {
+            ...ele,
+            data: {
+              ...edgeData,
+              // Redirect target to parent if it exists, but keep original source
+              source: edgeData.source,
+              target: targetNode?.data.parent || edgeData.target
             }
           }
-          return ele
-        })
-      }
+        }
+        return ele
+      })
+
       const addedElements = cy.add(processedElements)
-      let hasNewNodes = false
 
       addedElements.nodes().forEach((node) => {
         const isChildless = node.children().length === 0
         const oldPos = savedPositions[node.id()]
+        const backendPos = node.data('position')
 
         if (isChildless) {
           if (oldPos) {
             node.position(oldPos)
+            node.lock()
+          } else if (
+            backendPos &&
+            typeof backendPos.x === 'number' &&
+            typeof backendPos.y === 'number'
+          ) {
+            node.position(backendPos)
+            node.lock()
           } else {
-            hasNewNodes = true // Truly new leaf node
+            requiresLayout = true // Truly new leaf node without position
           }
         }
       })
-
-      // 4. Only layout if we have nowhere to put new nodes or it's the first run
-      if (wasEmpty || hasNewNodes) {
-        applyLayout()
-      }
     })
+
+    // 4. Only layout if we have new nodes missing positions
+    if (requiresLayout) {
+      applyLayout()
+    } else {
+      cy.nodes().unlock()
+      if (wasEmpty) {
+        cy.fit(undefined, 50)
+      }
+    }
   }
 
   $effect(() => {

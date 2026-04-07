@@ -299,6 +299,18 @@
     }
     return 'Action'
   }
+
+  async function handleSavePositions(
+    positions: Record<string, { x: number; y: number }>
+  ): Promise<void> {
+    if (!currentProject) return
+    try {
+      // You will need to implement this API endpoint in your preload/main scripts
+      await window.api.saveNodePositions(currentProject, positions)
+    } catch (error) {
+      console.error('Failed to save node positions:', error)
+    }
+  }
 </script>
 
 <main class="container">
@@ -413,6 +425,7 @@
     onedgeSelect={handleElementSelect}
     onElementRemove={handleElementRemove}
     onstartBatching={handleStartBatching}
+    onsavePositions={handleSavePositions}
   />
   {#if audioSrc}
     <AudioPlayer src={audioSrc} title={audioTitle} onclose={() => (audioSrc = null)} />

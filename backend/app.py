@@ -820,6 +820,35 @@ def update_element():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/save_node_positions", methods=["POST"])
+def save_node_positions():
+    """Save the spatial positions of nodes."""
+    if param_graph is None:
+        return jsonify({"error": "No project loaded"}), 400
+    
+    try:
+        data = request.get_json()
+        positions = data.get('positions', {})
+        
+        if not positions:
+            return jsonify({"error": "No positions provided"}), 400
+        
+        for node_id, pos in positions.items():
+            param_graph.update_element(node_id, {"position": pos})
+            
+        param_graph.save()
+        
+        return jsonify({
+            "message": "Node positions saved successfully",
+            "success": True
+        })
+        
+    except Exception as e:
+        print(f"Failed to save node positions: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/element/<element_id>", methods=["DELETE"])
 def remove_element(element_id):
     """Remove an element from the graph"""

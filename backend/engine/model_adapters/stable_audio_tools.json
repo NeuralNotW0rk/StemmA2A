@@ -95,7 +95,8 @@
             "label": "Seed",
             "type": "integer",
             "defaultValue": 0,
-            "placeholder": "Enter a seed"
+            "placeholder": "Enter a seed",
+            "randomizable": true
         },
         {
             "name": "init_audio",
