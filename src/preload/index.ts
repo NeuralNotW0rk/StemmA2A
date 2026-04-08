@@ -31,6 +31,7 @@ const api = {
     ipcRenderer.invoke('removeElement', elementId),
   logMessage: (message: string): Promise<any> => ipcRenderer.invoke('logMessage', message),
   updateEmbeddings: (): Promise<any> => ipcRenderer.invoke('updateEmbeddings'),
+  pollJobStatus: (jobId: string): Promise<any> => ipcRenderer.invoke('pollJobStatus', jobId),
   batchElements: (memberIds: string[]): Promise<any> => ipcRenderer.invoke('batchElements', memberIds),
   cancelJob: (jobId: string): Promise<any> => ipcRenderer.invoke('cancel-job', jobId),
   saveNodePositions: (projectName: string, positions: Record<string, { x: number; y: number }>): Promise<void> =>

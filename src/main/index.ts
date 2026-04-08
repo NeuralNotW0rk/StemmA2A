@@ -235,6 +235,20 @@ app.whenReady().then(async () => {
     }
   })
 
+  ipcMain.handle('pollJobStatus', async (_event, jobId) => {
+    try {
+      const response = await fetchWithAuth(`${BACKEND_URL}/job_status/${jobId}`)
+      if (!response.ok && response.status !== 500 && response.status !== 404) {
+        const errorBody = await response.text()
+        throw new Error(`Failed to poll job status. Status: ${response.status}. Error: ${errorBody}`)
+      }
+      return await response.json()
+    } catch (error) {
+      console.error('Poll Job Status Error:', error)
+      throw error
+    }
+  })
+
   ipcMain.handle('cancel-job', async (_event, jobId) => {
     try {
       const response = await fetchWithAuth(`${BACKEND_URL}/jobs/${jobId}/cancel`, {

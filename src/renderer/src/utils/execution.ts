@@ -1,6 +1,6 @@
 import { writable } from 'svelte/store'
 import type { Writable } from 'svelte/store'
-import { addJob, updateJob } from './job-management'
+import { addJob, updateJob, pollJobStatus } from './job-management'
 
 export type ExecutionStatus = 'idle' | 'running' | 'success' | 'error'
 
@@ -33,10 +33,19 @@ export async function startExecution(name: string, payload: unknown): Promise<vo
       typeof payload === 'object' && payload !== null
         ? { ...payload, job_id: job.id }
         : { job_id: job.id, payload }
-    const result = await window.api.generate(payloadWithId)
-    job.status = 'success'
-    job.result = result
-    updateJob(job)
+    
+    const initData = await window.api.generate(payloadWithId)
+    
+    if (initData.status === 'running') {
+      const finalResult = await pollJobStatus(initData.job_id)
+      job.status = 'success'
+      job.result = finalResult
+      updateJob(job)
+    } else {
+      job.status = 'success'
+      job.result = initData
+      updateJob(job)
+    }
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : String(e)
     const error = { title: 'Generation Failed', message }

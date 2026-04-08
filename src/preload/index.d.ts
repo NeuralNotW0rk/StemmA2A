@@ -24,6 +24,7 @@ interface API {
   generate: (data: any) => Promise<any>
   removeElement: (elementId: string) => Promise<any>
   logMessage: (message: string) => Promise<any>
+  pollJobStatus: (jobId: string) => Promise<any>
   updateEmbeddings: () => Promise<any>
   batchElements: (memberIds: string[]) => Promise<any>
   cancelJob: (jobId: string) => Promise<any>

@@ -59,6 +59,9 @@ uid_generator = XXH3_64()
 # EngineProvider is now initialized after a project is loaded
 engine_provider: EngineProvider = None
 
+# Context storage for background jobs
+active_jobs = {}
+
 
 # --------------------
 #  Health Check
@@ -382,72 +385,18 @@ async def generate():
              
         print(f"app.py: Engine returned job_id: {job_id}")
         
-        while True:
-            status_info = await engine.get_job_status(job_id)
-            status = status_info.get("status")
+        # Store job context to process the artifact later when the frontend polls /job_status
+        active_jobs[job_id] = {
+            "batch_id": batch_id,
+            "linked_elements": linked_elements,
+            "validated_params": validated_params.model_dump()
+        }
 
-            if status == "completed":
-                print(f"Job {job_id} completed. Processing artifact...")
-                
-                # The result from the engine contains the artifact as a dict.
-                result_dict = status_info.get("result", {})
-                
-                # With RemoteEngine, the 'artifact' is an object. With LocalEngine, it's a dict.
-                artifact_data = result_dict
-                if 'artifact' in result_dict: # Handle remote engine's structure
-                    artifact_data = result_dict['artifact']
-
-                if not artifact_data:
-                    raise Exception("Completed job did not return a valid artifact.")
-
-                # Resolve to a GraphElement object if it's a dict
-                temp_artifact = artifact_data
-                if isinstance(artifact_data, dict):
-                    temp_artifact = resolve_element(artifact_data)
-
-                # The artifact path points to the engine's cache. Copy it to our project.
-                output_dir = param_graph.root / "generate"
-                final_artifact = save_artifact_asset(temp_artifact, output_dir, asset_name="file")
-                
-                param_graph.add_element(final_artifact)
-
-                # If part of a batch, update the batch and the artifact
-                if batch_id:
-                    # 1. Set parent on the new artifact
-                    param_graph.update_element(final_artifact.id, {"parent": batch_id})
-                    
-                    # 2. Update the batch's member_ids list
-                    batch_node_attrs = param_graph.G.nodes[batch_id]
-                    # Ensure member_ids exists and is a list
-                    if 'member_ids' not in batch_node_attrs or not isinstance(batch_node_attrs['member_ids'], list):
-                        batch_node_attrs['member_ids'] = []
-                    batch_node_attrs['member_ids'].append(final_artifact.id)
-
-
-                for element in linked_elements:
-                    param_graph.link(element, final_artifact)
-                param_graph.save()
-                
-                # Automatically trigger incremental embedding update for the new artifact
-                trigger_embedding_update()
-                
-                print("Artifact processed and saved to graph successfully.")
-                return jsonify({
-                    "message": "Audio generated and registered successfully.",
-                    "artifact": final_artifact.to_dict(),
-                    "validated_params": validated_params.model_dump()
-                }), 200
-
-            elif status == "failed":
-                error_msg = status_info.get("error", "Unknown error during generation.")
-                print(f"Job {job_id} failed: {error_msg}")
-                return jsonify({"error": error_msg}), 500
-
-            elif status == "not_found":
-                return jsonify({"error": f"Job {job_id} was lost."}), 500
-
-            # For 'pending' or 'running', wait and poll again
-            await asyncio.sleep(1)
+        return jsonify({
+            "message": "Job started successfully.",
+            "job_id": job_id,
+            "status": "running"
+        }), 202
 
     except (ValidationError, ValueError) as e:
         print(f"Invalid request: {e}")
@@ -455,6 +404,74 @@ async def generate():
         return jsonify({"error": "Invalid request", "details": str(e)}), 400
     except Exception as e:
         print(f"Generation failed: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/job_status/<job_id>", methods=["GET"])
+async def get_job_status(job_id):
+    """Gets the status of a generation job and handles final artifact processing."""
+    if engine_provider is None or param_graph is None:
+        return jsonify({"error": "No project loaded"}), 400
+
+    try:
+        engine = engine_provider.get_engine()
+        status_info = await engine.get_job_status(job_id)
+        status = status_info.get("status")
+
+        if status == "completed":
+            print(f"Job {job_id} completed. Processing artifact...")
+            job_context = active_jobs.pop(job_id, {})
+            
+            result_dict = status_info.get("result", {})
+            artifact_data = result_dict.get('artifact', result_dict)
+
+            if not artifact_data:
+                raise Exception("Completed job did not return a valid artifact.")
+
+            temp_artifact = resolve_element(artifact_data) if isinstance(artifact_data, dict) else artifact_data
+
+            output_dir = param_graph.root / "generate"
+            final_artifact = save_artifact_asset(temp_artifact, output_dir, asset_name="file")
+            
+            param_graph.add_element(final_artifact)
+
+            batch_id = job_context.get("batch_id")
+            if batch_id:
+                param_graph.update_element(final_artifact.id, {"parent": batch_id})
+                batch_node_attrs = param_graph.G.nodes[batch_id]
+                if 'member_ids' not in batch_node_attrs or not isinstance(batch_node_attrs['member_ids'], list):
+                    batch_node_attrs['member_ids'] = []
+                batch_node_attrs['member_ids'].append(final_artifact.id)
+
+            for element in job_context.get("linked_elements", []):
+                param_graph.link(element, final_artifact)
+            param_graph.save()
+            
+            trigger_embedding_update()
+            
+            print("Artifact processed and saved to graph successfully.")
+            return jsonify({
+                "status": "completed",
+                "message": "Audio generated and registered successfully.",
+                "artifact": final_artifact.to_dict(),
+                "validated_params": job_context.get("validated_params")
+            }), 200
+
+        elif status == "failed":
+            error_msg = status_info.get("error", "Unknown error during generation.")
+            active_jobs.pop(job_id, None)
+            return jsonify({"status": "failed", "error": error_msg}), 500
+
+        elif status == "not_found":
+            active_jobs.pop(job_id, None)
+            return jsonify({"status": "not_found", "error": f"Job {job_id} was lost."}), 404
+
+        # For 'pending' or 'running', just return the status info
+        return jsonify(status_info), 200
+
+    except Exception as e:
+        print(f"Failed to get job status: {e}")
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 

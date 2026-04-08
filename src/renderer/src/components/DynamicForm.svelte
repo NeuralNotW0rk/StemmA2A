@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { FormConfig, FormField, ModelData, AudioData } from '../utils/forms'
   import NodeSelector from './NodeSelector.svelte'
+  import { SvelteSet } from 'svelte/reactivity'
 
   let {
     config,
@@ -14,16 +15,14 @@
     contextData?: Record<string, unknown> | null
   }>()
 
-  let batchFields = $state<Set<string>>(new Set())
+  const batchFields = new SvelteSet<string>()
 
   function toggleBatchMode(fieldName: string): void {
-    const newBatchFields = new Set(batchFields)
-    if (newBatchFields.has(fieldName)) {
-      newBatchFields.delete(fieldName)
+    if (batchFields.has(fieldName)) {
+      batchFields.delete(fieldName)
     } else {
-      newBatchFields.add(fieldName)
+      batchFields.add(fieldName)
     }
-    batchFields = newBatchFields
   }
 
   function randomizeField(fieldName: string, type: string): void {
@@ -139,7 +138,7 @@
             />
           {/if}
           <div class="field-actions">
-            {#if (field as any).randomizable && !isBatch}
+            {#if (field as FormField & { randomizable?: boolean }).randomizable && !isBatch}
               <button
                 type="button"
                 class="action-btn"
@@ -202,7 +201,7 @@
             />
           {/if}
           <div class="field-actions">
-            {#if (field as any).randomizable && !isBatch}
+            {#if (field as FormField & { randomizable?: boolean }).randomizable && !isBatch}
               <button
                 type="button"
                 class="action-btn"
@@ -278,7 +277,7 @@
             </select>
           {/if}
           <div class="field-actions">
-            {#if (field as any).randomizable && !isBatch}
+            {#if (field as FormField & { randomizable?: boolean }).randomizable && !isBatch}
               <button
                 type="button"
                 class="action-btn"
@@ -348,7 +347,7 @@
             />
           {/if}
           <div class="field-actions">
-            {#if (field as any).randomizable && !isBatch}
+            {#if (field as FormField & { randomizable?: boolean }).randomizable && !isBatch}
               <button
                 type="button"
                 class="action-btn"
