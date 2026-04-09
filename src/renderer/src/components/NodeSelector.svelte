@@ -75,14 +75,27 @@
   }
 
   function focusNode(): void {
+    console.log('[NodeSelector] focusNode triggered. resolvedNode:', resolvedNode)
     const cy = $cyInstanceStore
-    const ele = cy?.$id(resolvedNode?.id)
-    if (ele) {
-      cy.animate({
-        center: { eles: ele },
-        zoom: 1.5,
-        duration: 400
-      })
+    if (!cy) {
+      console.warn('[NodeSelector] Cytoscape instance not found')
+      return
+    }
+    if (!resolvedNode?.id) {
+      console.warn('[NodeSelector] resolvedNode or resolvedNode.id is missing')
+      return
+    }
+    const ele = cy.$id(resolvedNode.id)
+    console.log(
+      '[NodeSelector] Found element in graph:',
+      ele && ele.length > 0 ? ele.data() : 'None found'
+    )
+    if (ele && ele.length > 0) {
+      cy.animate({ center: { eles: ele }, zoom: 1.5 }, { duration: 400 })
+    } else {
+      console.warn(
+        `[NodeSelector] Element with ID ${resolvedNode.id} not found in the active graph.`
+      )
     }
   }
 </script>

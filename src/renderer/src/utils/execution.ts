@@ -47,7 +47,8 @@ export async function startExecution(name: string, payload: unknown): Promise<vo
       updateJob(job)
     }
   } catch (e: unknown) {
-    const message = e instanceof Error ? e.message : String(e)
+    let message = e instanceof Error ? e.message : String(e)
+    message = message.replace(/^Error invoking remote method '[^']+':\s*(Error:\s*)?/, '')
     const error = { title: 'Generation Failed', message }
     job.status = 'error'
     job.error = error
@@ -64,7 +65,8 @@ export async function startEmbeddingUpdate(): Promise<void> {
     job.result = result
     updateJob(job)
   } catch (e: unknown) {
-    const message = e instanceof Error ? e.message : String(e)
+    let message = e instanceof Error ? e.message : String(e)
+    message = message.replace(/^Error invoking remote method '[^']+':\s*(Error:\s*)?/, '')
     const error = { title: 'Embedding Update Failed', message }
     job.status = 'error'
     job.error = error

@@ -44,6 +44,28 @@ logging.getLogger('werkzeug').addFilter(NoHealthCheckLogFilter())
 # Add a unique ID for the server instance
 SERVER_INSTANCE_ID = ''.join(random.choices(string.ascii_letters + string.digits, k=16))
 
+is_container = os.environ.get("RUNNING_IN_CONTAINER") == "true"
+
+if is_container:
+    data_path_str = os.environ.get("CONTAINER_DATA_PATH")
+    if not data_path_str:
+        print("Warning: CONTAINER_DATA_PATH not set. Defaulting to /data")
+        data_path_str = "/data"
+else:
+    data_path_str = os.environ.get("LOCAL_DATA_PATH")
+    if not data_path_str:
+        print("Warning: LOCAL_DATA_PATH not set. Defaulting to ~/.stemma2a_data")
+        data_path_str = "~/.stemma2a_data"
+
+data_cache_root = Path(data_path_str).expanduser()
+data_cache_root.mkdir(parents=True, exist_ok=True)
+
+# Set Hugging Face cache directory to a persistent location within the data cache.
+hf_cache_dir = data_cache_root / "huggingface"
+hf_cache_dir.mkdir(parents=True, exist_ok=True)
+os.environ["HF_HOME"] = str(hf_cache_dir)
+os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+
 # Global state
 device_type_accelerator = "cpu"
 device_accelerator = torch.device(device_type_accelerator)
@@ -61,6 +83,8 @@ engine_provider: EngineProvider = None
 
 # Context storage for background jobs
 active_jobs = {}
+
+graph_lock = threading.Lock()
 
 
 # --------------------
@@ -369,11 +393,12 @@ async def generate():
         # --- Batching Logic ---
         batch_id = json_data.get("batch_id")
         if batch_id:
-            if not param_graph.G.has_node(batch_id):
-                # Create the batch element if it's the first time we see this ID
-                batch_element = Batch(id=batch_id, member_type="audio")
-                param_graph.add_element(batch_element)
-                print(f"Created new batch element {batch_id}")
+            with graph_lock:
+                if not param_graph.G.has_node(batch_id):
+                    # Create the batch element if it's the first time we see this ID
+                    batch_element = Batch(id=batch_id, member_type="audio")
+                    param_graph.add_element(batch_element)
+                    print(f"Created new batch element {batch_id}")
 
         # --- Execute, Poll, and Process ---
         print(f"Submitting generation job {job_id} to engine...")
@@ -405,7 +430,7 @@ async def generate():
     except Exception as e:
         print(f"Generation failed: {e}")
         traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
 
 @app.route("/job_status/<job_id>", methods=["GET"])
@@ -434,19 +459,20 @@ async def get_job_status(job_id):
             output_dir = param_graph.root / "generate"
             final_artifact = save_artifact_asset(temp_artifact, output_dir, asset_name="file")
             
-            param_graph.add_element(final_artifact)
+            with graph_lock:
+                param_graph.add_element(final_artifact)
 
-            batch_id = job_context.get("batch_id")
-            if batch_id:
-                param_graph.update_element(final_artifact.id, {"parent": batch_id})
-                batch_node_attrs = param_graph.G.nodes[batch_id]
-                if 'member_ids' not in batch_node_attrs or not isinstance(batch_node_attrs['member_ids'], list):
-                    batch_node_attrs['member_ids'] = []
-                batch_node_attrs['member_ids'].append(final_artifact.id)
+                batch_id = job_context.get("batch_id")
+                if batch_id:
+                    param_graph.update_element(final_artifact.id, {"parent": batch_id})
+                    batch_node_attrs = param_graph.G.nodes[batch_id]
+                    if 'member_ids' not in batch_node_attrs or not isinstance(batch_node_attrs['member_ids'], list):
+                        batch_node_attrs['member_ids'] = []
+                    batch_node_attrs['member_ids'].append(final_artifact.id)
 
-            for element in job_context.get("linked_elements", []):
-                param_graph.link(element, final_artifact)
-            param_graph.save()
+                for element in job_context.get("linked_elements", []):
+                    param_graph.link(element, final_artifact)
+                param_graph.save()
             
             trigger_embedding_update()
             
@@ -460,8 +486,9 @@ async def get_job_status(job_id):
 
         elif status == "failed":
             error_msg = status_info.get("error", "Unknown error during generation.")
+            traceback_msg = status_info.get("traceback")
             active_jobs.pop(job_id, None)
-            return jsonify({"status": "failed", "error": error_msg}), 500
+            return jsonify({"status": "failed", "error": error_msg, "traceback": traceback_msg}), 500
 
         elif status == "not_found":
             active_jobs.pop(job_id, None)
@@ -473,7 +500,7 @@ async def get_job_status(job_id):
     except Exception as e:
         print(f"Failed to get job status: {e}")
         traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
 
 @app.route("/jobs/<job_id>/cancel", methods=["POST"])

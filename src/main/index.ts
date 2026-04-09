@@ -224,9 +224,14 @@ app.whenReady().then(async () => {
       })
       if (!response.ok) {
         const errorBody = await response.text()
-        throw new Error(
-          `Failed to generate. Status: ${response.status}. Error: ${errorBody}`
-        )
+        let parsedError = `Failed to generate. Status: ${response.status}. Error: ${errorBody}`
+        try {
+          const parsed = JSON.parse(errorBody)
+          if (parsed.error) {
+            parsedError = parsed.error + (parsed.traceback ? `\n\nTraceback:\n${parsed.traceback}` : '')
+          }
+        } catch (_) {}
+        throw new Error(parsedError)
       }
       return await response.json()
     } catch (error) {

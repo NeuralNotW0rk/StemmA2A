@@ -34,6 +34,7 @@
   let errorInInfoPanel: ErrorInfo | null = $state(null)
   let toolbarComponent: Toolbar
 
+  let isWaitingForBackend = $state(true)
   // Backend restart detection
   let serverInstanceId: string | null = $state(null)
   let healthCheckInterval: number | null = null
@@ -71,12 +72,9 @@
       backendStatus.set(status)
       serverInstanceId = status.server_instance_id || null
       console.log('Backend status:', status)
+      isWaitingForBackend = false
     } catch (error) {
       console.error('Failed to get backend health:', error)
-      errorInInfoPanel = {
-        title: 'Backend Connection Failed',
-        message: 'Waiting for backend...'
-      }
       const MAX_RETRIES = 10
       const RETRY_INTERVAL = 3000
       for (let i = 0; i < MAX_RETRIES; i++) {
@@ -85,16 +83,13 @@
           const status = await window.api.getHealth()
           backendStatus.set(status)
           serverInstanceId = status.server_instance_id || null
-          errorInInfoPanel = null
+          isWaitingForBackend = false
           return
         } catch (e) {
           console.error(`Backend connection attempt ${i + 1} failed:`, e)
-          errorInInfoPanel = {
-            title: 'Backend Connection Failed',
-            message: `Waiting for backend... (attempt ${i + 2}/${MAX_RETRIES})`
-          }
         }
       }
+      isWaitingForBackend = false
       errorInInfoPanel = {
         title: 'Backend Connection Failed',
         message:
@@ -144,7 +139,15 @@
   }
 
   async function handleUpdateEmbeddings(): Promise<void> {
-    await startEmbeddingUpdate()
+    try {
+      await startEmbeddingUpdate()
+    } catch (error: any) {
+      console.error('Failed to update embeddings:', error)
+      errorInInfoPanel = {
+        title: 'Update Embeddings Failed',
+        message: error?.message || String(error)
+      }
+    }
   }
 
   function closeActionPanel(): void {
@@ -314,6 +317,13 @@
 </script>
 
 <main class="container">
+  {#if isWaitingForBackend}
+    <div class="backend-wait-overlay">
+      <div class="spinner" style="width: 32px; height: 32px; border-width: 4px;"></div>
+      <p>Waiting for backend server...</p>
+    </div>
+  {/if}
+
   <Toolbar
     bind:this={toolbarComponent}
     onprojectLoad={handleProjectLoad}
@@ -456,7 +466,7 @@
   .right-panel-container > :global(*) {
     pointer-events: auto;
     flex-shrink: 1;
-    min-height: 0;
+    min-height: 12rem;
     position: relative !important;
     top: auto !important;
     bottom: auto !important;
@@ -544,5 +554,20 @@
     to {
       transform: rotate(360deg);
     }
+  }
+
+  .backend-wait-overlay {
+    position: absolute;
+    inset: 0;
+    background-color: rgba(15, 15, 20, 0.7);
+    backdrop-filter: blur(8px);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 9999;
+    color: var(--color-overlay-text, #fff);
+    font-size: 1.1rem;
+    gap: 1.5rem;
   }
 </style>

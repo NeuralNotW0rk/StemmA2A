@@ -252,11 +252,19 @@
     cy.on('dragfree', 'node', extractAndSavePositions)
   }
 
-  function applyLayout(randomize = false): void {
+  function applyLayout(randomize = false, fit = false): void {
     if (!cy) return
-    const layout = cy.layout({ ...layoutConfig, randomize } as any)
+
+    // Save viewport state before layout to restore it if not fitting
+    const currentZoom = cy.zoom()
+    const currentPan = { ...cy.pan() }
+
+    const layout = cy.layout({ ...layoutConfig, randomize, fit, animate: fit } as any)
     layout.on('layoutstop', () => {
       cy?.nodes().unlock()
+      if (!fit) {
+        cy?.viewport({ zoom: currentZoom, pan: currentPan })
+      }
       extractAndSavePositions()
     })
     layout.run()
@@ -274,10 +282,14 @@
   }
 
   function updateGraph(use_proxy_edges = true): void {
-    if (!cy || !graphData) return
+    if (!cy) return
+
+    if (!graphData || !graphData.elements) {
+      cy.elements().remove()
+      return
+    }
 
     const elements = graphData.elements as any
-    if (typeof elements === 'undefined') return
 
     // Deep clone to prevent Cytoscape from mutating Svelte proxy state and causing infinite loops
     const clonedElements = JSON.parse(JSON.stringify(elements))
@@ -364,7 +376,7 @@
 
     // 4. Only layout if we have new nodes missing positions
     if (requiresLayout) {
-      applyLayout()
+      applyLayout(false, wasEmpty)
     } else {
       cy.nodes().unlock()
       if (wasEmpty) {
@@ -374,13 +386,13 @@
   }
 
   $effect(() => {
-    if (isInitialized && graphData) {
+    if (isInitialized) {
       updateGraph()
     }
   })
 
   export function tidyView(): void {
-    applyLayout()
+    applyLayout(false, true)
   }
 
   export function fitView(): void {

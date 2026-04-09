@@ -184,7 +184,8 @@
         model_id: $formStateStore.generationModel.id
       }
       console.log('Generating with payload:', singlePayload)
-      startExecution(jobName, singlePayload)
+
+      startExecution(jobName, singlePayload).catch(console.error)
       onClose()
       return
     }
@@ -211,23 +212,29 @@
     // Create a unique ID for this batch operation
     const batchId = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
 
-    for (const combination of combinations) {
-      const batchPayload: Record<string, unknown> = { ...staticParams }
-      combination.forEach((value, index) => {
-        batchPayload[paramNames[index]] = value
+    try {
+      combinations.forEach((combination) => {
+        const batchPayload: Record<string, unknown> = { ...staticParams }
+        combination.forEach((value, index) => {
+          batchPayload[paramNames[index]] = value
+        })
+
+        const fullPayload = {
+          ...batchPayload,
+          model_id: $formStateStore.generationModel!.id,
+          batch_id: batchId
+        }
+        console.log('Generating with payload:', fullPayload)
+        startExecution(jobName, fullPayload).catch(console.error)
       })
 
-      const fullPayload = {
-        ...batchPayload,
-        model_id: $formStateStore.generationModel.id,
-        batch_id: batchId
-      }
-      console.log('Generating with payload:', fullPayload)
-      startExecution(jobName, fullPayload)
+      onClose()
+    } catch (e: unknown) {
+      const message = e instanceof Error ? e.message : String(e)
+      handleError({ title: title + ' Batch Failed', message })
+    } finally {
+      isGenerating = false
     }
-
-    isGenerating = false
-    onClose()
   }
 </script>
 

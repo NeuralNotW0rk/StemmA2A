@@ -2,6 +2,7 @@
   import type { FormConfig, FormField, ModelData, AudioData } from '../utils/forms'
   import NodeSelector from './NodeSelector.svelte'
   import { SvelteSet } from 'svelte/reactivity'
+  import { untrack } from 'svelte'
 
   let {
     config,
@@ -32,6 +33,25 @@
       formData[fieldName] = Math.floor(Math.random() * 4294967296)
     }
   }
+
+  let lastConfig: FormConfig | null = null
+
+  $effect(() => {
+    if (config !== lastConfig) {
+      lastConfig = config
+      untrack(() => {
+        for (const field of config) {
+          const f = field as FormField & { randomizable?: boolean }
+          if (f.randomizable) {
+            const hasContextValue = contextData && contextData[f.name] !== undefined
+            if (!hasContextValue) {
+              randomizeField(f.name, f.type)
+            }
+          }
+        }
+      })
+    }
+  })
 
   $effect(() => {
     isFormValid = visibleFields.every(

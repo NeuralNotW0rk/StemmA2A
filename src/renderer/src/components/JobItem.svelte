@@ -1,109 +1,218 @@
 <script lang="ts">
-  import { focusJobNode, cancelJob, removeJob, type Job } from '../utils/job-management'
+  import { cancelJob, removeJob, type Job } from '../utils/job-management'
+  import { cyInstanceStore } from '../utils/stores'
   import { slide } from 'svelte/transition'
 
-  export let job: Job
+  let { job } = $props<{ job: Job }>()
 
-  let showErrorDetails = false
+  let showErrorDetails = $state(false)
+
+  function handleFocus(job: Job): void {
+    console.log('[JobItem] handleFocus triggered for job:', job.id, job.name)
+    const cy = $cyInstanceStore
+    if (!cy) {
+      console.warn('[JobItem] Cytoscape instance not found')
+      return
+    }
+    if (!job.result) {
+      console.warn('[JobItem] job.result is empty', job)
+      return
+    }
+
+    console.log('[JobItem] Raw job.result:', job.result)
+    // Extract target ID whether it is a string directly, inside an object, or in an array
+    let targetId: string | number | undefined
+    if (typeof job.result === 'string' || typeof job.result === 'number') {
+      targetId = job.result
+    } else if (Array.isArray(job.result) && job.result.length > 0) {
+      const first = job.result[0]
+      targetId = typeof first === 'object' ? first?.node_id || first?.id || first?.data?.id : first
+    } else if (typeof job.result === 'object') {
+      targetId =
+        job.result.node_id ||
+        job.result.id ||
+        job.result.data?.id ||
+        job.result.artifact?.node_id ||
+        job.result.artifact?.id ||
+        job.result.artifact?.data?.id
+    }
+
+    console.log('[JobItem] Extracted targetId:', targetId)
+
+    if (targetId !== undefined && targetId !== null) {
+      const ele = cy.$id(String(targetId))
+      console.log(
+        '[JobItem] Found element in graph:',
+        ele && ele.length > 0 ? ele.data() : 'None found'
+      )
+      if (ele && ele.length > 0) {
+        cy.animate({ center: { eles: ele }, zoom: 1.5 }, { duration: 400 })
+        ele.emit('tap')
+      } else {
+        console.warn(`[JobItem] Element with ID ${targetId} not found in the active graph.`)
+      }
+    }
+  }
 </script>
 
 <div class="job-item" class:success={job.status === 'success'} class:error={job.status === 'error'}>
-  <div class="job-header">
-    <span class="job-name">{job.name}</span>
-    <span class="job-status job-status-{job.status}">{job.status}</span>
-  </div>
+  <div class="job-main-row">
+    <span class="job-name" title={job.name}>{job.name}</span>
 
-  {#if job.status === 'running' && job.progress}
-    <div class="progress-container" transition:slide={{ duration: 200 }}>
-      <progress value={job.progress.value} max={job.progress.total}></progress>
-      {#if job.progress.description}
-        <span class="progress-description">{job.progress.description}</span>
-      {/if}
-    </div>
-  {/if}
-
-  {#if job.status === 'error'}
-    <div class="job-actions">
-      <button on:click={() => (showErrorDetails = !showErrorDetails)}>
-        {showErrorDetails ? 'Hide' : 'Show'} Details
-      </button>
-      <button class="remove-btn" on:click={() => removeJob(job.id)}>Dismiss</button>
-    </div>
-    {#if showErrorDetails && job.error}
-      <div class="error-details" transition:slide>
-        <strong>{job.error.title}</strong>
-        <pre>{job.error.message}</pre>
+    {#if job.status === 'running' && job.progress}
+      <div class="progress-container" title={job.progress.description || ''}>
+        <progress value={job.progress.value} max={job.progress.total}></progress>
       </div>
     {/if}
-  {:else if job.status === 'success'}
+
     <div class="job-actions">
-      {#if job.result?.node_id || job.result?.id}
-        <button on:click={() => focusJobNode(job)}>View in Graph</button>
+      <span class="job-status job-status-{job.status}">{job.status}</span>
+
+      {#if job.status === 'error'}
+        <button
+          onclick={(e) => {
+            e.stopPropagation()
+            showErrorDetails = !showErrorDetails
+          }}
+        >
+          {showErrorDetails ? 'Hide' : 'Details'}
+        </button>
+        <button
+          class="remove-btn icon-btn"
+          title="Dismiss"
+          onclick={(e) => {
+            e.stopPropagation()
+            removeJob(job.id)
+          }}>✕</button
+        >
+      {:else if job.status === 'success'}
+        <button
+          onclick={(e) => {
+            e.stopPropagation()
+            handleFocus(job)
+          }}>View</button
+        >
+        <button
+          class="remove-btn icon-btn"
+          title="Dismiss"
+          onclick={(e) => {
+            e.stopPropagation()
+            removeJob(job.id)
+          }}>✕</button
+        >
+      {:else if job.status === 'running' || job.status === 'cancelling'}
+        <button
+          onclick={(e) => {
+            e.stopPropagation()
+            cancelJob(job.id)
+          }}
+          disabled={job.status === 'cancelling'}
+        >
+          {job.status === 'cancelling' ? 'Stopping...' : 'Stop'}
+        </button>
+      {:else}
+        <button
+          class="remove-btn icon-btn"
+          title="Dismiss"
+          onclick={(e) => {
+            e.stopPropagation()
+            removeJob(job.id)
+          }}>✕</button
+        >
       {/if}
-      <button class="remove-btn" on:click={() => removeJob(job.id)}>Dismiss</button>
     </div>
-  {:else if job.status === 'running' || job.status === 'cancelling'}
-    <div class="job-actions">
-      <button on:click={() => cancelJob(job.id)} disabled={job.status === 'cancelling'}>
-        {job.status === 'cancelling' ? 'Cancelling...' : 'Cancel'}
-      </button>
-    </div>
-  {:else}
-    <div class="job-actions">
-      <button class="remove-btn" on:click={() => removeJob(job.id)}>Dismiss</button>
+  </div>
+
+  {#if job.status === 'error' && showErrorDetails && job.error}
+    <div class="error-details" transition:slide>
+      {#if typeof job.error === 'string'}
+        <pre>{job.error}</pre>
+      {:else}
+        {#if job.error.title}
+          <strong>{job.error.title}</strong>
+        {/if}
+        <pre>{job.error.message ||
+            (job.error as { stack?: string }).stack ||
+            JSON.stringify(job.error)}</pre>
+      {/if}
     </div>
   {/if}
 </div>
 
 <style>
   .job-item {
-    border: 1px solid var(--color-border);
-    border-radius: 4px;
-    padding: 0.75rem;
-    margin-bottom: 0.5rem;
-    background-color: var(--color-bg-2);
-    transition: background-color 0.2s ease;
+    flex-shrink: 0;
+    border: 1px solid var(--color-border-glass-1, var(--color-border));
+    border-radius: 0.5rem;
+    padding: 0.85rem;
+    background-color: var(--color-background-glass-2, var(--color-bg-2));
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    transition:
+      transform 0.2s ease,
+      box-shadow 0.2s ease,
+      background-color 0.2s ease;
     overflow: hidden;
   }
 
+  .job-item:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 12px rgba(0, 0, 0, 0.15);
+  }
+
   .job-item.success {
-    border-left: 3px solid var(--color-success);
+    border-left: 4px solid var(--color-success);
   }
 
   .job-item.error {
-    border-left: 3px solid var(--color-error);
+    border-left: 4px solid var(--color-error);
   }
 
-  .job-header {
+  .job-item.clickable {
+    cursor: pointer;
+  }
+
+  .job-item.clickable:hover {
+    background-color: var(--color-bg-3);
+  }
+
+  .job-main-row {
     display: flex;
-    justify-content: space-between;
     align-items: center;
-    margin-bottom: 0.5rem;
+    gap: 0.5rem;
+    justify-content: space-between;
   }
 
   .job-name {
     font-weight: 600;
+    font-size: 0.85rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex-shrink: 1;
+    min-width: 0;
   }
 
   .job-status {
-    font-size: 0.8rem;
+    font-size: 0.75rem;
     padding: 2px 6px;
-    border-radius: 10px;
-    text-transform: capitalize;
+    border-radius: 3px;
+    text-transform: uppercase;
+    font-weight: 600;
+    letter-spacing: 0.05em;
   }
 
   .job-status-running,
   .job-status-cancelling {
-    background-color: var(--color-info-muted);
-    color: var(--color-info);
+    background-color: var(--color-info, #3b82f6);
+    color: #fff;
   }
   .job-status-success {
-    background-color: var(--color-success-muted);
-    color: var(--color-success);
+    background-color: var(--color-success, #22c55e);
+    color: #fff;
   }
   .job-status-error {
-    background-color: var(--color-error-muted);
-    color: var(--color-error);
+    background-color: var(--color-error, #ef4444);
+    color: #fff;
   }
   .job-status-cancelled {
     background-color: var(--color-bg-3);
@@ -111,22 +220,40 @@
   }
 
   .progress-container {
-    margin-bottom: 0.5rem;
+    flex-grow: 1;
+    display: flex;
+    align-items: center;
+    min-width: 40px;
   }
 
   progress {
     width: 100%;
-  }
-
-  .progress-description {
-    font-size: 0.8rem;
-    color: var(--color-text-2);
+    margin: 0;
+    height: 6px;
   }
 
   .job-actions {
-    margin-top: 0.5rem;
     display: flex;
+    align-items: center;
     gap: 0.5rem;
+    flex-shrink: 0;
+  }
+
+  .job-actions button {
+    padding: 0.25rem 0.5rem;
+    font-size: 0.75rem;
+    min-width: auto;
+    min-height: auto;
+  }
+
+  .job-actions button.icon-btn {
+    padding: 0.25rem;
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
   }
 
   .error-details {

@@ -130,7 +130,11 @@ export async function pollJobStatus(jobId: string, intervalMs = 1500): Promise<a
     if (data.status === 'completed') {
       return data // Returns the fully processed artifact and context
     } else if (data.status === 'failed' || data.status === 'not_found' || data.error) {
-      throw new Error(data.error || 'Job failed')
+      let errMsg = data.error || 'Job failed'
+      if (data.traceback) {
+        errMsg += `\n\nTraceback:\n${data.traceback}`
+      }
+      throw new Error(errMsg)
     }
     
     // Wait for the next interval before asking the backend again

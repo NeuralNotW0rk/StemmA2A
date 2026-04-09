@@ -41,6 +41,7 @@ data_cache_root.mkdir(parents=True, exist_ok=True)
 hf_cache_dir = data_cache_root / "huggingface"
 hf_cache_dir.mkdir(parents=True, exist_ok=True)
 os.environ["HF_HOME"] = str(hf_cache_dir)
+os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
 
 # Initialize the engine provider with the data cache path.
 engine_provider = EngineProvider(data_root=str(data_cache_root))
@@ -119,7 +120,7 @@ async def execute():
         return jsonify({"error": "Invalid request", "details": str(e)}), 400
     except Exception as e:
         traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
 @app.route("/job_status/<job_id>", methods=["GET"])
 async def get_job_status(job_id):
@@ -139,7 +140,7 @@ async def get_job_status(job_id):
         return jsonify(status)
     except Exception as e:
         traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
 
 @app.route("/jobs/<job_id>/cancel", methods=["POST"])
