@@ -134,11 +134,7 @@
 
     const nodeCommands = (ele: Singular): Command[] => [
       // Inherits from elementCommands
-      ...elementCommands(ele),
-      {
-        content: 'Group',
-        select: () => onstartBatching?.(ele.data())
-      }
+      ...elementCommands(ele)
     ]
 
     const modelNodeCommands = (ele: Singular): Command[] => [
@@ -161,6 +157,10 @@
       specificCommands.push({
         content: 'Audio to Audio',
         select: () => onaudioNodeSelectForGeneration?.(ele.data(), false)
+      })
+      specificCommands.push({
+        content: 'Group',
+        select: () => onstartBatching?.(ele.data())
       })
 
       // Inherits from nodeCommands
