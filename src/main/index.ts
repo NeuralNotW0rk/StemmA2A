@@ -188,6 +188,18 @@ app.whenReady().then(async () => {
     }
   })
 
+  ipcMain.handle('dialog:selectDirectory', async () => {
+    const { canceled, filePaths } = await dialog.showOpenDialog({
+      title: 'Select Directory',
+      properties: ['openDirectory']
+    })
+    if (canceled) {
+      return null
+    } else {
+      return filePaths[0]
+    }
+  })
+
   ipcMain.handle('dialog:openFile', async (_event, options) => {
     const { canceled, filePaths } = await dialog.showOpenDialog({
       title: options?.title || 'Open File',
@@ -279,6 +291,32 @@ app.whenReady().then(async () => {
       throw new Error(
         `Failed to remove element. Status: ${response.status}. Error: ${errorBody}`
       )
+    }
+    return await response.json()
+  })
+
+  ipcMain.handle('addExternalSource', async (_event, sourcePath) => {
+    const response = await fetchWithAuth(`${BACKEND_URL}/add_external_source`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source_path: sourcePath })
+    })
+    if (!response.ok) {
+      const errorBody = await response.text()
+      throw new Error(`Failed to add external source. Status: ${response.status}. Error: ${errorBody}`)
+    }
+    return await response.json()
+  })
+
+  ipcMain.handle('expandPath', async (_event, pathNodeId) => {
+    const response = await fetchWithAuth(`${BACKEND_URL}/expand_path`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path_node_id: pathNodeId })
+    })
+    if (!response.ok) {
+      const errorBody = await response.text()
+      throw new Error(`Failed to expand path. Status: ${response.status}. Error: ${errorBody}`)
     }
     return await response.json()
   })

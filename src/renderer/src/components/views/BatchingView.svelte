@@ -16,12 +16,14 @@
 
   const initiatorNode = $initiatorNodeStore
 
-  if (!initiatorNode?.type) {
-    onerror({
-      title: 'Batching Error',
-      message: 'The initiator node does not have a valid type for batching.'
-    })
-  }
+  $effect(() => {
+    if (!initiatorNode?.type) {
+      onerror({
+        title: 'Batching Error',
+        message: 'The initiator node does not have a valid type for batching.'
+      })
+    }
+  })
 
   const filter = { type: initiatorNode?.type }
 

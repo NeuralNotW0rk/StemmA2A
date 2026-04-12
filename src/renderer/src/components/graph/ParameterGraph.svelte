@@ -22,6 +22,7 @@
     onElementRemove?: (data: any) => void
     onstartBatching?: (data: any) => void
     onsavePositions?: (positions: Record<string, { x: number; y: number }>) => void
+    onexpandPath?: (id: string) => void
   }
 
   let {
@@ -34,7 +35,8 @@
     onedgeSelect,
     onElementRemove,
     onstartBatching,
-    onsavePositions
+    onsavePositions,
+    onexpandPath
   }: Props = $props()
 
   let graphContainer: HTMLElement | undefined = $state()
@@ -176,6 +178,14 @@
       ...elementCommands(ele)
     ]
 
+    const pathNodeCommands = (ele: Singular): Command[] => [
+      {
+        content: 'Expand',
+        select: () => onexpandPath?.(ele.id())
+      },
+      ...nodeCommands(ele)
+    ]
+
     // --- Menu Instantiation ---
 
     cy.cxtmenu({
@@ -196,6 +206,8 @@
             return audioNodeCommands(ele)
           case 'external':
             return externalNodeCommands(ele)
+          case 'path_node':
+            return pathNodeCommands(ele)
           default:
             return nodeCommands(ele) // Fallback for any other node type
         }

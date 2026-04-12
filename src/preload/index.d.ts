@@ -7,6 +7,7 @@ interface API {
   getModels: () => Promise<string[]>
   openProject: () => Promise<string | null>
   newProject: () => Promise<string | null>
+  selectDirectory: () => Promise<string | null>
   getRecentProjects: () => Promise<string[]>
   removeRecentProject: (projectPath: string) => Promise<void>
   addRecentProject: (projectPath: string) => Promise<void>
@@ -27,6 +28,8 @@ interface API {
   pollJobStatus: (jobId: string) => Promise<any>
   updateEmbeddings: () => Promise<any>
   batchElements: (memberIds: string[]) => Promise<any>
+  addExternalSource: (sourcePath: string) => Promise<any>
+  expandPath: (pathNodeId: string) => Promise<any>
   cancelJob: (jobId: string) => Promise<any>
   saveNodePositions: (projectName: string, positions: Record<string, { x: number; y: number }>) => Promise<void>
 }

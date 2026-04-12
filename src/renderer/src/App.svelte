@@ -206,6 +206,26 @@
     }
   }
 
+  async function handleAddExternalSource(path: string): Promise<void> {
+    try {
+      await window.api.addExternalSource(path)
+      await refreshGraphData()
+    } catch (error: any) {
+      console.error('Error adding external source:', error)
+      errorInInfoPanel = { title: 'Add Source Failed', message: error.message || String(error) }
+    }
+  }
+
+  async function handleExpandPath(pathNodeId: string): Promise<void> {
+    try {
+      await window.api.expandPath(pathNodeId)
+      await refreshGraphData()
+    } catch (error: any) {
+      console.error('Error expanding path:', error)
+      errorInInfoPanel = { title: 'Expand Path Failed', message: error.message || String(error) }
+    }
+  }
+
   async function handleViewModeChange(mode: 'batch' | 'cluster'): Promise<void> {
     viewMode = mode
     try {
@@ -330,6 +350,7 @@
     onviewModeChange={handleViewModeChange}
     onrefresh={refreshGraphData}
     onimportModel={() => (actionPanelView = 'import-model')}
+    onaddExternalSource={handleAddExternalSource}
     onupdateEmbeddings={handleUpdateEmbeddings}
     {currentProject}
     {viewMode}
@@ -436,6 +457,7 @@
     onElementRemove={handleElementRemove}
     onstartBatching={handleStartBatching}
     onsavePositions={handleSavePositions}
+    onexpandPath={handleExpandPath}
   />
   {#if audioSrc}
     <AudioPlayer src={audioSrc} title={audioTitle} onclose={() => (audioSrc = null)} />

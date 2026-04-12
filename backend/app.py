@@ -6,8 +6,9 @@ import os
 import random
 import string
 import logging
-import time
-import asyncio
+import uuid
+import shutil
+from dataclasses import replace
 
 import threading
 from flask import Flask, request, jsonify, send_file
@@ -22,7 +23,10 @@ from pydantic import ValidationError
 from param_graph.graph import ParameterGraph
 from param_graph.elements.models.base_model_element import Model
 from param_graph.elements.artifacts.audio_element import Audio
+from param_graph.elements.base_elements import Asset, Edge
 from param_graph.elements.collections.batch_element import Batch
+from param_graph.elements.collections.directory_element import Directory
+from param_graph.elements.path_node import PathNode
 from param_graph.utils import extract_graph_elements, save_artifact_asset, resolve_element
 from engine.engine_provider import EngineProvider
 from engine.encoders.clap_encoder import CLAPEncoder
@@ -382,7 +386,22 @@ async def generate():
             form_config, dumped_params, param_graph
         )
 
+        # Cache external audio files used in this step, and resolve to cache if missing
+        for i, element in enumerate(resolved_elements):
+            if isinstance(element, Audio):
+                cache_used_audio(element.id)
+                valid_path = resolve_audio_path(element.id)
+                if valid_path and str(valid_path) != element.file.path:
+                    element.file = replace(element.file, path=str(valid_path))
+                    resolved_elements[i] = element
+
         for arg_name, element in node_engine_args.items():
+            if isinstance(element, Audio):
+                cache_used_audio(element.id)
+                valid_path = resolve_audio_path(element.id)
+                if valid_path and str(valid_path) != element.file.path:
+                    element.file = replace(element.file, path=str(valid_path))
+                    node_engine_args[arg_name] = element
             if not isinstance(element, (Audio, Model)):
                 field_name = arg_name.removesuffix("_element")
                 return jsonify({"error": f"Node '{element.id}' for field '{field_name}' is not a valid artifact."}), 400
@@ -587,6 +606,152 @@ def rescan_source():
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
+@app.route("/expand_path", methods=["POST"])
+def expand_path():
+    """Reads a PathNode, creates a Directory compound node if needed, and populates it."""
+    if param_graph is None:
+        return jsonify({"error": "No project loaded"}), 400
+
+    try:
+        data = request.get_json()
+        path_node_id = data.get("path_node_id")
+        
+        if not path_node_id:
+            return jsonify({"error": "path_node_id is required"}), 400
+            
+        path_element = param_graph.get_element(path_node_id)
+        if not path_element or not hasattr(path_element, "path"):
+            return jsonify({"error": "Invalid path element"}), 400
+            
+        dir_path = Path(path_element.path)
+        if not dir_path.is_dir():
+            return jsonify({"error": f"Path {dir_path} is not a valid directory"}), 400
+            
+        # 1. Check if we already have an expanded Directory for this PathNode
+        existing_dir_id = None
+        with graph_lock:
+            for u, v, edge_data in param_graph.G.out_edges(path_node_id, data=True):
+                target_node = param_graph.get_element(v)
+                if getattr(target_node, "type", None) == "directory":
+                    existing_dir_id = v
+                    break
+            
+            new_dir_created = False
+            if not existing_dir_id:
+                existing_dir_id = str(uuid.uuid4())
+                new_dir = Directory(id=existing_dir_id, name=path_element.name, path=path_element.path)
+                new_edge = Edge(id=str(uuid.uuid4()), source=path_node_id, target=existing_dir_id, action='expands')
+                
+                param_graph.add_element(new_dir)
+                param_graph.add_element(new_edge)
+                param_graph.G.add_edge(path_node_id, existing_dir_id, id=new_edge.id, type='edge', action='expands')
+                new_dir_created = True
+
+        # 2. Gather paths of existing children to prevent duplicates during sync
+        existing_paths = set()
+        with graph_lock:
+            for node_id, data in param_graph.G.nodes(data=True):
+                if data.get("parent") == existing_dir_id:
+                    el = param_graph.get_element(node_id)
+                    if hasattr(el, "path"):
+                        existing_paths.add(el.path)
+                    elif hasattr(el, "file") and hasattr(el.file, "path"):
+                        existing_paths.add(el.file.path)
+
+        audio_exts = {'.wav', '.mp3', '.flac', '.ogg', '.m4a', '.aiff'}
+        new_elements = []
+        
+        for entry in dir_path.iterdir():
+            if entry.name.startswith('.'):
+                continue
+                
+            entry_str = str(entry)
+            if entry_str in existing_paths:
+                continue  # This file/folder is already in the graph
+
+            element_id = str(uuid.uuid4())
+            
+            if entry.is_dir():
+                new_elements.append(PathNode(id=element_id, name=entry.name, path=entry_str))
+            elif entry.is_file() and entry.suffix.lower() in audio_exts:
+                asset = Asset(path=entry_str, uid=element_id, extension=entry.suffix.lower())
+                new_elements.append(Audio(id=element_id, name=entry.name, context={}, file=asset))
+                
+        with graph_lock:
+            for el in new_elements:
+                param_graph.add_element(el)
+                param_graph.update_element(el.id, {"parent": existing_dir_id})
+            param_graph.save()
+            
+        # Trigger embedding calculation for the newly added audio files
+        trigger_embedding_update()
+        
+        response_data = {
+            "message": f"Successfully expanded path {path_element.name}",
+            "directory_id": existing_dir_id,
+            "elements": [el.to_dict() for el in new_elements],
+            "success": True
+        }
+        if new_dir_created:
+            response_data["new_directory"] = new_dir.to_dict()
+            response_data["new_edge"] = new_edge.to_dict()
+            
+        return jsonify(response_data)
+
+    except Exception as e:
+        print(f"Failed to expand path: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+def resolve_audio_path(audio_id):
+    """Gets the audio path, falling back to the project cache if the original file was deleted."""
+    if param_graph is None:
+        return None
+        
+    path_str = param_graph.get_path_from_id(audio_id, relative=False)
+    if not path_str:
+        return None
+        
+    original_path = Path(path_str)
+    if original_path.exists():
+        return original_path
+        
+    # Check fallback cache
+    cache_dir = Path(param_graph.root) / "cache"
+    if cache_dir.exists():
+        cached_files = list(cache_dir.glob(f"{audio_id}.*"))
+        if cached_files:
+            return cached_files[0]
+            
+    return None
+
+def cache_used_audio(audio_id):
+    """Copies an external audio file to the local project cache if it's not already there."""
+    if param_graph is None:
+        return
+        
+    path_str = param_graph.get_path_from_id(audio_id, relative=False)
+    if not path_str:
+        return
+        
+    original_path = Path(path_str)
+    if not original_path.exists():
+        return  # Can't cache what doesn't exist
+        
+    # If the file is already inside the project directory, no need to cache
+    if original_path.is_relative_to(Path(param_graph.root)):
+        return
+        
+    cache_dir = Path(param_graph.root) / "cache"
+    cache_dir.mkdir(exist_ok=True)
+    
+    cached_path = cache_dir / f"{audio_id}{original_path.suffix}"
+    if not cached_path.exists():
+        try:
+            shutil.copy2(original_path, cached_path)
+            print(f"Cached external audio file {audio_id} to {cached_path}")
+        except Exception as e:
+            print(f"Failed to cache audio {audio_id}: {e}")
 
 def trigger_embedding_update(force_recalculate=False, background=True):
     """
@@ -741,8 +906,8 @@ def serve_audio_data(audio_id):
         return jsonify({"error": "No project loaded"}), 400
     
     try:
-        audio_path = param_graph.get_path_from_id(audio_id, relative=False)
-        if not audio_path or not Path(audio_path).exists():
+        audio_path = resolve_audio_path(audio_id)
+        if not audio_path:
             return jsonify({"error": "Audio file not found"}), 404
 
         # Load audio using the robust loader (converts to stereo, resamples)
@@ -769,11 +934,11 @@ def get_audio_path(audio_id):
         return jsonify({"error": "No project loaded"}), 400
     
     try:
-        audio_path = param_graph.get_path_from_id(audio_id, relative=False)
-        print(f"Path retrieved from graph: {audio_path}")
+        audio_path = resolve_audio_path(audio_id)
+        print(f"Path resolved for graph: {audio_path}")
 
-        if not audio_path or not Path(audio_path).exists():
-            print(f"Audio file not found at path: {audio_path}")
+        if not audio_path:
+            print(f"Audio file not found for id: {audio_id}")
             return jsonify({"error": "Audio file not found"}), 404
         
         print(f"Returning audio path: {audio_path}")
@@ -791,8 +956,8 @@ def serve_audio(audio_id):
         return jsonify({"error": "No project loaded"}), 400
     
     try:
-        audio_path = param_graph.get_path_from_id(audio_id, relative=False)
-        if not audio_path or not Path(audio_path).exists():
+        audio_path = resolve_audio_path(audio_id)
+        if not audio_path:
             return jsonify({"error": "Audio file not found"}), 404
         
         return send_file(str(audio_path))

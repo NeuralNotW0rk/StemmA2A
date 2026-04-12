@@ -6,6 +6,7 @@ const api = {
   getHealth: (): Promise<any> => ipcRenderer.invoke('getHealth'),
   openProject: (): Promise<string | null> => ipcRenderer.invoke('dialog:openProject'),
   newProject: (): Promise<string | null> => ipcRenderer.invoke('dialog:newProject'),
+  selectDirectory: (): Promise<string | null> => ipcRenderer.invoke('dialog:selectDirectory'),
   getRecentProjects: (): Promise<string[]> => ipcRenderer.invoke('getRecentProjects'),
   removeRecentProject: (projectPath: string): Promise<void> =>
     ipcRenderer.invoke('removeRecentProject', projectPath),
@@ -33,6 +34,8 @@ const api = {
   updateEmbeddings: (): Promise<any> => ipcRenderer.invoke('updateEmbeddings'),
   pollJobStatus: (jobId: string): Promise<any> => ipcRenderer.invoke('pollJobStatus', jobId),
   batchElements: (memberIds: string[]): Promise<any> => ipcRenderer.invoke('batchElements', memberIds),
+  addExternalSource: (sourcePath: string): Promise<any> => ipcRenderer.invoke('addExternalSource', sourcePath),
+  expandPath: (pathNodeId: string): Promise<any> => ipcRenderer.invoke('expandPath', pathNodeId),
   cancelJob: (jobId: string): Promise<any> => ipcRenderer.invoke('cancel-job', jobId),
   saveNodePositions: (projectName: string, positions: Record<string, { x: number; y: number }>): Promise<void> =>
     ipcRenderer.invoke('saveNodePositions', projectName, positions)
