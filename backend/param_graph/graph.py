@@ -2,6 +2,7 @@ import os
 import json
 from pathlib import Path
 from time import time
+import uuid
 
 import networkx as nx
 
@@ -31,6 +32,13 @@ class ParameterGraph:
                 self.project_name = data['project_name']
                 self.export_target = Path(data['export_target'])
                 self.G = nx.cytoscape.cytoscape_graph(data['graph'])
+                
+                # Clean up legacy edge nodes that were added as nodes
+                legacy_edge_nodes = [
+                    n for n, d in self.G.nodes(data=True) if d.get('type') == 'edge'
+                ]
+                if legacy_edge_nodes:
+                    self.G.remove_nodes_from(legacy_edge_nodes)
             return True
         return False
 
@@ -63,8 +71,15 @@ class ParameterGraph:
         ele_id = ele_attrs.get('id', None)
         self.G.add_node(ele_id, **ele_attrs)
 
-    def link(self, source: GraphElement, target: GraphElement):
-        self.G.add_edge(source.id, target.id, type=source.type)
+    def link(self, source: GraphElement, target: GraphElement, **kwargs):
+        edge_attrs = {"type": source.type, "id": str(uuid.uuid4())}
+        edge_attrs.update(kwargs)
+        self.G.add_edge(source.id, target.id, **edge_attrs)
+        return {
+            "source": source.id,
+            "target": target.id,
+            **edge_attrs
+        }
 
     def get_element(self, id: str) -> GraphElement:
         """
@@ -112,11 +127,17 @@ class ParameterGraph:
             node_attrs = self.G.nodes[id]
             node_attrs.update(attrs)
 
-    # Remove element (and children in the case of batches)
+    # Remove element (and children recursively)
     def remove_element(self, id: str):
-        to_remove = [id]
-        for node, data in self.G.nodes(data=True):
-            if data.get('parent') == id:
-                to_remove.append(node)
+        to_remove = {id}
+        
+        while True:
+            added = False
+            for node, data in self.G.nodes(data=True):
+                if node not in to_remove and data.get('parent') in to_remove:
+                    to_remove.add(node)
+                    added = True
+            if not added:
+                break
 
         self.G.remove_nodes_from(to_remove)

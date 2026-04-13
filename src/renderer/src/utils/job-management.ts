@@ -3,7 +3,7 @@ import type { Writable } from 'svelte/store'
 import { v4 as uuidv4 } from 'uuid'
 import { cyInstanceStore } from './stores'
 
-export type JobStatus = 'running' | 'success' | 'error' | 'cancelled' | 'cancelling'
+export type JobStatus = 'pending' | 'running' | 'success' | 'error' | 'cancelled' | 'cancelling'
 
 export type JobResult = Record<string, any> & { viewed?: boolean }
 
@@ -27,11 +27,11 @@ export interface Job {
 
 export const jobStore: Writable<Job[]> = writable([])
 
-export function addJob(name: string, payload: unknown): Job {
+export function addJob(name: string, payload: unknown, initialStatus: JobStatus = 'running'): Job {
   const job: Job = {
     id: uuidv4(),
     name,
-    status: 'running',
+    status: initialStatus,
     payload,
     progress: null,
     result: null,
@@ -58,7 +58,7 @@ export function updateJob(job: Job): void {
 export function updateJobProgress(jobId: string, progress: JobProgress): void {
   jobStore.update((jobs) => {
     const job = jobs.find((j) => j.id === jobId)
-    if (job && job.status === 'running') {
+    if (job && (job.status === 'running' || job.status === 'pending')) {
       job.progress = progress
       job.updatedAt = Date.now()
     }
@@ -135,6 +135,16 @@ export async function pollJobStatus(jobId: string, intervalMs = 1500): Promise<a
         errMsg += `\n\nTraceback:\n${data.traceback}`
       }
       throw new Error(errMsg)
+    } else if (data.status === 'running' || data.status === 'pending') {
+      // Update the job store with the intermediate status to reflect in the UI
+      jobStore.update((jobs) => {
+        const job = jobs.find((j) => j.id === jobId)
+        if (job && job.status !== data.status) {
+          job.status = data.status
+          job.updatedAt = Date.now()
+        }
+        return jobs
+      })
     }
     
     // Wait for the next interval before asking the backend again

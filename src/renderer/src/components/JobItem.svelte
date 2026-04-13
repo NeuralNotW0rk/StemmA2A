@@ -55,11 +55,16 @@
   }
 </script>
 
-<div class="job-item" class:success={job.status === 'success'} class:error={job.status === 'error'}>
+<div
+  class="job-item"
+  class:success={job.status === 'success'}
+  class:error={job.status === 'error'}
+  class:pending={job.status === 'pending'}
+>
   <div class="job-main-row">
     <span class="job-name" title={job.name}>{job.name}</span>
 
-    {#if job.status === 'running' && job.progress}
+    {#if (job.status === 'running' || job.status === 'pending') && job.progress}
       <div class="progress-container" title={job.progress.description || ''}>
         <progress value={job.progress.value} max={job.progress.total}></progress>
       </div>
@@ -100,7 +105,7 @@
             removeJob(job.id)
           }}>✕</button
         >
-      {:else if job.status === 'running' || job.status === 'cancelling'}
+      {:else if job.status === 'running' || job.status === 'cancelling' || job.status === 'pending'}
         <button
           onclick={(e) => {
             e.stopPropagation()
@@ -108,7 +113,11 @@
           }}
           disabled={job.status === 'cancelling'}
         >
-          {job.status === 'cancelling' ? 'Stopping...' : 'Stop'}
+          {job.status === 'cancelling'
+            ? 'Stopping...'
+            : job.status === 'pending'
+              ? 'Cancel'
+              : 'Stop'}
         </button>
       {:else}
         <button
@@ -167,6 +176,10 @@
     border-left: 4px solid var(--color-error);
   }
 
+  .job-item.pending {
+    border-left: 4px solid var(--color-warning, #f59e0b);
+  }
+
   .job-item.clickable {
     cursor: pointer;
   }
@@ -204,6 +217,10 @@
   .job-status-running,
   .job-status-cancelling {
     background-color: var(--color-info, #3b82f6);
+    color: #fff;
+  }
+  .job-status-pending {
+    background-color: var(--color-warning, #f59e0b);
     color: #fff;
   }
   .job-status-success {

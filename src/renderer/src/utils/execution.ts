@@ -26,7 +26,7 @@ export const embeddingUpdateExecutionStore: Writable<ExecutionState> = writable(
 })
 
 export async function startExecution(name: string, payload: unknown): Promise<void> {
-  const job = addJob(name, payload)
+  const job = addJob(name, payload, 'pending')
 
   try {
     const payloadWithId =
@@ -36,7 +36,7 @@ export async function startExecution(name: string, payload: unknown): Promise<vo
     
     const initData = await window.api.generate(payloadWithId)
     
-    if (initData.status === 'running') {
+    if (initData.status === 'running' || initData.status === 'pending') {
       const finalResult = await pollJobStatus(initData.job_id)
       job.status = 'success'
       job.result = finalResult

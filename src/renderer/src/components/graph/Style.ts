@@ -109,6 +109,28 @@ const defaultStyle: CssStyleDeclaration[] = [
       'border-color': audioColor
     }
   },
+  {
+    selector: 'node[type="path_node"]',
+    style: {
+      label: 'data(name)',
+      'background-color': externalColor,
+      width: 60,
+      height: 60
+    }
+  },
+  {
+    selector: 'node[type="directory"]',
+    style: {
+      label: 'data(id)',
+      'text-valign': 'top',
+      'background-color': batchColor,
+      'background-opacity': 0.5,
+      'border-color': externalColor,
+      'border-width': 2,
+      'shape': 'rectangle',
+      'padding': '10px'
+    }
+  },
 
   // Edge-specific style configuration
   {
@@ -139,6 +161,15 @@ const defaultStyle: CssStyleDeclaration[] = [
       label: 'data(strength)',
       'line-color': audioColor,
       'target-arrow-color': audioColor,
+      'line-style': 'dashed'
+    }
+  },
+  {
+    selector: 'edge[type="path"]',
+    style: {
+      label: 'data(strength)',
+      'line-color': externalColor,
+      'target-arrow-color': externalColor,
       'line-style': 'dashed'
     }
   },

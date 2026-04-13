@@ -23,7 +23,7 @@ from pydantic import ValidationError
 from param_graph.graph import ParameterGraph
 from param_graph.elements.models.base_model_element import Model
 from param_graph.elements.artifacts.audio_element import Audio
-from param_graph.elements.base_elements import Asset, Edge
+from param_graph.elements.base_elements import Asset
 from param_graph.elements.collections.batch_element import Batch
 from param_graph.elements.collections.directory_element import Directory
 from param_graph.elements.path_node import PathNode
@@ -439,7 +439,7 @@ async def generate():
         return jsonify({
             "message": "Job started successfully.",
             "job_id": job_id,
-            "status": "running"
+            "status": "pending"
         }), 202
 
     except (ValidationError, ValueError) as e:
@@ -560,8 +560,15 @@ def add_external_source():
         
         if not source_path:
             return jsonify({"error": "source_path is required"}), 400
+            
+        path_obj = Path(source_path)
+        if not path_obj.exists():
+            return jsonify({"error": f"Path '{source_path}' does not exist."}), 400
+            
+        element_id = str(uuid.uuid4())
+        path_node = PathNode(id=element_id, name=path_obj.name, path=str(path_obj))
         
-        param_graph.add_external_source(source_path)
+        param_graph.add_element(path_node)
         param_graph.save()
         
         # Trigger an incremental embedding update
@@ -640,11 +647,9 @@ def expand_path():
             if not existing_dir_id:
                 existing_dir_id = str(uuid.uuid4())
                 new_dir = Directory(id=existing_dir_id, name=path_element.name, path=path_element.path)
-                new_edge = Edge(id=str(uuid.uuid4()), source=path_node_id, target=existing_dir_id, action='expands')
                 
                 param_graph.add_element(new_dir)
-                param_graph.add_element(new_edge)
-                param_graph.G.add_edge(path_node_id, existing_dir_id, id=new_edge.id, type='edge', action='expands')
+                new_edge = param_graph.link(path_element, new_dir, type='edge', action='expands')
                 new_dir_created = True
 
         # 2. Gather paths of existing children to prevent duplicates during sync
@@ -694,7 +699,8 @@ def expand_path():
         }
         if new_dir_created:
             response_data["new_directory"] = new_dir.to_dict()
-            response_data["new_edge"] = new_edge.to_dict()
+            if new_edge:
+                response_data["new_edge"] = new_edge
             
         return jsonify(response_data)
 
