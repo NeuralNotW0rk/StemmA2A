@@ -6,7 +6,6 @@ import os
 import random
 import string
 import logging
-import uuid
 import shutil
 from dataclasses import replace
 
@@ -26,7 +25,7 @@ from param_graph.elements.artifacts.audio_element import Audio
 from param_graph.elements.base_elements import Asset
 from param_graph.elements.collections.batch_element import Batch
 from param_graph.elements.collections.directory_element import Directory
-from param_graph.elements.path_node import PathNode
+from param_graph.elements.local_path import LocalPath
 from param_graph.utils import extract_graph_elements, save_artifact_asset, resolve_element
 from engine.engine_provider import EngineProvider
 from engine.encoders.clap_encoder import CLAPEncoder
@@ -458,6 +457,16 @@ async def get_job_status(job_id):
     if engine_provider is None or param_graph is None:
         return jsonify({"error": "No project loaded"}), 400
 
+    # Check for local backend jobs first
+    if job_id in local_jobs:
+        job_info = local_jobs[job_id]
+        status = job_info.get("status")
+        
+        if status in ["completed", "failed"]:
+            # Pop the job from memory once we send the final completed/failed state
+            return jsonify(local_jobs.pop(job_id)), 200 if status == "completed" else 500
+        return jsonify(job_info), 200
+
     try:
         engine = engine_provider.get_engine()
         status_info = await engine.get_job_status(job_id)
@@ -565,8 +574,8 @@ def add_external_source():
         if not path_obj.exists():
             return jsonify({"error": f"Path '{source_path}' does not exist."}), 400
             
-        element_id = str(uuid.uuid4())
-        path_node = PathNode(id=element_id, name=path_obj.name, path=str(path_obj))
+        element_id = uid_generator.from_string(str(path_obj.resolve()))
+        path_node = LocalPath(id=element_id, name=path_obj.name, path=str(path_obj))
         
         param_graph.add_element(path_node)
         param_graph.save()
@@ -645,11 +654,11 @@ def expand_path():
             
             new_dir_created = False
             if not existing_dir_id:
-                existing_dir_id = str(uuid.uuid4())
+                existing_dir_id = f"{path_node_id}.dir"
                 new_dir = Directory(id=existing_dir_id, name=path_element.name, path=path_element.path)
                 
                 param_graph.add_element(new_dir)
-                new_edge = param_graph.link(path_element, new_dir, type='edge', action='expands')
+                new_edge = param_graph.link(path_element, new_dir, action='expands')
                 new_dir_created = True
 
         # 2. Gather paths of existing children to prevent duplicates during sync
@@ -674,13 +683,18 @@ def expand_path():
             if entry_str in existing_paths:
                 continue  # This file/folder is already in the graph
 
-            element_id = str(uuid.uuid4())
             
             if entry.is_dir():
-                new_elements.append(PathNode(id=element_id, name=entry.name, path=entry_str))
+                element_id = uid_generator.from_string(str(entry.resolve()))
+                new_elements.append(LocalPath(id=element_id, name=entry.name, path=entry_str))
             elif entry.is_file() and entry.suffix.lower() in audio_exts:
-                asset = Asset(path=entry_str, uid=element_id, extension=entry.suffix.lower())
-                new_elements.append(Audio(id=element_id, name=entry.name, context={}, file=asset))
+                try:
+                    audio_tensor = load_audio(device_accelerator, entry_str, APP_SAMPLE_RATE)
+                    element_id = uid_generator.from_tensor(audio_tensor)
+                    asset = Asset(path=entry_str, uid=element_id, extension=entry.suffix.lower())
+                    new_elements.append(Audio(id=element_id, name=entry.name, context={}, file=asset))
+                except Exception as e:
+                    print(f"Failed to load audio for {entry.name} to generate UID: {e}")
                 
         with graph_lock:
             for el in new_elements:
@@ -689,7 +703,7 @@ def expand_path():
             param_graph.save()
             
         # Trigger embedding calculation for the newly added audio files
-        trigger_embedding_update()
+        trigger_embedding_update(background=False)
         
         response_data = {
             "message": f"Successfully expanded path {path_element.name}",
@@ -774,44 +788,53 @@ def trigger_embedding_update(force_recalculate=False, background=True):
             
             for group_type, embedding_type in SIMILARITY_GROUPS.items():
                 # 1. Compute embeddings ONLY for nodes that need them
-                for node, data in param_graph.G.nodes(data=True):
-                    if data.get('type') != group_type:
-                        continue
+                with graph_lock:
+                    nodes_to_process = []
+                    for node in param_graph.G.nodes():
+                        el = param_graph.get_element(node)
+                        if el and getattr(el, 'type', None) == group_type:
+                            emb_copy = getattr(el, 'embeddings', {}).copy()
+                            nodes_to_process.append((node, emb_copy))
                         
-                    embeddings = data.get('embeddings', {})
-                    
-                    # Optimization: Skip if we already have the embedding and aren't forcing a recalculation
+                for node, embeddings in nodes_to_process:
                     if not force_recalculate and embedding_type in embeddings:
                         continue
-                        
+
                     try:
-                        audio_path = param_graph.get_path_from_id(node, relative=False)
+                        audio_path = resolve_audio_path(node)
                         if not audio_path:
                             continue
                             
-                        embedding = clap_encoder.get_embedding(audio_path)
-                        embeddings[embedding_type] = embedding.tolist()
+                        embedding = clap_encoder.get_embedding(str(audio_path))
                         
-                        param_graph.update_element(node, {'embeddings': embeddings})
+                        with graph_lock:
+                            current_data = param_graph.G.nodes[node]
+                            current_embeddings = current_data.get('embeddings', {})
+                            current_embeddings[embedding_type] = embedding.tolist()
+                            param_graph.update_element(node, {'embeddings': current_embeddings})
+                            
                         print(f"Updated {embedding_type} embedding for node {node}")
                     except Exception as e:
                         print(f"Could not update {embedding_type} embedding for node {node}. Error: {e}")
 
-                # 2. Fast similarity edge rebuild based on cached embeddings
-                edges_to_remove = [
-                    (u, v) for u, v, d in param_graph.G.edges(data=True) 
-                    if d.get('group') == group_type
-                ]
-                param_graph.G.remove_edges_from(edges_to_remove)
+                with graph_lock:
+                    # 2. Fast similarity edge rebuild based on cached embeddings
+                    edges_to_remove = [
+                        (u, v) for u, v, d in param_graph.G.edges(data=True) 
+                        if d.get('group') == group_type
+                    ]
+                    param_graph.G.remove_edges_from(edges_to_remove)
 
-                # Get all nodes of the current group type with the required cached embeddings
-                group_nodes = {
-                    node: data['embeddings'][embedding_type]
-                    for node, data in param_graph.G.nodes(data=True)
-                    if data.get('type') == group_type and embedding_type in data.get('embeddings', {})
-                }
+                    group_nodes = {}
+                    for node in param_graph.G.nodes():
+                        el = param_graph.get_element(node)
+                        if el and getattr(el, 'type', None) == group_type:
+                            if embedding_type in getattr(el, 'embeddings', {}):
+                                group_nodes[node] = el.embeddings[embedding_type]
 
                 if len(group_nodes) <= 1:
+                    with graph_lock:
+                        param_graph.save()
                     continue
 
                 node_ids = list(group_nodes.keys())
@@ -835,40 +858,43 @@ def trigger_embedding_update(force_recalculate=False, background=True):
                 full_distances = cosine_distances(all_latents)
                 k_furthest = min(n_nodes - 1, k_far)
 
-                for i, node_id in enumerate(node_ids):
-                    near_indices = set(indices[i])
-                    
-                    # 1. Add nearest neighbors (similar nodes)
-                    for j, neighbor_idx in enumerate(indices[i]):
-                        if i == neighbor_idx:
-                            continue
+                with graph_lock:
+                    for i, node_id in enumerate(node_ids):
+                        near_indices = set(indices[i])
+                        
+                        # 1. Add nearest neighbors (similar nodes)
+                        for j, neighbor_idx in enumerate(indices[i]):
+                            if i == neighbor_idx:
+                                continue
+                                
+                            param_graph.G.add_edge(
+                                node_id, 
+                                node_ids[neighbor_idx], 
+                                id=f"edge-{node_id}-near-{node_ids[neighbor_idx]}",
+                                type='spring', 
+                                spring_type='near',
+                                weight=float(1 - distances[i][j]),
+                                group=group_type
+                            )
                             
-                        param_graph.G.add_edge(
-                            node_id, 
-                            node_ids[neighbor_idx], 
-                            type='spring', 
-                            spring_type='near',
-                            weight=1 - distances[i][j],
-                            group=group_type
-                        )
+                        # 2. Add furthest neighbors (ghost edges for separation)
+                        furthest_indices = np.argsort(full_distances[i])[-k_furthest:]
                         
-                    # 2. Add furthest neighbors (ghost edges for separation)
-                    furthest_indices = np.argsort(full_distances[i])[-k_furthest:]
-                    
-                    for neighbor_idx in furthest_indices:
-                        if i == neighbor_idx or neighbor_idx in near_indices:
-                            continue  # Prevent overlap on small graphs
-                        
-                        param_graph.G.add_edge(
-                            node_id, 
-                            node_ids[neighbor_idx], 
-                            type='spring', 
-                            spring_type='distant',
-                            weight=1 - full_distances[i][neighbor_idx],
-                            group=group_type
-                        )
+                        for neighbor_idx in furthest_indices:
+                            if i == neighbor_idx or neighbor_idx in near_indices:
+                                continue  # Prevent overlap on small graphs
+                            
+                            param_graph.G.add_edge(
+                                node_id, 
+                                node_ids[neighbor_idx], 
+                                id=f"edge-{node_id}-dist-{node_ids[neighbor_idx]}",
+                                type='spring', 
+                                spring_type='distant',
+                                weight=float(1 - full_distances[i][neighbor_idx]),
+                                group=group_type
+                            )
 
-            param_graph.save()
+                    param_graph.save()
             print("Embeddings updated and similarity edges created successfully")
 
         except Exception as e:

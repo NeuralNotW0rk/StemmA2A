@@ -206,7 +206,7 @@
             return audioNodeCommands(ele)
           case 'external':
             return externalNodeCommands(ele)
-          case 'path_node':
+          case 'local_path':
             return pathNodeCommands(ele)
           default:
             return nodeCommands(ele) // Fallback for any other node type

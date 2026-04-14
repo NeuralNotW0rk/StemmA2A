@@ -110,7 +110,7 @@ const defaultStyle: CssStyleDeclaration[] = [
     }
   },
   {
-    selector: 'node[type="path_node"]',
+    selector: 'node[type="local_path"]',
     style: {
       label: 'data(name)',
       'background-color': externalColor,
@@ -165,12 +165,11 @@ const defaultStyle: CssStyleDeclaration[] = [
     }
   },
   {
-    selector: 'edge[type="path"]',
+    selector: 'edge[type="local_path"]',
     style: {
       label: 'data(strength)',
       'line-color': externalColor,
-      'target-arrow-color': externalColor,
-      'line-style': 'dashed'
+      'target-arrow-color': externalColor
     }
   },
 

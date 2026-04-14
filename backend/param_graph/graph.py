@@ -2,7 +2,6 @@ import os
 import json
 from pathlib import Path
 from time import time
-import uuid
 
 import networkx as nx
 
@@ -72,7 +71,8 @@ class ParameterGraph:
         self.G.add_node(ele_id, **ele_attrs)
 
     def link(self, source: GraphElement, target: GraphElement, **kwargs):
-        edge_attrs = {"type": source.type, "id": str(uuid.uuid4())}
+        edge_id = f"{source.id}->{target.id}"
+        edge_attrs = {"type": source.type, "id": edge_id}
         edge_attrs.update(kwargs)
         self.G.add_edge(source.id, target.id, **edge_attrs)
         return {

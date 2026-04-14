@@ -1,9 +1,11 @@
 # backend/utils/audio.py
-import os
+from pathlib import Path
+from typing import Union
 import torchaudio
 
-def load_audio(device, audio_path: str, sample_rate):
-    if not os.path.exists(audio_path):
+def load_audio(device, audio_path: Union[str, Path], sample_rate: int):
+    audio_path = Path(audio_path)
+    if not audio_path.exists():
         raise RuntimeError(f"Audio file not found: {audio_path}")
 
     audio, file_sample_rate = torchaudio.load(audio_path)

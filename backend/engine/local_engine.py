@@ -202,14 +202,10 @@ class LocalEngine(Engine):
             raise FileNotFoundError(f"Audio file not found at {audio_path}")
 
         try:
-            import torchaudio
-
-            tensor, sample_rate = torchaudio.load(audio_path)
-            
-            embedding = self.encoder.encode_audio(tensor, sample_rate)
+            embedding = self.encoder.get_embedding(str(audio_path))
             
             new_embeddings = audio_artifact.embeddings.copy()
-            new_embeddings[self.encoder.embedding_type] = embedding
+            new_embeddings[self.encoder.embedding_type] = embedding.tolist()
             
             updated_artifact = replace(audio_artifact, embeddings=new_embeddings)
 

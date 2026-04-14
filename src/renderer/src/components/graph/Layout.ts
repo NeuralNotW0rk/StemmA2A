@@ -101,7 +101,7 @@ const layoutConfig: FcoseLayoutOptions = {
     return 0.1; // Default for your functional/audio-patch edges
   },
   // Nesting factor (multiplier) to compute ideal edge length for nested edges
-  nestingFactor: 0.1,
+  nestingFactor: 1.0,
   // Maximum number of iterations to perform - this is a suggested value and might be adjusted by the algorithm as required
   numIter: 2500,
   // For enabling tiling

@@ -75,7 +75,7 @@
       isWaitingForBackend = false
     } catch (error) {
       console.error('Failed to get backend health:', error)
-      const MAX_RETRIES = 10
+      const MAX_RETRIES = 20
       const RETRY_INTERVAL = 3000
       for (let i = 0; i < MAX_RETRIES; i++) {
         await new Promise((resolve) => setTimeout(resolve, RETRY_INTERVAL))
