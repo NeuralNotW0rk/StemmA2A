@@ -21,7 +21,7 @@
     isCreatingNewProject
   } from './utils/stores'
   import { startEmbeddingUpdate } from './utils/execution'
-  import { jobStore } from './utils/job-management'
+  import { jobStore, addJob, updateJob } from './utils/job-management'
   import type { ActionPanelView, ElementData, ErrorInfo } from './utils/types'
 
   let graphData: any = $state(null)
@@ -217,12 +217,26 @@
   }
 
   async function handleExpandPath(pathNodeId: string): Promise<void> {
+    // 1. Register the job locally before the backend blocks
+    const job = addJob('Expand Directory', { pathNodeId }, 'running')
+
     try {
-      await window.api.expandPath(pathNodeId)
+      const response = await window.api.expandPath(pathNodeId)
+
+      // 2. When the backend finally unblocks, mark it successful
+      job.status = 'success'
+      job.result = { id: response.directory_id, viewed: false }
+      updateJob(job)
+
       await refreshGraphData()
     } catch (error: any) {
       console.error('Error expanding path:', error)
       errorInInfoPanel = { title: 'Expand Path Failed', message: error.message || String(error) }
+
+      // 3. Capture any failures 
+      job.status = 'error'
+      job.error = { title: 'Expansion Failed', message: error.message || String(error) }
+      updateJob(job)
     }
   }
 

@@ -259,9 +259,60 @@
       onedgeSelect?.(edge.data())
     })
 
-    cy.on('dblclick', () => cy?.fit())
+    cy.on('dblclick', 'node, edge', (evt: EventObject) => {
+      customFit(evt.target, getDynamicPadding())
+    })
+
+    cy.on('dblclick', (evt: EventObject) => {
+      if (evt.target === cy) {
+        fitView()
+      }
+    })
 
     cy.on('dragfree', 'node', extractAndSavePositions)
+  }
+
+  function getDynamicPadding() {
+    const screenWidth = typeof window !== 'undefined' ? window.innerWidth : 1200
+    // ~320px panel + ~30px for margins/gaps. Limit to 30% of screen to keep graph visible on smaller resolutions.
+    const sidePadding = Math.min(350, screenWidth * 0.3)
+    return {
+      top: 60,
+      bottom: 60,
+      left: sidePadding,
+      right: sidePadding
+    }
+  }
+
+  function customFit(
+    eles: any,
+    padding: { top: number; bottom: number; left: number; right: number }
+  ): void {
+    if (!cy) return
+    const targetEles = eles && eles.length > 0 ? eles : cy.elements()
+    if (targetEles.length === 0) return
+
+    const bb = targetEles.boundingBox()
+    const w = Math.max(1, cy.width() - padding.left - padding.right)
+    const h = Math.max(1, cy.height() - padding.top - padding.bottom)
+
+    const zoomX = bb.w > 0 ? w / bb.w : cy.maxZoom()
+    const zoomY = bb.h > 0 ? h / bb.h : cy.maxZoom()
+    const zoom = Math.min(zoomX, zoomY)
+
+    const clampedZoom = Math.max(cy.minZoom(), Math.min(cy.maxZoom(), zoom))
+
+    const pan = {
+      x: padding.left + w / 2 - (bb.x1 + bb.w / 2) * clampedZoom,
+      y: padding.top + h / 2 - (bb.y1 + bb.h / 2) * clampedZoom
+    }
+
+    cy.animate({
+      zoom: clampedZoom,
+      pan: pan,
+      duration: 250,
+      easing: 'ease-out-quad'
+    })
   }
 
   function applyLayout(randomize = false, fit = false): void {
@@ -271,11 +322,26 @@
     const currentZoom = cy.zoom()
     const currentPan = { ...cy.pan() }
 
-    const layout = cy.layout({ ...layoutConfig, randomize, fit, animate: fit } as any)
+    // Filter out edges connected to local_path nodes so fcose perfectly tiles them
+    const localPathEdges = cy.edges().filter((edge) => {
+      return (
+        edge.source().data('type') === 'local_path' || edge.target().data('type') === 'local_path'
+      )
+    })
+    const elementsToLayout = cy.elements().difference(localPathEdges)
+
+    const layout = elementsToLayout.layout({ 
+      ...layoutConfig, 
+      randomize, 
+      fit: false, // Prevent the layout algorithm from doing its own bounding box fitting
+      animate: true
+    } as any)
     layout.on('layoutstop', () => {
       cy?.nodes().unlock()
       if (!fit) {
         cy?.viewport({ zoom: currentZoom, pan: currentPan })
+      } else {
+        customFit(cy?.elements(), getDynamicPadding())
       }
       extractAndSavePositions()
     })
@@ -392,7 +458,7 @@
     } else {
       cy.nodes().unlock()
       if (wasEmpty) {
-        cy.fit(undefined, 50)
+        customFit(undefined, getDynamicPadding())
       }
     }
   }
@@ -404,11 +470,11 @@
   })
 
   export function tidyView(): void {
-    applyLayout(false, true)
+    applyLayout(false, false)
   }
 
   export function fitView(): void {
-    cy?.fit()
+    customFit(undefined, getDynamicPadding())
   }
 
   export function centerView(): void {

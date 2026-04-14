@@ -142,20 +142,21 @@ def load_project():
         if not project_path.is_dir():
             return jsonify({"error": f"Project path '{project_path_str}' does not exist or is not a directory."}), 404
 
-        param_graph = ParameterGraph(str(project_path))
-        initialize_engine(str(project_path))
+        with graph_lock:
+            param_graph = ParameterGraph(str(project_path))
+            initialize_engine(str(project_path))
 
-        if param_graph.load():
-            return jsonify({
-                "message": f"Project '{project_path.name}' loaded successfully.",
-                "project_name": project_path.name,
-                "project_path": str(project_path),
-                "success": True
-            })
-        
-        # If load fails, it might be a directory without a project file yet.
-        # We can still "load" it to create one.
-        param_graph.save()
+            if param_graph.load():
+                return jsonify({
+                    "message": f"Project '{project_path.name}' loaded successfully.",
+                    "project_name": project_path.name,
+                    "project_path": str(project_path),
+                    "success": True
+                })
+            
+            # If load fails, it might be a directory without a project file yet.
+            # We can still "load" it to create one.
+            param_graph.save()
 
         return jsonify({
             "message": f"New project '{project_path.name}' created and loaded.",
@@ -191,10 +192,11 @@ def create_project():
 
         final_project_name = project_name or project_path.name
 
-        param_graph = ParameterGraph(str(project_path))
-        param_graph.project_name = final_project_name
-        initialize_engine(str(project_path))
-        param_graph.save()
+        with graph_lock:
+            param_graph = ParameterGraph(str(project_path))
+            param_graph.project_name = final_project_name
+            initialize_engine(str(project_path))
+            param_graph.save()
 
         return jsonify({
             "message": f"Project '{final_project_name}' created successfully.",
@@ -238,7 +240,8 @@ def get_graph():
         return jsonify({"error": "No project loaded"}), 400
     
     try:
-        graph_data = param_graph.to_json(mode='batch')
+        with graph_lock:
+            graph_data = param_graph.to_json(mode='batch')
         return jsonify({
             "message": "success",
             "graph_data": graph_data,
@@ -273,14 +276,15 @@ def batch_elements():
             elif member_type != member.type:
                 return jsonify({"error": "All members must be of the same type"}), 400
     
-        batch = Batch(id=batch_id, member_ids=member_ids, member_type=member_type)
-        param_graph.add_element(batch)
+        with graph_lock:
+            batch = Batch(id=batch_id, member_ids=member_ids, member_type=member_type)
+            param_graph.add_element(batch)
 
-        # Update parents
-        for member_id in member_ids:
-            param_graph.update_element(member_id, {"parent": batch_id})
-        
-        param_graph.save()
+            # Update parents
+            for member_id in member_ids:
+                param_graph.update_element(member_id, {"parent": batch_id})
+            
+            param_graph.save()
 
         return jsonify({
             "message": "Batch created successfully",
@@ -321,8 +325,9 @@ async def import_model():
         engine = engine_provider.get_engine()
         model_artifact = await engine.register_model(adapter_name, **data)
 
-        param_graph.add_element(model_artifact)
-        param_graph.save()
+        with graph_lock:
+            param_graph.add_element(model_artifact)
+            param_graph.save()
         
         return jsonify({
             "message": "Model registered successfully",
@@ -577,8 +582,9 @@ def add_external_source():
         element_id = uid_generator.from_string(str(path_obj.resolve()))
         path_node = LocalPath(id=element_id, name=path_obj.name, path=str(path_obj))
         
-        param_graph.add_element(path_node)
-        param_graph.save()
+        with graph_lock:
+            param_graph.add_element(path_node)
+            param_graph.save()
         
         # Trigger an incremental embedding update
         trigger_embedding_update()
@@ -606,8 +612,9 @@ def rescan_source():
         if not source_name:
             return jsonify({"error": "source_name is required"}), 400
         
-        param_graph.scan_external_source(source_name)
-        param_graph.save()
+        with graph_lock:
+            param_graph.scan_external_source(source_name)
+            param_graph.save()
         
         # Trigger an incremental embedding update
         trigger_embedding_update()
@@ -1047,8 +1054,9 @@ def update_element():
         if not element_name:
             return jsonify({"error": "name is required"}), 400
         
-        param_graph.update_element(element_name, attributes)
-        param_graph.save()
+        with graph_lock:
+            param_graph.update_element(element_name, attributes)
+            param_graph.save()
         
         return jsonify({
             "message": "Element updated successfully",
@@ -1074,10 +1082,11 @@ def save_node_positions():
         if not positions:
             return jsonify({"error": "No positions provided"}), 400
         
-        for node_id, pos in positions.items():
-            param_graph.update_element(node_id, {"position": pos})
-            
-        param_graph.save()
+        with graph_lock:
+            for node_id, pos in positions.items():
+                param_graph.update_element(node_id, {"position": pos})
+                
+            param_graph.save()
         
         return jsonify({
             "message": "Node positions saved successfully",
@@ -1097,8 +1106,9 @@ def remove_element(element_id):
         return jsonify({"error": "No project loaded"}), 400
 
     try:
-        param_graph.remove_element(element_id)
-        param_graph.save()
+        with graph_lock:
+            param_graph.remove_element(element_id)
+            param_graph.save()
 
         return jsonify({
             "message": "Element removed successfully",
