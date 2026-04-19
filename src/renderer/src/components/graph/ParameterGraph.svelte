@@ -102,7 +102,6 @@
       container: graphContainer,
       style: graphStyle,
       layout: { name: 'grid' },
-      wheelSensitivity: 0.2,
       maxZoom: 3,
       minZoom: 0.1
     })
@@ -322,17 +321,11 @@
     const currentZoom = cy.zoom()
     const currentPan = { ...cy.pan() }
 
-    // Filter out edges connected to local_path nodes so fcose perfectly tiles them
-    const localPathEdges = cy.edges().filter((edge) => {
-      return (
-        edge.source().data('type') === 'local_path' || edge.target().data('type') === 'local_path'
-      )
-    })
-    const elementsToLayout = cy.elements().difference(localPathEdges)
+    const elementsToLayout = cy.elements()
 
-    const layout = elementsToLayout.layout({ 
-      ...layoutConfig, 
-      randomize, 
+    const layout = elementsToLayout.layout({
+      ...layoutConfig,
+      randomize,
       fit: false, // Prevent the layout algorithm from doing its own bounding box fitting
       animate: true
     } as any)

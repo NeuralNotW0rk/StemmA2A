@@ -32,6 +32,7 @@ from engine.encoders.clap_encoder import CLAPEncoder
 from utils.audio import load_audio
 from utils.form import create_dynamic_model
 from utils.uid import XXH3_64
+from utils.semantic_interrogation import SemanticInterrogator
 
 app = Flask(__name__)
 CORS(app)
@@ -793,6 +794,13 @@ def trigger_embedding_update(force_recalculate=False, background=True):
             # Instantiate encoder only once per task run
             clap_encoder = CLAPEncoder()
             
+            # Initialize interrogator for semantic edge labels
+            interrogator = SemanticInterrogator(device_accelerator)
+            bank_path = Path(__file__).parent / "data" / "semantic_transitions_bank.pt"
+            has_label_bank = bank_path.exists()
+            if has_label_bank:
+                interrogator.load_bank_from_disk(str(bank_path))
+            
             for group_type, embedding_type in SIMILARITY_GROUPS.items():
                 # 1. Compute embeddings ONLY for nodes that need them
                 with graph_lock:
@@ -846,6 +854,11 @@ def trigger_embedding_update(force_recalculate=False, background=True):
 
                 node_ids = list(group_nodes.keys())
                 all_latents = np.array(list(group_nodes.values()))
+                
+                # L2 Normalize all latents to project them onto the unit hypersphere
+                norms = np.linalg.norm(all_latents, axis=1, keepdims=True)
+                all_latents = all_latents / np.where(norms == 0, 1e-10, norms)
+                
                 n_nodes = len(node_ids)
                 
                 # Dynamically scale k based on graph size (logarithmic scaling)
@@ -868,11 +881,21 @@ def trigger_embedding_update(force_recalculate=False, background=True):
                 with graph_lock:
                     for i, node_id in enumerate(node_ids):
                         near_indices = set(indices[i])
+                        emb_A = all_latents[i]
                         
                         # 1. Add nearest neighbors (similar nodes)
                         for j, neighbor_idx in enumerate(indices[i]):
                             if i == neighbor_idx:
                                 continue
+                                
+                            source_label = ""
+                            if has_label_bank:
+                                emb_B = all_latents[neighbor_idx]
+                                diff_A_to_B = torch.tensor(emb_B - emb_A, dtype=torch.float32)
+                                
+                                res_A = interrogator.interrogate(diff_A_to_B, k=1)
+                                
+                                source_label = res_A[0][0] if res_A else ""
                                 
                             param_graph.G.add_edge(
                                 node_id, 
@@ -881,7 +904,8 @@ def trigger_embedding_update(force_recalculate=False, background=True):
                                 type='spring', 
                                 spring_type='near',
                                 weight=float(1 - distances[i][j]),
-                                group=group_type
+                                group=group_type,
+                                source_label=source_label
                             )
                             
                         # 2. Add furthest neighbors (ghost edges for separation)
@@ -891,6 +915,15 @@ def trigger_embedding_update(force_recalculate=False, background=True):
                             if i == neighbor_idx or neighbor_idx in near_indices:
                                 continue  # Prevent overlap on small graphs
                             
+                            source_label = ""
+                            if has_label_bank:
+                                emb_B = all_latents[neighbor_idx]
+                                diff_A_to_B = torch.tensor(emb_B - emb_A, dtype=torch.float32)
+                                
+                                res_A = interrogator.interrogate(diff_A_to_B, k=1)
+                                
+                                source_label = res_A[0][0] if res_A else ""
+                            
                             param_graph.G.add_edge(
                                 node_id, 
                                 node_ids[neighbor_idx], 
@@ -898,7 +931,8 @@ def trigger_embedding_update(force_recalculate=False, background=True):
                                 type='spring', 
                                 spring_type='distant',
                                 weight=float(1 - full_distances[i][neighbor_idx]),
-                                group=group_type
+                                group=group_type,
+                                source_label=source_label
                             )
 
                     param_graph.save()

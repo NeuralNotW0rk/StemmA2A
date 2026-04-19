@@ -138,7 +138,16 @@ const defaultStyle: CssStyleDeclaration[] = [
     style: {
       'line-color': '#ffff00',
       'opacity': 'mapData(weight, 0, 1, 0, 1)',
-      'curve-style': 'haystack' // Efficient for invisible edges
+      'curve-style': 'straight', // Changed from haystack to support edge labels
+      'source-label': 'data(source_label)',
+      'source-text-offset': 20,
+      'source-text-rotation': 'autorotate',
+      'target-arrow-shape': 'none',
+      'font-size': 5,
+      'text-background-color': '#111111',
+      'text-background-opacity': 0.8,
+      'text-background-padding': 4,
+      'text-background-shape': 'roundrectangle',
     }
   },
   {

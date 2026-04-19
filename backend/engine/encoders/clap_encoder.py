@@ -83,3 +83,13 @@ class CLAPEncoder(Encoder):
             embedding = self._model.get_audio_embedding_from_filelist(x=[audio_path])
             
         return torch.from_numpy(embedding).squeeze()
+
+    def get_text_embedding(self, texts: list[str]) -> torch.Tensor:
+        if self._model is None:
+            self.load_model()
+            
+        with torch.no_grad():
+            embedding = self._model.get_text_embedding(texts)
+            
+        return torch.from_numpy(embedding)
+
