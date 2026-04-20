@@ -147,16 +147,8 @@ class StableAudioAdapter(ModelAdapter):
             # Load audio
             audio_path = Path(init_audio_element.file.path)
             if audio_path and audio_path.exists():
-                init_audio_tensor, init_audio_sample_rate = torchaudio.load(audio_path)
-                init_audio_tensor = init_audio_tensor.to(self.device)
-
-                # Resample if necessary
-                if init_audio_sample_rate != sample_rate:
-                    resampler = torchaudio.transforms.Resample(
-                        orig_freq=init_audio_sample_rate, 
-                        new_freq=sample_rate
-                    ).to(self.device)
-                    init_audio_tensor = resampler(init_audio_tensor)
+                from utils.audio import load_audio
+                init_audio_tensor = load_audio(self.device, audio_path, sample_rate)
                 
                 args["init_audio"] = (sample_rate, init_audio_tensor)
                 args["init_noise_level"] = noise_level
