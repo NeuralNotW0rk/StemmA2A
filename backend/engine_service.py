@@ -3,6 +3,7 @@ import json
 import os
 import traceback
 from pathlib import Path
+import logging
 
 from flask import Flask, make_response, request, jsonify, send_file
 from flask_cors import CORS
@@ -17,6 +18,14 @@ from param_graph.registry import resolve_element
 
 app = Flask(__name__)
 CORS(app)
+
+# Filter out health check and job status logs
+class QuietLogFilter(logging.Filter):
+    def filter(self, record):
+        msg = record.getMessage()
+        return msg.find('/health') == -1 and msg.find('/job_status') == -1
+
+logging.getLogger('werkzeug').addFilter(QuietLogFilter())
 
 # Global state
 device_type_accelerator = "cuda" if torch.cuda.is_available() else "cpu"
@@ -42,6 +51,7 @@ hf_cache_dir = data_cache_root / "huggingface"
 hf_cache_dir.mkdir(parents=True, exist_ok=True)
 os.environ["HF_HOME"] = str(hf_cache_dir)
 os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+os.environ["HF_HUB_DISABLE_SYMLINKS"] = "1"
 
 # Initialize the engine provider with the data cache path.
 engine_provider = EngineProvider(data_root=str(data_cache_root))

@@ -37,13 +37,14 @@ from utils.semantic_interrogation import SemanticInterrogator
 app = Flask(__name__)
 CORS(app)
 
-# Filter out health check logs
-class NoHealthCheckLogFilter(logging.Filter):
+# Filter out health check and job status logs
+class QuietLogFilter(logging.Filter):
     def filter(self, record):
-        return record.getMessage().find('/health') == -1
+        msg = record.getMessage()
+        return msg.find('/health') == -1 and msg.find('/job_status') == -1
 
 # Add the filter to the Werkzeug logger (used by Flask's dev server)
-logging.getLogger('werkzeug').addFilter(NoHealthCheckLogFilter())
+logging.getLogger('werkzeug').addFilter(QuietLogFilter())
 
 # Add a unique ID for the server instance
 SERVER_INSTANCE_ID = ''.join(random.choices(string.ascii_letters + string.digits, k=16))
@@ -69,9 +70,10 @@ hf_cache_dir = data_cache_root / "huggingface"
 hf_cache_dir.mkdir(parents=True, exist_ok=True)
 os.environ["HF_HOME"] = str(hf_cache_dir)
 os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
+os.environ["HF_HUB_DISABLE_SYMLINKS"] = "1"
 
 # Global state
-device_type_accelerator = "cpu"
+device_type_accelerator = "cuda" if torch.cuda.is_available() else "cpu"
 device_accelerator = torch.device(device_type_accelerator)
 # A default sample rate for processing and playback
 APP_SAMPLE_RATE = 48000
@@ -87,6 +89,7 @@ engine_provider: EngineProvider = None
 
 # Context storage for background jobs
 active_jobs = {}
+local_jobs = {}
 
 graph_lock = threading.Lock()
 

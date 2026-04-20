@@ -1,6 +1,5 @@
 <!-- src/renderer/src/components/views/ImportModelView.svelte -->
 <script lang="ts">
-  import { onMount } from 'svelte'
   import type { FormConfig } from '../../utils/forms'
   import DynamicForm from '../DynamicForm.svelte'
 
