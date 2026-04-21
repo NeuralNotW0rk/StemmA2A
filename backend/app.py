@@ -394,6 +394,8 @@ async def generate():
             form_config, dumped_params, param_graph
         )
 
+        print(f"Job {job_id} - resolved elements: {resolved_elements}")
+
         # Cache external audio files used in this step, and resolve to cache if missing
         for i, element in enumerate(resolved_elements):
             if isinstance(element, Audio):

@@ -32,13 +32,13 @@ class CLAPEncoder(Encoder):
             try:
                 # Fast path: attempt to load from local cache to bypass network overhead
                 self._processor = ClapProcessor.from_pretrained(model_id, local_files_only=True)
-                self._model = ClapModel.from_pretrained(model_id, local_files_only=True).to(self.device)
+                self._model = ClapModel.from_pretrained(model_id, local_files_only=True, use_safetensors=True).to(self.device)
                 print("CLAP model loaded directly from local cache.")
             except Exception:
                 # Fallback: go online to download and cache if not fully present
                 print("CLAP model not fully cached. Downloading from Hugging Face Hub...")
                 self._processor = ClapProcessor.from_pretrained(model_id)
-                self._model = ClapModel.from_pretrained(model_id).to(self.device)
+                self._model = ClapModel.from_pretrained(model_id, use_safetensors=True).to(self.device)
                 print("CLAP model downloaded and loaded.")
                 
             self._model.eval()
@@ -69,11 +69,17 @@ class CLAPEncoder(Encoder):
         # HF Processor expects a 1D numpy array
         audio_input = waveform.squeeze().numpy()
         
-        inputs = self._processor(audios=audio_input, return_tensors="pt", sampling_rate=self.target_sr)
+        inputs = self._processor(audio=audio_input, return_tensors="pt", sampling_rate=self.target_sr)
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
         with torch.no_grad():
-            embedding = self._model.get_audio_features(**inputs)
+            outputs = self._model.get_audio_features(**inputs)
+            
+        # Address the BaseModelOutputWithPooling directly
+        if not isinstance(outputs, torch.Tensor):
+            embedding = outputs.pooler_output
+        else:
+            embedding = outputs
             
         return embedding.squeeze()
 
@@ -85,6 +91,12 @@ class CLAPEncoder(Encoder):
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
         
         with torch.no_grad():
-            embedding = self._model.get_text_features(**inputs)
+            outputs = self._model.get_text_features(**inputs)
+            
+        # Address the BaseModelOutputWithPooling directly
+        if not isinstance(outputs, torch.Tensor):
+            embedding = outputs.pooler_output
+        else:
+            embedding = outputs
             
         return embedding
