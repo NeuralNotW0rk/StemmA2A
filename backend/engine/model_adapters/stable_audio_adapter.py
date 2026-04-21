@@ -84,6 +84,13 @@ class StableAudioAdapter(ModelAdapter):
         if verify and self.uid_generator.from_module(self.model) != info.id:
             raise UIDMismatchError("Checkpoint UID mismatch")
 
+    def cleanup(self):
+        if self.model:
+            del self.model
+            self.model = None
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
     def generate(self, **kwargs) -> tuple[Audio, torch.Tensor]:
         model = self.model.to(self.device)
         sample_rate = self.model_info.config["sample_rate"]
@@ -154,17 +161,21 @@ class StableAudioAdapter(ModelAdapter):
                 args["init_noise_level"] = noise_level
 
         # Generate stereo audio
-        output = generate_diffusion_cond(model, **args)
+        with torch.no_grad():
+            output = generate_diffusion_cond(model, **args)
 
-        # Trim silence
-        output = output[:,:,:int(seconds_total*sample_rate)]
+            # Trim silence
+            output = output[:,:,:int(seconds_total*sample_rate)]
 
-        # Rearrange audio batch to a single sequence
-        print("Generation complete, rearranging...")
-        output = rearrange(output, "b d n -> d (b n)")
+            # Rearrange audio batch to a single sequence
+            print("Generation complete, rearranging...")
+            output = rearrange(output, "b d n -> d (b n)")
 
-        # Peak normalize, clip, convert to int16
-        output = output.to(torch.float32).div(torch.max(torch.abs(output))).clamp(-1, 1).mul(32767).to(torch.int16).cpu()
+            # Peak normalize, clip, convert to int16
+            output = output.to(torch.float32).div(torch.max(torch.abs(output))).clamp(-1, 1).mul(32767).to(torch.int16).cpu()
+            
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
         # Create audio artifact
         content_uid = self.uid_generator.from_tensor(output)

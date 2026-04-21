@@ -21,8 +21,10 @@ class ModelCache:
             # Evict oldest item
             oldest_id, oldest_adapter = self.cache.popitem(last=False)
             print(f"Evicting model {oldest_id} from cache.")
-            # In the future, we might want to call a cleanup method on the adapter
-            # to release GPU memory explicitly.
+            
+            # Explicitly cleanup resources (like GPU memory) before deletion
+            if hasattr(oldest_adapter, 'cleanup'):
+                oldest_adapter.cleanup()
             del oldest_adapter 
 
         print(f"Loading and caching model {model_id}.")

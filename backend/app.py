@@ -26,7 +26,7 @@ from param_graph.elements.base_elements import Asset
 from param_graph.elements.collections.batch_element import Batch
 from param_graph.elements.collections.directory_element import Directory
 from param_graph.elements.local_path import LocalPath
-from param_graph.utils import extract_graph_elements, save_artifact_asset, resolve_element
+from param_graph.utils import save_artifact_asset, resolve_element
 from engine.engine_provider import EngineProvider
 from engine.encoders.clap_encoder import CLAPEncoder
 from utils.audio import load_audio
@@ -401,7 +401,6 @@ async def generate():
                         node_engine_args[f"{field_name}_element"] = element
 
         resolved_elements = list(node_engine_args.values())
-        print(f"Job {job_id} - resolved elements: {resolved_elements}")
 
         # Cache external audio files used in this step, and resolve to cache if missing
         for arg_name, element in node_engine_args.items():
@@ -510,6 +509,7 @@ async def get_job_status(job_id):
                     batch_node_attrs['member_ids'].append(final_artifact.id)
 
                 for element in job_context.get("linked_elements", []):
+                    print(f"Linking {element.id} to {final_artifact.id}")
                     param_graph.link(element, final_artifact)
                 param_graph.save()
             
