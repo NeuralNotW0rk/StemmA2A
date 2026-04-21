@@ -11,47 +11,6 @@ if TYPE_CHECKING:
     from .graph import ParameterGraph
 
 
-def extract_graph_elements(
-    form_config: List[Dict[str, Any]],
-    params: Dict[str, Any],
-    param_graph: "ParameterGraph",
-) -> Tuple[Dict[str, GraphElement], List[GraphElement]]:
-    """
-    Extracts graph elements from a dictionary of parameters based on a form config.
-
-    It finds parameters that correspond to "node" types in the form config,
-    retrieves the full GraphElement object from the ParameterGraph, and returns
-    them. It also removes the processed node ID from the input `params` dict.
-
-    Args:
-        form_config: The form configuration list that defines field types.
-        params: A dictionary of parameters, where some values are node IDs.
-        param_graph: The ParameterGraph instance to resolve node IDs from.
-
-    Returns:
-        A tuple containing:
-        - A dictionary of engine arguments for the resolved elements (e.g., {"foo_element": <GraphElement>}).
-        - A list of the resolved GraphElement objects.
-    """
-    engine_args: Dict[str, GraphElement] = {}
-    linked_elements: List[GraphElement] = []
-
-    for field_config in form_config:
-        if field_config.get("type") == "node":
-            field_name = field_config.get("name")
-            node_id = params.pop(field_name, None)
-
-            if node_id:
-                # Convention: form field 'foo' maps to engine arg 'foo_element'
-                arg_name = f"{field_name}_element"
-                element = param_graph.get_element(node_id)
-
-                engine_args[arg_name] = element
-                linked_elements.append(element)
-
-    return engine_args, linked_elements
-
-
 def resolve_elements_from_dicts(
     params: Dict[str, Any]
 ) -> Tuple[Dict[str, Any], Dict[str, GraphElement]]:

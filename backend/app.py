@@ -390,21 +390,20 @@ async def generate():
         validated_params = DynamicArgsModel.model_validate(json_data)
         dumped_params = validated_params.model_dump()
         
-        node_engine_args, resolved_elements = extract_graph_elements(
-            form_config, dumped_params, param_graph
-        )
+        node_engine_args = {}
+        for field in form_config:
+            if field.get("type") == "node":
+                field_name = field.get("name")
+                node_id = dumped_params.pop(field_name, None)
+                if node_id:
+                    element = param_graph.get_element(node_id)
+                    if element:
+                        node_engine_args[f"{field_name}_element"] = element
 
+        resolved_elements = list(node_engine_args.values())
         print(f"Job {job_id} - resolved elements: {resolved_elements}")
 
         # Cache external audio files used in this step, and resolve to cache if missing
-        for i, element in enumerate(resolved_elements):
-            if isinstance(element, Audio):
-                cache_used_audio(element.id)
-                valid_path = resolve_audio_path(element.id)
-                if valid_path and str(valid_path) != element.file.path:
-                    element.file = replace(element.file, path=str(valid_path))
-                    resolved_elements[i] = element
-
         for arg_name, element in node_engine_args.items():
             if isinstance(element, Audio):
                 cache_used_audio(element.id)
@@ -412,6 +411,7 @@ async def generate():
                 if valid_path and str(valid_path) != element.file.path:
                     element.file = replace(element.file, path=str(valid_path))
                     node_engine_args[arg_name] = element
+            
             if not isinstance(element, (Audio, Model)):
                 field_name = arg_name.removesuffix("_element")
                 return jsonify({"error": f"Node '{element.id}' for field '{field_name}' is not a valid artifact."}), 400
