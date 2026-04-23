@@ -59,11 +59,8 @@
   }
 
   $effect(() => {
-    if (cy) {
-      // Depend on graphData so this runs after nodes are added.
-      if (!graphData) return
-
-      cy.nodes().removeClass('highlighted').removeClass('dimmed')
+    if (isInitialized && cy && graphData) {
+      cy.elements().removeClass('highlighted dimmed')
 
       if (isSelecting && selectionFilter) {
         const selector = buildSelector(selectionFilter)
@@ -74,6 +71,7 @@
 
           highlightedNodes.addClass('highlighted')
           cy.nodes().not(highlightedNodes).not(ancestorNodes).addClass('dimmed')
+          cy.edges().addClass('dimmed')
         }
 
         if (selectionBoundNodeId) {
@@ -390,7 +388,9 @@
     cy.batch(() => {
       cy.elements().remove()
 
-      let processedElements = newElements.map((ele: any) => {
+      const seenProxyEdges = new Set<string>()
+
+      let processedElements = newElements.reduce((acc: any[], ele: any) => {
         // Backend saves position inside element 'data' attributes, but Cytoscape expects it at the root
         if (ele.data && ele.data.position) {
           ele.position = { ...ele.data.position }
@@ -401,24 +401,33 @@
 
           // Ignore spring edges so they always connect to specific nodes, not parent batches
           if (edgeData.type === 'spring') {
-            return ele
+            acc.push(ele)
+            return acc
           }
 
           // Find the actual nodes in your newElements list to check for parents
           const targetNode = newElements.find((n) => n.data.id === edgeData.target)
+          const target = targetNode?.data.parent || edgeData.target
 
-          return {
+          // Prevent alpha-stacking visual bugs by deduplicating edges that share the same endpoints
+          const sig = `${edgeData.source}->${target}:${edgeData.type}`
+          if (seenProxyEdges.has(sig)) return acc
+          seenProxyEdges.add(sig)
+
+          acc.push({
             ...ele,
             data: {
               ...edgeData,
               // Redirect target to parent if it exists, but keep original source
               source: edgeData.source,
-              target: targetNode?.data.parent || edgeData.target
+              target: target
             }
-          }
+          })
+        } else {
+          acc.push(ele)
         }
-        return ele
-      })
+        return acc
+      }, [])
 
       const addedElements = cy.add(processedElements)
 

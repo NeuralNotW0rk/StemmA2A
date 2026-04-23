@@ -24,6 +24,8 @@
     return ($cyInstanceStore.$id(node).data() as NodeData) ?? null
   })
 
+  let isSelecting = $state(false)
+
   $effect(() => {
     const cy = $cyInstanceStore
     const target = resolvedNode
@@ -56,9 +58,20 @@
     }
   })
 
+  $effect(() => {
+    const unsub = selectionStore.subscribe((state) => {
+      if (!state.isSelecting) {
+        isSelecting = false
+      }
+    })
+    return unsub
+  })
+
   function selectNodeFromGraph(): void {
+    isSelecting = true
     selectionStore.startSelection(filter, resolvedNode?.id ?? null, (selected) => {
       node = selected as NodeData
+      isSelecting = false
     })
   }
 
@@ -102,17 +115,19 @@
 
 <div class="form-field">
   <label for={id}>{label}</label>
-  <div class="model-selector-wrapper">
+  <div class="model-selector-wrapper" class:is-selecting={isSelecting}>
     <input
       {id}
       type="text"
       readonly
-      value={resolvedNode ? resolvedNode.alias || resolvedNode.name : 'None selected'}
+      value={resolvedNode ? resolvedNode.alias || resolvedNode.name : ''}
       onclick={focusNode}
       class:has-node={!!resolvedNode}
-      placeholder="Select a node..."
+      placeholder={isSelecting ? 'Selecting in graph...' : 'None selected'}
     />
-    <button type="button" onclick={selectNodeFromGraph}> Select </button>
+    <button type="button" onclick={selectNodeFromGraph} class:primary={isSelecting}>
+      {isSelecting ? 'Selecting...' : 'Select'}
+    </button>
   </div>
 </div>
 
@@ -150,5 +165,9 @@
     flex-shrink: 0;
     padding: 0.5rem 1rem;
     cursor: pointer;
+  }
+  .model-selector-wrapper.is-selecting input {
+    border-color: var(--color-primary, #999);
+    box-shadow: inset 0 0 0 1px var(--color-primary, #999);
   }
 </style>

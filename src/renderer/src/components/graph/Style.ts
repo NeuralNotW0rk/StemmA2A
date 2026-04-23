@@ -169,8 +169,7 @@ const defaultStyle: CssStyleDeclaration[] = [
     style: {
       label: 'data(strength)',
       'line-color': audioColor,
-      'target-arrow-color': audioColor,
-      'line-style': 'dashed'
+      'target-arrow-color': audioColor
     }
   },
   {
@@ -199,7 +198,7 @@ const defaultStyle: CssStyleDeclaration[] = [
     }
   },
   {
-    selector: 'node.dimmed',
+    selector: '.dimmed, edge.dimmed, edge[type="spring"].dimmed',
     style: {
       opacity: 0.4
     }
