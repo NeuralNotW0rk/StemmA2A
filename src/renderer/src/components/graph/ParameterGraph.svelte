@@ -2,6 +2,7 @@
 <script lang="ts">
   /* eslint-disable @typescript-eslint/no-explicit-any */
   import { onMount, onDestroy } from 'svelte'
+  import { SvelteSet } from 'svelte/reactivity'
   import cytoscape, { type EventObject, type Singular } from 'cytoscape'
   import fcose from 'cytoscape-fcose'
   import cxtmenu from 'cytoscape-cxtmenu'
@@ -44,7 +45,7 @@
   let isInitialized = $state(false)
 
   let isSelecting = $state(false)
-  let selectionFilter: Record<string, string | number | boolean> | null = $state(null)
+  let selectionFilter: Record<string, any> | null = $state(null)
   let selectionBoundNodeId: string | null = $state(null)
   selectionStore.subscribe((store) => {
     isSelecting = store.isSelecting
@@ -52,9 +53,13 @@
     selectionBoundNodeId = store.boundNodeId
   })
 
-  function buildSelector(filter: Record<string, string | number | boolean>): string {
+  function buildSelector(filter: Record<string, any>): string {
     return Object.entries(filter)
-      .map(([key, value]) => `[${key} = "${value}"]`)
+      .map(([key, value]) => {
+        if (value == null) return `[!${key}]`
+        if (typeof value === 'string') return `[${key} = "${value}"]`
+        return `[${key} = ${value}]` // Omit quotes for numbers and booleans
+      })
       .join('')
   }
 
@@ -157,10 +162,14 @@
         content: 'Audio to Audio',
         select: () => onaudioNodeSelectForGeneration?.(ele.data(), false)
       })
-      specificCommands.push({
-        content: 'Group',
-        select: () => onstartBatching?.(ele.data())
-      })
+
+      // Only allow batch creation for independent artifacts
+      if (!ele.data('parent')) {
+        specificCommands.push({
+          content: 'Create Batch',
+          select: () => onstartBatching?.(ele.data())
+        })
+      }
 
       // Inherits from nodeCommands
       return [...specificCommands, ...nodeCommands(ele)]
@@ -179,6 +188,14 @@
       {
         content: 'Expand',
         select: () => onexpandPath?.(ele.id())
+      },
+      ...nodeCommands(ele)
+    ]
+
+    const batchNodeCommands = (ele: Singular): Command[] => [
+      {
+        content: 'Update Batch',
+        select: () => onstartBatching?.(ele.data())
       },
       ...nodeCommands(ele)
     ]
@@ -205,6 +222,8 @@
             return externalNodeCommands(ele)
           case 'local_path':
             return pathNodeCommands(ele)
+          case 'batch':
+            return batchNodeCommands(ele)
           default:
             return nodeCommands(ele) // Fallback for any other node type
         }
@@ -232,14 +251,15 @@
       const nodeData = node.data()
 
       if (isSelecting) {
-        if (
-          selectionFilter &&
-          Object.entries(selectionFilter).every(([key, value]) => node.data(key) === value)
-        ) {
-          selectionStore.resolveSelection(nodeData)
+        const selector = selectionFilter ? buildSelector(selectionFilter) : ''
+        console.log('[ParameterGraph] Node tapped during selection:', nodeData.id, '| Selector:', selector)
+
+        if (!selector || node.is(selector)) {
+          console.log('[ParameterGraph] Valid node clicked. Resolving selection:', nodeData)
+          // Pass a clean clone of the data to avoid Svelte 5 proxy / Cytoscape internal conflicts
+          selectionStore.resolveSelection({ ...nodeData })
         } else {
-          // Maybe provide some feedback for wrong selection
-          console.log(`Select a node that matches the filter.`)
+          console.warn(`[ParameterGraph] Invalid selection. Node does not match filter.`)
         }
         return // Prevent default action
       }
@@ -269,7 +289,7 @@
     cy.on('dragfree', 'node', extractAndSavePositions)
   }
 
-  function getDynamicPadding() {
+  function getDynamicPadding(): { top: number; bottom: number; left: number; right: number } {
     const screenWidth = typeof window !== 'undefined' ? window.innerWidth : 1200
     // ~320px panel + ~30px for margins/gaps. Limit to 30% of screen to keep graph visible on smaller resolutions.
     const sidePadding = Math.min(350, screenWidth * 0.3)
@@ -388,7 +408,7 @@
     cy.batch(() => {
       cy.elements().remove()
 
-      const seenProxyEdges = new Set<string>()
+      const seenProxyEdges = new SvelteSet<string>()
 
       let processedElements = newElements.reduce((acc: any[], ele: any) => {
         // Backend saves position inside element 'data' attributes, but Cytoscape expects it at the root

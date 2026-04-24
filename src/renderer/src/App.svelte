@@ -150,6 +150,19 @@
     }
   }
 
+  async function handleUpdateLabels(): Promise<void> {
+    try {
+      await window.api.updateLabels()
+      await refreshGraphData()
+    } catch (error: any) {
+      console.error('Failed to update labels:', error)
+      errorInInfoPanel = {
+        title: 'Update Labels Failed',
+        message: error?.message || String(error)
+      }
+    }
+  }
+
   function closeActionPanel(): void {
     actionPanelView = 'none'
     initiatorNodeStore.set(null)
@@ -233,7 +246,7 @@
       console.error('Error expanding path:', error)
       errorInInfoPanel = { title: 'Expand Path Failed', message: error.message || String(error) }
 
-      // 3. Capture any failures 
+      // 3. Capture any failures
       job.status = 'error'
       job.error = { title: 'Expansion Failed', message: error.message || String(error) }
       updateJob(job)
@@ -332,7 +345,7 @@
       return 'Confirm Removal'
     }
     if (actionPanelView === 'batching') {
-      return 'Create Batch'
+      return ($initiatorNodeStore?.type as string) === 'batch' ? 'Update Batch' : 'Create Batch'
     }
     return 'Action'
   }
@@ -366,6 +379,7 @@
     onimportModel={() => (actionPanelView = 'import-model')}
     onaddExternalSource={handleAddExternalSource}
     onupdateEmbeddings={handleUpdateEmbeddings}
+    onupdateLabels={handleUpdateLabels}
     {currentProject}
     {viewMode}
   />

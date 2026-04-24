@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { initiatorNodeStore } from '../../utils/stores'
+  import { initiatorNodeStore, cyInstanceStore, type GraphElement } from '../../utils/stores'
   import NodeSelector from '../NodeSelector.svelte'
   import type { NodeData } from '../../utils/forms'
 
@@ -8,13 +8,16 @@
     node: NodeData | null
   }
 
-  let { onrefresh, onerror } = $props<{
+  let {
+    initiatorNode = $initiatorNodeStore,
+    onrefresh,
+    onerror
+  } = $props<{
+    initiatorNode?: GraphElement | null
     onclose: () => void
     onrefresh: () => void
     onerror: (error: { title: string; message: string }) => void
   }>()
-
-  const initiatorNode = $initiatorNodeStore
 
   $effect(() => {
     if (!initiatorNode?.type) {
@@ -25,12 +28,58 @@
     }
   })
 
-  const filter = { type: initiatorNode?.type }
+  let isUpdate = $derived(initiatorNode?.type === 'batch')
+
+  let filter = $derived.by(() => {
+    let refNode: Record<string, any> | null | undefined = null
+
+    if (isUpdate) {
+      const cy = $cyInstanceStore
+      if (cy && initiatorNode?.id) {
+        const children = cy.$id(initiatorNode.id).children()
+        if (children.length > 0) {
+          refNode = children[0].data()
+        }
+      }
+    } else {
+      refNode = initiatorNode as Record<string, any> | null | undefined
+    }
+
+    if (!refNode) return {}
+
+    const newFilter: Record<string, any> = {}
+    if (refNode.type) newFilter.type = refNode.type
+    if (refNode.context?.model_id) newFilter['context.model_id'] = refNode.context.model_id
+    if (refNode.context?.init_audio_id)
+      newFilter['context.init_audio_id'] = refNode.context.init_audio_id
+    if (refNode.context?.prompt) newFilter['context.prompt'] = refNode.context.prompt
+
+    newFilter.parent = null // Exclude nodes that are already in a batch
+
+    console.log('Filter:', newFilter)
+    return newFilter as Record<string, string | number | boolean>
+  })
 
   let nextMemberId = 0
   const createMember = (node: NodeData | null = null): Member => ({ id: nextMemberId++, node })
 
-  let members: Member[] = $state([createMember(initiatorNode), createMember(null)])
+  let members: Member[] = $state([])
+
+  $effect(() => {
+    if (members.length === 0 && initiatorNode) {
+      if (isUpdate) {
+        const cy = $cyInstanceStore
+        if (cy) {
+          const children = cy.$id(initiatorNode.id).children()
+          const initialMembers = children.map((child) => createMember(child.data() as NodeData))
+          // Pre-populate with existing members and an empty slot at the end
+          members = [...initialMembers, createMember(null)]
+        }
+      } else {
+        members = [createMember(initiatorNode as NodeData), createMember(null)]
+      }
+    }
+  })
 
   function addMember(): void {
     members.push(createMember(null))
@@ -41,24 +90,29 @@
     members = members.filter((m) => m.id !== id)
   }
 
-  async function createBatch(): Promise<void> {
+  async function saveBatch(): Promise<void> {
     const member_ids = members.map((m) => m.node?.id).filter(Boolean)
     if (member_ids.length < 2) {
       onerror({
         title: 'Batching Error',
-        message: 'You must select at least two members to create a batch.'
+        message: 'You must select at least two members for a batch.'
       })
       return
     }
 
     try {
-      // @ts-ignore (define in dts)
-      await window.api.batchElements(member_ids)
+      if (isUpdate && initiatorNode) {
+        // @ts-ignore (define in dts)
+        await window.api.updateBatch(initiatorNode.id, member_ids)
+      } else {
+        // @ts-ignore (define in dts)
+        await window.api.batchElements(member_ids)
+      }
       onrefresh()
     } catch (error) {
       onerror({
         title: 'Batching Error',
-        message: error.message
+        message: error instanceof Error ? error.message : String(error)
       })
     }
   }
@@ -69,7 +123,7 @@
   {#each members as member, index (member.id)}
     <div>
       <NodeSelector
-        bind:node={member.node}
+        bind:node={members[index].node}
         label={`Member ${index + 1}`}
         id={`member-${member.id}`}
         {filter}
@@ -81,5 +135,5 @@
   {/each}
 
   <button onclick={addMember}>Add Member</button>
-  <button onclick={createBatch}>Create Batch</button>
+  <button onclick={saveBatch}>{isUpdate ? 'Update Batch' : 'Create Batch'}</button>
 </div>

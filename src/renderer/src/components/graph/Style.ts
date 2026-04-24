@@ -1,4 +1,4 @@
-import type { CssStyleDeclaration } from 'cytoscape'
+import type { CssStyleDeclaration, NodeSingular } from 'cytoscape'
 import { getCssVar } from '../../utils/css'
 
 const gradientColor1 = getCssVar('--graph-gradient-1')
@@ -39,7 +39,7 @@ const defaultStyle: CssStyleDeclaration[] = [
   {
     selector: 'node[type="model"]',
     style: {
-      label: 'data(name)',
+      label: (node: NodeSingular) => node.data('name') || node.data('id'),
       'background-color': modelColor,
       width: 60,
       height: 60
@@ -48,7 +48,7 @@ const defaultStyle: CssStyleDeclaration[] = [
   {
     selector: 'node[type="audio"]',
     style: {
-      label: 'data(name)',
+      label: (node: NodeSingular) => node.data('alias') || node.data('context')["prompt"],
       'background-color': audioColor,
       width: 30,
       height: 30
@@ -94,7 +94,7 @@ const defaultStyle: CssStyleDeclaration[] = [
   {
     selector: 'node[type="batch"]',
     style: {
-      label: 'data(id)',
+      label: 'data(alias)',
       'text-valign': 'top',
       'background-color': batchColor,
       'background-opacity': 0.5,
@@ -112,7 +112,7 @@ const defaultStyle: CssStyleDeclaration[] = [
   {
     selector: 'node[type="local_path"]',
     style: {
-      label: 'data(name)',
+      label: (node: NodeSingular) => node.data('name') || node.data('id'),
       'background-color': externalColor,
       width: 60,
       height: 60
@@ -159,7 +159,6 @@ const defaultStyle: CssStyleDeclaration[] = [
   {
     selector: 'edge[type="model"]',
     style: {
-      label: 'data(seed)',
       'line-color': modelColor,
       'target-arrow-color': modelColor
     }
@@ -167,7 +166,6 @@ const defaultStyle: CssStyleDeclaration[] = [
   {
     selector: 'edge[type="audio"]',
     style: {
-      label: 'data(strength)',
       'line-color': audioColor,
       'target-arrow-color': audioColor
     }
@@ -175,7 +173,6 @@ const defaultStyle: CssStyleDeclaration[] = [
   {
     selector: 'edge[type="local_path"]',
     style: {
-      label: 'data(strength)',
       'line-color': externalColor,
       'target-arrow-color': externalColor
     }

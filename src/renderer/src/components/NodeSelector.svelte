@@ -9,12 +9,14 @@
     label,
     filter,
     node = $bindable(),
-    id
+    id,
+    onNodeSelect
   } = $props<{
     label: string
     filter: Record<string, string | number | boolean>
     node: NodeData | string | null
     id: string
+    onNodeSelect?: (node: NodeData) => void
   }>()
 
   let resolvedNode: NodeData | null = $derived.by(() => {
@@ -23,8 +25,6 @@
     if (!$cyInstanceStore) return null
     return ($cyInstanceStore.$id(node).data() as NodeData) ?? null
   })
-
-  let isSelecting = $state(false)
 
   $effect(() => {
     const cy = $cyInstanceStore
@@ -58,20 +58,11 @@
     }
   })
 
-  $effect(() => {
-    const unsub = selectionStore.subscribe((state) => {
-      if (!state.isSelecting) {
-        isSelecting = false
-      }
-    })
-    return unsub
-  })
-
   function selectNodeFromGraph(): void {
-    isSelecting = true
     selectionStore.startSelection(filter, resolvedNode?.id ?? null, (selected) => {
-      node = selected as NodeData
-      isSelecting = false
+      const selectedNode = selected as NodeData
+      node = selectedNode
+      if (onNodeSelect) onNodeSelect(selectedNode)
     })
   }
 
@@ -115,19 +106,17 @@
 
 <div class="form-field">
   <label for={id}>{label}</label>
-  <div class="model-selector-wrapper" class:is-selecting={isSelecting}>
+  <div class="model-selector-wrapper">
     <input
       {id}
       type="text"
       readonly
-      value={resolvedNode ? resolvedNode.alias || resolvedNode.name : ''}
+      value={resolvedNode ? resolvedNode.alias || resolvedNode.name : 'None selected'}
       onclick={focusNode}
       class:has-node={!!resolvedNode}
-      placeholder={isSelecting ? 'Selecting in graph...' : 'None selected'}
+      placeholder="Select a node..."
     />
-    <button type="button" onclick={selectNodeFromGraph} class:primary={isSelecting}>
-      {isSelecting ? 'Selecting...' : 'Select'}
-    </button>
+    <button type="button" onclick={selectNodeFromGraph}> Select </button>
   </div>
 </div>
 
@@ -165,9 +154,5 @@
     flex-shrink: 0;
     padding: 0.5rem 1rem;
     cursor: pointer;
-  }
-  .model-selector-wrapper.is-selecting input {
-    border-color: var(--color-primary, #999);
-    box-shadow: inset 0 0 0 1px var(--color-primary, #999);
   }
 </style>

@@ -11,6 +11,7 @@
     onaddExternalSource?: (path: string) => void
     onimportModel?: () => void
     onupdateEmbeddings?: () => void
+    onupdateLabels?: () => void
   }
 
   let {
@@ -21,7 +22,8 @@
     onrefresh,
     onaddExternalSource,
     onimportModel,
-    onupdateEmbeddings
+    onupdateEmbeddings,
+    onupdateLabels
   }: Props = $props()
 
   let showFileMenu = $state(false)
@@ -272,6 +274,15 @@
             }}
           >
             Update Embeddings
+          </button>
+          <button
+            class="dropdown-item"
+            onclick={() => {
+              onupdateLabels?.()
+              showUtilitiesMenu = false
+            }}
+          >
+            Update Labels
           </button>
           <button class="dropdown-item" onclick={toggleSprings}>
             {springsVisible ? 'Hide Spring Edges' : 'Show Spring Edges'}

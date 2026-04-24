@@ -257,7 +257,7 @@ def get_graph():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/graph/batch", methods=["POST"])
+@app.route("/graph/create_batch", methods=["POST"])
 def batch_elements():
     """Create a batch from a selection of nodes."""
     if param_graph is None:
@@ -288,11 +288,14 @@ def batch_elements():
             for member_id in member_ids:
                 param_graph.update_element(member_id, {"parent": batch_id})
             
+            update_batch_labels(batch_id)
             param_graph.save()
+            
+            updated_batch = param_graph.get_element(batch_id).to_dict()
 
         return jsonify({
             "message": "Batch created successfully",
-            "collection": batch.to_dict(),
+            "collection": updated_batch,
             "success": True
         })
 
@@ -301,6 +304,65 @@ def batch_elements():
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
+
+@app.route("/graph/update_batch", methods=["PUT", "POST"])
+@app.route("/graph/update_batch/<batch_id>", methods=["PUT", "POST"])
+def update_batch_endpoint(batch_id=None):
+    """Update an existing batch with new members."""
+    if param_graph is None:
+        return jsonify({"error": "No project loaded"}), 400
+
+    try:
+        data = request.get_json()
+        
+        # Handle alternative route where batch_id is in the body
+        if batch_id is None:
+            batch_id = data.get("batch_id")
+            
+        if not batch_id:
+            return jsonify({"error": "batch_id is required"}), 400
+            
+        new_member_ids = data.get("member_ids")
+        if not new_member_ids:
+            return jsonify({"error": "member_ids is required"}), 400
+
+        with graph_lock:
+            if not param_graph.G.has_node(batch_id):
+                return jsonify({"error": f"Batch {batch_id} not found"}), 404
+
+            batch_node_attrs = param_graph.G.nodes[batch_id]
+            if batch_node_attrs.get('type') != 'batch':
+                return jsonify({"error": f"Node {batch_id} is not a batch"}), 400
+
+            old_member_ids = batch_node_attrs.get('member_ids', [])
+
+            # Unlink removed members
+            for m_id in old_member_ids:
+                if m_id not in new_member_ids:
+                    param_graph.update_element(m_id, {"parent": None})
+
+            # Link new members
+            for m_id in new_member_ids:
+                param_graph.update_element(m_id, {"parent": batch_id})
+
+            # Update batch properties
+            batch_node_attrs['member_ids'] = new_member_ids
+            
+            update_batch_labels(batch_id)
+            param_graph.save()
+            
+            updated_batch = param_graph.get_element(batch_id).to_dict()
+
+        return jsonify({
+            "message": "Batch updated successfully",
+            "collection": updated_batch,
+            "success": True
+        })
+
+    except Exception as e:
+        print(f"Failed to update batch: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
 
 # --------------------
 #  Model Operations
@@ -497,6 +559,10 @@ async def get_job_status(job_id):
             output_dir = param_graph.root / "generate"
             final_artifact = save_artifact_asset(temp_artifact, output_dir, asset_name="file")
             
+            # Ensure context is populated for labelling
+            if hasattr(final_artifact, 'context') and not final_artifact.context:
+                final_artifact = replace(final_artifact, context=job_context.get("validated_params", {}))
+            
             with graph_lock:
                 param_graph.add_element(final_artifact)
 
@@ -506,7 +572,10 @@ async def get_job_status(job_id):
                     batch_node_attrs = param_graph.G.nodes[batch_id]
                     if 'member_ids' not in batch_node_attrs or not isinstance(batch_node_attrs['member_ids'], list):
                         batch_node_attrs['member_ids'] = []
-                    batch_node_attrs['member_ids'].append(final_artifact.id)
+                    if final_artifact.id not in batch_node_attrs['member_ids']:
+                        batch_node_attrs['member_ids'].append(final_artifact.id)
+                        
+                    update_batch_labels(batch_id)
 
                 for element in job_context.get("linked_elements", []):
                     print(f"Linking {element.id} to {final_artifact.id}")
@@ -786,6 +855,88 @@ def cache_used_audio(audio_id):
         except Exception as e:
             print(f"Failed to cache audio {audio_id}: {e}")
 
+def update_batch_labels(batch_id: str):
+    """
+    Recalculates the shared parameters of a batch and updates the batch's alias,
+    as well as the aliases of all its children (based on their unique parameters).
+    Assumes caller holds `graph_lock`.
+    """
+    if param_graph is None or not param_graph.G.has_node(batch_id):
+        return
+
+    batch_node_attrs = param_graph.G.nodes[batch_id]
+    if batch_node_attrs.get('type') != 'batch':
+        return
+        
+    member_ids = batch_node_attrs.get('member_ids', [])
+    if not member_ids:
+        return
+
+    shared_context = {}
+    member_diffs = {m_id: {} for m_id in member_ids}
+    
+    # Extract contexts
+    contexts = []
+    for m_id in member_ids:
+        try:
+            el = param_graph.get_element(m_id)
+            ctx = getattr(el, 'context', {})
+            contexts.append(ctx if isinstance(ctx, dict) else {})
+        except Exception:
+            contexts.append({})
+    
+    if contexts:
+        # Find intersection of all keys and values
+        common_keys = set.intersection(*(set(c.keys()) for c in contexts))
+        for k in common_keys:
+            if all(c[k] == contexts[0][k] for c in contexts):
+                shared_context[k] = contexts[0][k]
+        
+        # Calculate what makes each member unique
+        for m_id, ctx in zip(member_ids, contexts):
+            diff = {k: v for k, v in ctx.items() if k not in shared_context or shared_context[k] != v}
+            member_diffs[m_id] = diff
+
+    print(f"Shared context: {shared_context}")
+    print(f"Member diffs: {member_diffs}")
+
+    # Generate a label for the batch based on the shared prompt/context
+    member_type = batch_node_attrs.get('member_type', 'element')
+    batch_alias = shared_context.get('prompt', f"{member_type.capitalize()} Batch")
+    if len(str(batch_alias)) > 30:
+        batch_alias = str(batch_alias)[:27] + "..."
+
+    param_graph.update_element(batch_id, {"shared_context": shared_context, "alias": batch_alias})
+
+    # Update member aliases
+    for member_id in member_ids:
+        diff = member_diffs.get(member_id, {})
+        diff_items = [f"{k}: {v}" for k, v in diff.items()]
+        diff_label = "\n".join(diff_items) if diff_items else "Base"
+        
+        if len(diff_label) > 40:
+            diff_label = diff_label[:37] + "..."
+            
+        param_graph.update_element(member_id, {"alias": diff_label})
+
+def trigger_labeling_update():
+    """
+    Forces a graph-wide recalculation of all batch and node labels.
+    """
+    if param_graph is None:
+        return
+
+    with graph_lock:
+        batch_ids = [
+            node for node, data in param_graph.G.nodes(data=True)
+            if data.get('type') == 'batch'
+        ]
+        for batch_id in batch_ids:
+            update_batch_labels(batch_id)
+            
+        param_graph.save()
+    print("Labeling update completed successfully.")
+
 def trigger_embedding_update(force_recalculate=False, background=True):
     """
     Background task to compute missing embeddings and recalculate similarity edges.
@@ -969,6 +1120,23 @@ def update_embeddings():
         "message": "Embeddings updated successfully.",
         "success": True
     }), 200
+
+@app.route("/update_labels", methods=["POST"])
+def update_labels():
+    """Update all batch and node labels in the graph."""
+    if param_graph is None:
+        return jsonify({"error": "No project loaded"}), 400
+
+    try:
+        trigger_labeling_update()
+        return jsonify({
+            "message": "Labels updated successfully.",
+            "success": True
+        }), 200
+    except Exception as e:
+        print(f"Failed to update labels: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
 
 # --------------------
 #  Audio Operations

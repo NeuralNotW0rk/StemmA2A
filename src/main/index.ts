@@ -321,6 +321,19 @@ app.whenReady().then(async () => {
     return await response.json()
   })
 
+  ipcMain.handle('updateLabels', async () => {
+    const response = await fetchWithAuth(`${BACKEND_URL}/update_labels`, {
+      method: 'POST'
+    })
+    if (!response.ok) {
+      const errorBody = await response.text()
+      throw new Error(
+        `Failed to update labels. Status: ${response.status}. Error: ${errorBody}`
+      )
+    }
+    return await response.json()
+  })
+
   ipcMain.handle('updateEmbeddings', async () => {
     const response = await fetchWithAuth(`${BACKEND_URL}/update_embeddings`, {
       method: 'POST'
@@ -335,7 +348,7 @@ app.whenReady().then(async () => {
   })
 
   ipcMain.handle('batchElements', async (_event, memberIds) => {
-    const response = await fetchWithAuth(`${BACKEND_URL}/graph/batch`, {
+    const response = await fetchWithAuth(`${BACKEND_URL}/graph/create_batch`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ member_ids: memberIds })
@@ -344,6 +357,21 @@ app.whenReady().then(async () => {
       const errorBody = await response.text()
       throw new Error(
         `Failed to create batch. Status: ${response.status}. Error: ${errorBody}`
+      )
+    }
+    return await response.json()
+  })
+
+  ipcMain.handle('updateBatch', async (_event, batchId, memberIds) => {
+    const response = await fetchWithAuth(`${BACKEND_URL}/graph/update_batch/${batchId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ member_ids: memberIds })
+    })
+    if (!response.ok) {
+      const errorBody = await response.text()
+      throw new Error(
+        `Failed to update batch. Status: ${response.status}. Error: ${errorBody}`
       )
     }
     return await response.json()

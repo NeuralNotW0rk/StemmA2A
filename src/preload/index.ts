@@ -31,9 +31,12 @@ const api = {
   removeElement: (elementId: string): Promise<any> =>
     ipcRenderer.invoke('removeElement', elementId),
   logMessage: (message: string): Promise<any> => ipcRenderer.invoke('logMessage', message),
+  updateLabels: (): Promise<any> => ipcRenderer.invoke('updateLabels'),
   updateEmbeddings: (): Promise<any> => ipcRenderer.invoke('updateEmbeddings'),
   pollJobStatus: (jobId: string): Promise<any> => ipcRenderer.invoke('pollJobStatus', jobId),
   batchElements: (memberIds: string[]): Promise<any> => ipcRenderer.invoke('batchElements', memberIds),
+  updateBatch: (batchId: string, memberIds: string[]): Promise<any> =>
+    ipcRenderer.invoke('updateBatch', batchId, memberIds),
   addExternalSource: (sourcePath: string): Promise<any> => ipcRenderer.invoke('addExternalSource', sourcePath),
   expandPath: (pathNodeId: string): Promise<any> => ipcRenderer.invoke('expandPath', pathNodeId),
   cancelJob: (jobId: string): Promise<any> => ipcRenderer.invoke('cancel-job', jobId),

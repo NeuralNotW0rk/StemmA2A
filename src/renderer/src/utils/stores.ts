@@ -46,12 +46,10 @@ function createSelectionStore() {
       })),
     resolveSelection: (node: SelectableNodeData) => {
       let onSelectCallback: ((node: SelectableNodeData) => void) | null = null
-      let filter: Record<string, any> | null = null
 
       update((state) => {
         if (state.isSelecting && state.onSelect) {
           onSelectCallback = state.onSelect
-          filter = state.filter
         }
         return {
           ...state,
@@ -62,7 +60,7 @@ function createSelectionStore() {
         }
       })
 
-      if (onSelectCallback && (!filter || Object.entries(filter).every(([key, value]) => node[key] === value))) {
+      if (onSelectCallback) {
         onSelectCallback(node)
       }
     }
@@ -78,7 +76,7 @@ export interface GraphElement {
   [key: string]: any
 }
 
-export const initiatorNodeStore = writable<NodeData | null>(null)
+export const initiatorNodeStore = writable<GraphElement | null>(null)
 export const contextStore = writable<Record<string, any> | null>(null)
 
 export const lastUsedModelStore = writable<ModelData | null>(null)
