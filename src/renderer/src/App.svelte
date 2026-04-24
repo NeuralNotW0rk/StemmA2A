@@ -29,6 +29,7 @@
   let viewMode: 'batch' | 'cluster' = $state('batch')
   let audioSrc: string | null = $state(null)
   let audioTitle: string | null = $state(null)
+  let showSpringEdges = $state(false)
   let selectedElementData: ElementData | null = $state(null)
   let actionPanelView: ActionPanelView = $state('none')
   let errorInInfoPanel: ErrorInfo | null = $state(null)
@@ -382,6 +383,7 @@
     onupdateLabels={handleUpdateLabels}
     {currentProject}
     {viewMode}
+    bind:showSpringEdges
   />
 
   {#if errorInInfoPanel}
@@ -476,6 +478,7 @@
 
   <ParameterGraph
     {graphData}
+    {showSpringEdges}
     {viewMode}
     onaudioSelect={handleAudioSelect}
     onmodelSelect={handleModelSelect}

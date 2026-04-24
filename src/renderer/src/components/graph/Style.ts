@@ -48,7 +48,7 @@ const defaultStyle: CssStyleDeclaration[] = [
   {
     selector: 'node[type="audio"]',
     style: {
-      label: (node: NodeSingular) => node.data('alias') || node.data('context')["prompt"],
+      label: (node: NodeSingular) => node.data('alias') || node.data('context')["prompt"] || node.data('name'),
       'background-color': audioColor,
       width: 30,
       height: 30
@@ -121,7 +121,7 @@ const defaultStyle: CssStyleDeclaration[] = [
   {
     selector: 'node[type="directory"]',
     style: {
-      label: 'data(id)',
+      label: 'data(path)',
       'text-valign': 'top',
       'background-color': batchColor,
       'background-opacity': 0.5,
@@ -136,6 +136,14 @@ const defaultStyle: CssStyleDeclaration[] = [
   {
     selector: 'edge[type="spring"]',
     style: {
+      'display': 'none',
+      'curve-style': 'haystack'
+    }
+  },
+  {
+    selector: 'edge[type="spring"].visible',
+    style: {
+      'display': 'element',
       'line-color': '#ffff00',
       'opacity': 'mapData(weight, 0, 1, 0, 1)',
       'curve-style': 'straight', // Changed from haystack to support edge labels
@@ -148,12 +156,6 @@ const defaultStyle: CssStyleDeclaration[] = [
       'text-background-opacity': 0.8,
       'text-background-padding': 4,
       'text-background-shape': 'roundrectangle',
-    }
-  },
-  {
-    selector: 'edge[type="spring"].hidden',
-    style: {
-      'display': 'none'
     }
   },
   {

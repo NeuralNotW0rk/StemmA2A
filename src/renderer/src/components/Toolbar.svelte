@@ -12,6 +12,7 @@
     onimportModel?: () => void
     onupdateEmbeddings?: () => void
     onupdateLabels?: () => void
+    showSpringEdges?: boolean
   }
 
   let {
@@ -23,7 +24,8 @@
     onaddExternalSource,
     onimportModel,
     onupdateEmbeddings,
-    onupdateLabels
+    onupdateLabels,
+    showSpringEdges = $bindable(false)
   }: Props = $props()
 
   let showFileMenu = $state(false)
@@ -31,7 +33,6 @@
   let recentProjects: string[] = $state([])
   let showUtilitiesMenu = $state(false)
   let utilitiesMenuElement: HTMLElement | undefined = $state()
-  let springsVisible = $state(true)
 
   async function refreshRecentProjects(): Promise<void> {
     try {
@@ -81,14 +82,7 @@
   }
 
   function toggleSprings(): void {
-    springsVisible = !springsVisible
-    if ($cyInstanceStore) {
-      if (springsVisible) {
-        $cyInstanceStore.edges('[type="spring"]').removeClass('hidden')
-      } else {
-        $cyInstanceStore.edges('[type="spring"]').addClass('hidden')
-      }
-    }
+    showSpringEdges = !showSpringEdges
     showUtilitiesMenu = false
   }
 
@@ -285,7 +279,7 @@
             Update Labels
           </button>
           <button class="dropdown-item" onclick={toggleSprings}>
-            {springsVisible ? 'Hide Spring Edges' : 'Show Spring Edges'}
+            {showSpringEdges ? 'Hide Spring Edges' : 'Show Spring Edges'}
           </button>
         </div>
       {/if}

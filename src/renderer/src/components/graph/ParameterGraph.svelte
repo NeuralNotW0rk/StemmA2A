@@ -13,6 +13,7 @@
   interface Props {
     graphData?: { elements: cytoscape.ElementDefinition[] } | null
     viewMode?: 'batch' | 'cluster'
+    showSpringEdges?: boolean
     onmodelSelect?: (data: any) => void
     onaudioSelect?: (data: any) => void
     onaudioNodeSelectForGeneration?: (data: any, useContext?: boolean) => void
@@ -28,6 +29,7 @@
 
   let {
     graphData = null,
+    showSpringEdges = false,
     onmodelSelect,
     onaudioSelect,
     onaudioNodeSelectForGeneration,
@@ -82,6 +84,17 @@
         if (selectionBoundNodeId) {
           cy.getElementById(selectionBoundNodeId).removeClass('dimmed').addClass('bound')
         }
+      }
+    }
+  })
+
+  // Dynamically toggle spring edge visibility whenever the state changes
+  $effect(() => {
+    if (isInitialized && cy) {
+      if (showSpringEdges) {
+        cy.edges('edge[type="spring"]').addClass('visible')
+      } else {
+        cy.edges('edge[type="spring"]').removeClass('visible')
       }
     }
   })
@@ -450,6 +463,11 @@
       }, [])
 
       const addedElements = cy.add(processedElements)
+
+      // Re-apply visibility to new edges after graph rebuild
+      if (showSpringEdges) {
+        addedElements.filter('edge[type="spring"]').addClass('visible')
+      }
 
       addedElements.nodes().forEach((node) => {
         const isChildless = node.children().length === 0
