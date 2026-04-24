@@ -27,10 +27,22 @@
   }
 
   function randomizeField(fieldName: string, type: string): void {
+    let randVal: number
     if (type === 'float') {
-      formData[fieldName] = Number(Math.random().toFixed(4))
+      randVal = Number(Math.random().toFixed(4))
     } else {
-      formData[fieldName] = Math.floor(Math.random() * 4294967296)
+      randVal = Math.floor(Math.random() * 4294967296)
+    }
+
+    if (batchFields.has(fieldName)) {
+      const current = formData[fieldName]
+      if (current !== undefined && current !== null && String(current).trim() !== '') {
+        formData[fieldName] = `${current}, ${randVal}`
+      } else {
+        formData[fieldName] = String(randVal)
+      }
+    } else {
+      formData[fieldName] = randVal
     }
   }
 
@@ -158,7 +170,7 @@
             />
           {/if}
           <div class="field-actions">
-            {#if (field as FormField & { randomizable?: boolean }).randomizable && !isBatch}
+            {#if (field as FormField & { randomizable?: boolean }).randomizable}
               <button
                 type="button"
                 class="action-btn"
@@ -221,7 +233,7 @@
             />
           {/if}
           <div class="field-actions">
-            {#if (field as FormField & { randomizable?: boolean }).randomizable && !isBatch}
+            {#if (field as FormField & { randomizable?: boolean }).randomizable}
               <button
                 type="button"
                 class="action-btn"
@@ -297,7 +309,7 @@
             </select>
           {/if}
           <div class="field-actions">
-            {#if (field as FormField & { randomizable?: boolean }).randomizable && !isBatch}
+            {#if (field as FormField & { randomizable?: boolean }).randomizable}
               <button
                 type="button"
                 class="action-btn"
@@ -367,7 +379,7 @@
             />
           {/if}
           <div class="field-actions">
-            {#if (field as FormField & { randomizable?: boolean }).randomizable && !isBatch}
+            {#if (field as FormField & { randomizable?: boolean }).randomizable}
               <button
                 type="button"
                 class="action-btn"

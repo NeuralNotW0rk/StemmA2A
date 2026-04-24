@@ -85,6 +85,17 @@
     }
   }
 
+  function handleWindowKeyDown(event: KeyboardEvent): void {
+    const target = event.target as HTMLElement
+    if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
+      return
+    }
+    if (event.code === 'Space' || event.key === ' ') {
+      event.preventDefault()
+      togglePlayPause()
+    }
+  }
+
   onMount(() => {
     window.addEventListener('click', handleClickOutside)
   })
@@ -113,6 +124,8 @@
     }
   })
 </script>
+
+<svelte:window onkeydown={handleWindowKeyDown} />
 
 <div class="audio-player">
   <button class="play-button" onclick={togglePlayPause} aria-label={isPlaying ? 'Pause' : 'Play'}>

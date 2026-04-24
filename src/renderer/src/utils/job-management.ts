@@ -48,8 +48,10 @@ export function updateJob(job: Job): void {
   job.updatedAt = Date.now()
   jobStore.update((jobs) => {
     const index = jobs.findIndex((j) => j.id === job.id)
-    if (index !== -1) {
-      jobs[index] = job
+    if (index > -1) {
+      const newJobs = [...jobs]
+      newJobs[index] = job
+      return newJobs
     }
     return jobs
   })
@@ -57,10 +59,13 @@ export function updateJob(job: Job): void {
 
 export function updateJobProgress(jobId: string, progress: JobProgress): void {
   jobStore.update((jobs) => {
-    const job = jobs.find((j) => j.id === jobId)
-    if (job && (job.status === 'running' || job.status === 'pending')) {
-      job.progress = progress
-      job.updatedAt = Date.now()
+    const index = jobs.findIndex(
+      (j) => j.id === jobId && (j.status === 'running' || j.status === 'pending')
+    )
+    if (index > -1) {
+      const newJobs = [...jobs]
+      newJobs[index] = { ...jobs[index], progress, updatedAt: Date.now() }
+      return newJobs
     }
     return jobs
   })
@@ -68,6 +73,11 @@ export function updateJobProgress(jobId: string, progress: JobProgress): void {
 
 export function removeJob(jobId: string): void {
   jobStore.update((jobs) => jobs.filter((j) => j.id !== jobId))
+}
+
+export function clearDismissableJobs(): void {
+  const dismissableStatuses: JobStatus[] = ['success', 'error', 'cancelled']
+  jobStore.update((jobs) => jobs.filter((job) => !dismissableStatuses.includes(job.status)))
 }
 
 export async function cancelJob(jobId: string): Promise<void> {
@@ -86,6 +96,12 @@ export async function cancelJob(jobId: string): Promise<void> {
       console.error('Error cancelling job:', error)
     }
   }
+}
+
+export async function cancelAllJobs(): Promise<void> {
+  const jobs = get(jobStore)
+  const activeJobs = jobs.filter((j) => j.status === 'running' || j.status === 'pending')
+  await Promise.all(activeJobs.map((j) => cancelJob(j.id)))
 }
 
 export function clearJobs(): void {
@@ -138,10 +154,11 @@ export async function pollJobStatus(jobId: string, intervalMs = 1500): Promise<a
     } else if (data.status === 'running' || data.status === 'pending') {
       // Update the job store with the intermediate status to reflect in the UI
       jobStore.update((jobs) => {
-        const job = jobs.find((j) => j.id === jobId)
-        if (job && job.status !== data.status) {
-          job.status = data.status
-          job.updatedAt = Date.now()
+        const index = jobs.findIndex((j) => j.id === jobId)
+        if (index > -1 && jobs[index].status !== data.status) {
+          const newJobs = [...jobs]
+          newJobs[index] = { ...jobs[index], status: data.status, updatedAt: Date.now() }
+          return newJobs
         }
         return jobs
       })

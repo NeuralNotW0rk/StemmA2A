@@ -1,26 +1,33 @@
 <!-- src/renderer/src/components/ContentPanel.svelte -->
 <script lang="ts">
-  import type { Snippet } from 'svelte'
+  import type { Snippet } from 'svelte';
 
   let {
     title,
     onclose,
     position = 'left',
-    children
+    children,
+    header_actions = undefined
   } = $props<{
     title: string
     onclose?: () => void
     position?: 'left' | 'right'
     children: Snippet
+    header_actions?: Snippet
   }>()
 </script>
 
 <aside class="content-panel" class:left={position === 'left'} class:right={position === 'right'}>
   <div class="panel-header">
     <h3>{title}</h3>
-    {#if onclose}
-      <button class="close-btn" onclick={onclose}>×</button>
-    {/if}
+    <div class="header-actions">
+      {#if header_actions}
+        {@render header_actions()}
+      {/if}
+      {#if onclose}
+        <button class="close-btn" onclick={onclose}>×</button>
+      {/if}
+    </div>
   </div>
   <div class="panel-body">
     {@render children()}
@@ -61,6 +68,12 @@
     border-bottom: 1px solid var(--color-border-glass-1);
     background-color: var(--color-background-glass-2);
     flex-shrink: 0;
+  }
+
+  .header-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
   }
 
   .panel-header h3 {

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onDestroy } from 'svelte'
   import type { ModelData, AudioData } from '../utils/forms'
   import { selectionStore, cyInstanceStore } from '../utils/stores'
   import type { NodeSingular } from 'cytoscape'
@@ -12,7 +13,7 @@
     id,
     onNodeSelect
   } = $props<{
-    label: string
+    label?: string
     filter: Record<string, string | number | boolean>
     node: NodeData | string | null
     id: string
@@ -58,13 +59,23 @@
     }
   })
 
+  let isSelecting = false
+
   function selectNodeFromGraph(): void {
+    isSelecting = true
     selectionStore.startSelection(filter, resolvedNode?.id ?? null, (selected) => {
-      const selectedNode = selected as NodeData
-      node = selectedNode
-      if (onNodeSelect) onNodeSelect(selectedNode)
+      isSelecting = false
+      if (selected) {
+        const selectedNode = selected as NodeData
+        node = selectedNode
+        if (onNodeSelect) onNodeSelect(selectedNode)
+      }
     })
   }
+
+  onDestroy(() => {
+    if (isSelecting) selectionStore.cancelSelection()
+  })
 
   export function selectNodeById(targetId: string): void {
     const cy = $cyInstanceStore
@@ -105,7 +116,9 @@
 </script>
 
 <div class="form-field">
-  <label for={id}>{label}</label>
+  {#if label}
+    <label for={id}>{label}</label>
+  {/if}
   <div class="model-selector-wrapper">
     <input
       {id}

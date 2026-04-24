@@ -339,7 +339,7 @@ def update_batch_endpoint(batch_id=None):
             # Unlink removed members
             for m_id in old_member_ids:
                 if m_id not in new_member_ids:
-                    param_graph.update_element(m_id, {"parent": None})
+                    param_graph.update_element(m_id, {"parent": None, "alias": None})
 
             # Link new members
             for m_id in new_member_ids:

@@ -18,10 +18,17 @@
     contextStore,
     selectedForRemoval,
     backendStatus,
-    isCreatingNewProject
+    isCreatingNewProject,
+    selectionStore
   } from './utils/stores'
   import { startEmbeddingUpdate } from './utils/execution'
-  import { jobStore, addJob, updateJob } from './utils/job-management'
+  import {
+    jobStore,
+    addJob,
+    updateJob,
+    clearDismissableJobs,
+    cancelAllJobs
+  } from './utils/job-management'
   import type { ActionPanelView, ElementData, ErrorInfo } from './utils/types'
 
   let graphData: any = $state(null)
@@ -39,6 +46,13 @@
   // Backend restart detection
   let serverInstanceId: string | null = $state(null)
   let healthCheckInterval: number | null = null
+
+  let hasDismissableJobs = $derived(
+    $jobStore.some((job) => ['success', 'error', 'cancelled'].includes(job.status))
+  )
+  let hasCancellableJobs = $derived(
+    $jobStore.some((job) => ['running', 'pending'].includes(job.status))
+  )
 
   $effect(() => {
     const unsub = jobStore.subscribe((jobs) => {
@@ -364,6 +378,12 @@
   }
 </script>
 
+<svelte:window
+  onkeydown={(e) => {
+    if (e.key === 'Escape') selectionStore.cancelSelection()
+  }}
+/>
+
 <main class="container">
   {#if isWaitingForBackend}
     <div class="backend-wait-overlay">
@@ -460,6 +480,14 @@
     {#if $jobStore.length > 0}
       <ContentPanel title="Jobs" position="right">
         <JobStatusView />
+        {#snippet header_actions()}
+          {#if hasCancellableJobs}
+            <button class="clear-btn" onclick={cancelAllJobs}>Cancel All</button>
+          {/if}
+          {#if hasDismissableJobs}
+            <button class="clear-btn" onclick={clearDismissableJobs}>Clear Completed</button>
+          {/if}
+        {/snippet}
       </ContentPanel>
     {/if}
 
