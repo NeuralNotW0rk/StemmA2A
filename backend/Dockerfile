@@ -18,4 +18,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # 5. Copy the code
 COPY . .
 
+# 6. Set up the entrypoint script
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+ENTRYPOINT ["/entrypoint.sh"]
+
 CMD ["python", "engine_service.py"]
