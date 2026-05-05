@@ -12,6 +12,7 @@ services:
     volumes:
       - ./backend:/app          # Maps your code folder
       - ${LOCAL_DATA_PATH}:${CONTAINER_DATA_PATH}
+      - ${LOCAL_DIFFRACTURE_PATH:-../Diffracture}:/Diffracture
     environment:
       PYTHONUNBUFFERED: 1
       RUNNING_IN_CONTAINER: "true"
