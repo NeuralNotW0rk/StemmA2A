@@ -18,6 +18,8 @@
     onaudioSelect?: (data: any) => void
     onaudioNodeSelectForGeneration?: (data: any, useContext?: boolean) => void
     onexport?: (data: { names: string[] }) => void
+    onimportLattice?: (data: any) => void
+    onlatticeSelectForGeneration?: (data: any) => void
     onrescanSource?: (name: string) => void
     onnodeSelect?: (data: any) => void
     onedgeSelect?: (data: any) => void
@@ -33,6 +35,8 @@
     onmodelSelect,
     onaudioSelect,
     onaudioNodeSelectForGeneration,
+    onimportLattice,
+    onlatticeSelectForGeneration,
     onrescanSource,
     onnodeSelect,
     onedgeSelect,
@@ -160,6 +164,18 @@
         content: 'Generate Audio',
         select: () => onmodelSelect?.(ele.data())
       },
+      {
+        content: 'Import Lattice',
+        select: () => onimportLattice?.(ele.data())
+      },
+      ...nodeCommands(ele)
+    ]
+
+    const latticeNodeCommands = (ele: Singular): Command[] => [
+      {
+        content: 'Generate',
+        select: () => onlatticeSelectForGeneration?.(ele.data())
+      },
       ...nodeCommands(ele)
     ]
 
@@ -229,6 +245,8 @@
         switch (ele.data('type')) {
           case 'model':
             return modelNodeCommands(ele)
+          case 'lattice':
+            return latticeNodeCommands(ele)
           case 'audio':
             return audioNodeCommands(ele)
           case 'external':

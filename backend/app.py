@@ -22,6 +22,7 @@ from pydantic import ValidationError
 from param_graph.graph import ParameterGraph
 from param_graph.elements.models.base_model_element import Model
 from param_graph.elements.artifacts.audio_element import Audio
+from param_graph.elements.artifacts.lattice_element import Lattice
 from param_graph.elements.base_elements import Asset
 from param_graph.elements.collections.batch_element import Batch
 from param_graph.elements.collections.directory_element import Directory
@@ -33,6 +34,9 @@ from utils.audio import load_audio
 from utils.form import create_dynamic_model
 from utils.uid import XXH3_64
 from utils.semantic_interrogation import SemanticInterrogator
+
+from diffracture import Actant
+from diffracture.topology.lattice import Lattice as DiffractureLattice
 
 app = Flask(__name__)
 CORS(app)
@@ -405,6 +409,66 @@ async def import_model():
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
+@app.route("/register_lattice", methods=["POST"])
+def register_lattice():
+    """Register a new Lattice and bind it to a base model."""
+    if param_graph is None:
+        return jsonify({"error": "No project loaded"}), 400
+    
+    try:
+        data = request.get_json()
+        lattice_name = data.get("name", "New Lattice")
+        checkpoint_path = data.get("checkpoint_path")
+        base_model_id = data.get("base_model_id")
+
+        if not checkpoint_path or not base_model_id:
+            return jsonify({"error": "checkpoint_path and base_model_id are required"}), 400
+
+        path_obj = Path(checkpoint_path)
+        if not path_obj.is_file():
+            return jsonify({"error": f"Lattice path '{checkpoint_path}' does not exist or is not a file."}), 400
+
+        with graph_lock:
+            base_model = param_graph.get_element(base_model_id)
+            if not base_model:
+                return jsonify({"error": f"Base model '{base_model_id}' not found."}), 404
+
+            # Temporarily load the lattice to generate a hash from its modules
+            loaded_lattice = DiffractureLattice.load(str(path_obj.resolve()))
+            element_id = uid_generator.from_module(loaded_lattice)
+
+            prisms_config = [{
+                "address": prism.address,
+                "kernel_type": prism.kernel_type,
+                "metadata": prism.metadata
+            } for prism in loaded_lattice._nodes]
+
+            asset = Asset(path=str(path_obj.resolve()), uid=element_id, extension=path_obj.suffix.lower())
+            
+            lattice_artifact = Lattice(
+                id=element_id,
+                name=lattice_name,
+                context={},
+                file=asset,
+                base_model_id=base_model_id,
+                prisms=prisms_config
+            )
+
+            param_graph.add_element(lattice_artifact)
+            param_graph.link(base_model, lattice_artifact, action='binds_to')
+            param_graph.save()
+        
+        return jsonify({
+            "message": "Lattice registered successfully",
+            "lattice": lattice_artifact.to_dict(),
+            "success": True
+        })
+        
+    except Exception as e:
+        print(f"Failed to register lattice: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
 @app.route("/adapter_config/<adapter_name>", methods=["GET"])
 async def get_adapter_config(adapter_name):
     """Get the form configuration for a specific adapter."""
@@ -462,20 +526,40 @@ async def generate():
                     if element:
                         node_engine_args[f"{field_name}_element"] = element
 
-        resolved_elements = list(node_engine_args.values())
+        lattice_ids = json_data.get("lattice_ids")
+        if lattice_ids:
+            lattice_elements = []
+            for l_id in lattice_ids:
+                l_element = param_graph.get_element(l_id)
+                if not isinstance(l_element, Lattice):
+                    return jsonify({"error": f"Node '{l_id}' is not a valid lattice."}), 400
+                lattice_elements.append(l_element)
+            node_engine_args["lattice_elements"] = lattice_elements
+
+        resolved_elements = []
+        for val in node_engine_args.values():
+            if isinstance(val, list):
+                resolved_elements.extend(val)
+            else:
+                resolved_elements.append(val)
 
         # Cache external audio files used in this step, and resolve to cache if missing
         for arg_name, element in node_engine_args.items():
-            if isinstance(element, Audio):
-                cache_used_audio(element.id)
-                valid_path = resolve_audio_path(element.id)
-                if valid_path and str(valid_path) != element.file.path:
-                    element.file = replace(element.file, path=str(valid_path))
-                    node_engine_args[arg_name] = element
-            
-            if not isinstance(element, (Audio, Model)):
-                field_name = arg_name.removesuffix("_element")
-                return jsonify({"error": f"Node '{element.id}' for field '{field_name}' is not a valid artifact."}), 400
+            if isinstance(element, list):
+                for el in element:
+                    if not isinstance(el, (Audio, Model, Lattice)):
+                        return jsonify({"error": f"Node '{el.id}' is not a valid artifact."}), 400
+            else:
+                if isinstance(element, Audio):
+                    cache_used_audio(element.id)
+                    valid_path = resolve_audio_path(element.id)
+                    if valid_path and str(valid_path) != element.file.path:
+                        element.file = replace(element.file, path=str(valid_path))
+                        node_engine_args[arg_name] = element
+                
+                if not isinstance(element, (Audio, Model, Lattice)):
+                    field_name = arg_name.removesuffix("_element")
+                    return jsonify({"error": f"Node '{element.id}' for field '{field_name}' is not a valid artifact."}), 400
 
         engine_args = {"model_element": model_element, **node_engine_args}
         linked_elements = [model_element, *resolved_elements]

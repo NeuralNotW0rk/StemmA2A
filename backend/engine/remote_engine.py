@@ -8,7 +8,6 @@ from param_graph.elements.base_elements import GraphElement
 
 from .engine import Engine
 from param_graph.registry import resolve_element
-from param_graph.utils import find_elements
 from utils.uid import path_from_uid
 
 
@@ -42,13 +41,18 @@ class RemoteEngine(Engine):
         """
         job_id = kwargs.pop('job_id', None)
         
-        all_elements = find_elements(kwargs)
-        local_assets = {element_id: asset_path for element_id, asset_path in
-                        (asset for e in all_elements.values() for asset in e.get_local_assets().items())}
+        def _serialize_and_collect(val, collected_assets):
+            if isinstance(val, GraphElement):
+                collected_assets.update(val.get_local_assets())
+                return val.de_anchor().to_dict()
+            elif isinstance(val, list):
+                return [_serialize_and_collect(v, collected_assets) for v in val]
+            elif isinstance(val, dict):
+                return {k: _serialize_and_collect(v, collected_assets) for k, v in val.items()}
+            return val
 
-        de_anchored_params = kwargs.copy()
-        for name, element in all_elements.items():
-            de_anchored_params[name] = element.de_anchor().to_dict()
+        local_assets = {}
+        de_anchored_params = _serialize_and_collect(kwargs, local_assets)
 
         payload = {"operation": operation, "params": de_anchored_params}
         if job_id:

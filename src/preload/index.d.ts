@@ -20,6 +20,7 @@ interface API {
   getAudioFile: (
     filename: string
   ) => Promise<{ buffer: Buffer; mimeType: string } | null>
+  registerLattice: (data: { name: string; checkpoint_path: string; base_model_id: string }) => Promise<any>
   openFile: (options?: { title?: string; filters?: { name: string; extensions: string[] }[] }) => Promise<string | null>
   importModel: (data: any) => Promise<any>
   generate: (data: any) => Promise<any>

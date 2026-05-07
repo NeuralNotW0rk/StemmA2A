@@ -14,6 +14,9 @@ from .engine import Engine
 from .model_cache import ModelCache
 from utils.uid import path_from_uid
 
+from diffracture import Actant
+from diffracture.topology.lattice import Lattice as DiffractureLattice
+
 class LocalEngine(Engine):
     def __init__(self, data_root: str = None):
         super().__init__()
@@ -64,7 +67,28 @@ class LocalEngine(Engine):
         adapter_class = self._get_adapter_class(model_element.adapter)
         adapter = self.model_cache.get(model_element, adapter_class)
 
+        # Engine-level Lattice intervention orchestration
+        lattice_elements = kwargs.get("lattice_elements", [])
+        if lattice_elements:
+            if not hasattr(adapter, 'model') or adapter.model is None:
+                raise RuntimeError(f"Adapter '{model_element.adapter}' does not expose a loaded 'model' for lattice injection.")
+            
+            if not hasattr(adapter, 'actant'):
+                adapter.actant = Actant(adapter.model)
+                
+            model_device = next(adapter.model.parameters()).device
+            
+            for lattice_element in lattice_elements:
+                print(f"Engine: Applying Lattice '{lattice_element.name}'...")
+                lattice = DiffractureLattice.load(lattice_element.file.path)
+                lattice.to(model_device)
+                adapter.actant.activate(lattice, injection_strategy="graft")
+
         artifact, tensor = adapter.generate(**kwargs)
+
+        if lattice_elements:
+            # Revert the model to its original state so it can remain safely in the cache
+            adapter.actant.deactivate()
 
         sample_rate = adapter.model_info.config["sample_rate"]
 

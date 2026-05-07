@@ -16,7 +16,6 @@ from param_graph.elements.artifacts.audio_element import Audio
 from param_graph.elements.models.stable_audio_element import StableAudioModel
 from utils.uid import UIDMismatchError
 
-
 # Workaround for the file extension-based safetensors loading in stable audio tools
 def load_ckpt_state_dict(ckpt_path):
     with open(ckpt_path, "rb") as f:
@@ -160,6 +159,7 @@ class StableAudioAdapter(ModelAdapter):
                 args["init_audio"] = (sample_rate, init_audio_tensor)
                 args["init_noise_level"] = noise_level
 
+
         # Generate stereo audio
         with torch.no_grad():
             output = generate_diffusion_cond(model, **args)
@@ -185,6 +185,8 @@ class StableAudioAdapter(ModelAdapter):
         for k, v in kwargs.items():
             if k.endswith('_element'):
                 context[k.replace('_element', '_id')] = v.id
+            elif k.endswith('_elements'):
+                context[k.replace('_elements', '_ids')] = [el.id for el in v]
             else:
                 context[k] = v
 

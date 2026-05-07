@@ -7,6 +7,7 @@
   import ElementInfoView from './components/views/ElementInfoView.svelte'
   import GenerationView from './components/views/GenerationView.svelte'
   import ErrorView from './components/views/ErrorView.svelte'
+  import ImportLatticeView from './components/views/ImportLatticeView.svelte'
   import ImportModelView from './components/views/ImportModelView.svelte'
   import RemovalView from './components/views/RemovalView.svelte'
   import NewProjectView from './components/views/NewProjectView.svelte'
@@ -315,6 +316,17 @@
     actionPanelView = 'generation'
   }
 
+  function handleImportLattice(modelData: any): void {
+    initiatorNodeStore.set(modelData)
+    actionPanelView = 'import-lattice'
+  }
+
+  function handleLatticeSelectForGeneration(latticeData: any): void {
+    initiatorNodeStore.set(latticeData)
+    contextStore.set({ model_id: latticeData.base_model_id })
+    actionPanelView = 'generation'
+  }
+
   function handleAudioNodeSelectForGeneration(audioData: any, useContext?: boolean): void {
     initiatorNodeStore.set(audioData)
     if (useContext) {
@@ -351,6 +363,9 @@
 
   function getActionPanelTitle(): string {
     if (actionPanelView === 'import-model') {
+      return 'Import Model'
+    }
+    if (actionPanelView === 'import-lattice') {
       return 'Import Model'
     }
     if (actionPanelView === 'generation') {
@@ -435,6 +450,19 @@
             errorInInfoPanel = error
           }}
         />
+      {:else if actionPanelView === 'import-lattice'}
+        <ImportLatticeView
+          onclose={closeActionPanel}
+          onrefresh={() => {
+            closeActionPanel()
+            refreshGraphData()
+          }}
+          onError={(error) => {
+            console.error('Lattice import error:', error)
+            closeActionPanel()
+            errorInInfoPanel = error
+          }}
+        />
       {:else if actionPanelView === 'removal'}
         <RemovalView
           onclose={closeActionPanel}
@@ -510,6 +538,8 @@
     {viewMode}
     onaudioSelect={handleAudioSelect}
     onmodelSelect={handleModelSelect}
+    onimportLattice={handleImportLattice}
+    onlatticeSelectForGeneration={handleLatticeSelectForGeneration}
     onaudioNodeSelectForGeneration={handleAudioNodeSelectForGeneration}
     onnodeSelect={handleElementSelect}
     onedgeSelect={handleElementSelect}

@@ -41,6 +41,15 @@ const defaultStyle: CssStyleDeclaration[] = [
     style: {
       label: (node: NodeSingular) => node.data('name') || node.data('id'),
       'background-color': modelColor,
+      width: 80,
+      height: 80
+    }
+  },
+  {
+    selector: 'node[type="lattice"]',
+    style: {
+      label: (node: NodeSingular) => node.data('name') || node.data('id'),
+      'background-color': modelColor,
       width: 60,
       height: 60
     }

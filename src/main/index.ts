@@ -227,6 +227,21 @@ app.whenReady().then(async () => {
     return await response.json()
   })
 
+  ipcMain.handle('registerLattice', async (_event, latticeData) => {
+    const response = await fetchWithAuth(`${BACKEND_URL}/register_lattice`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(latticeData)
+    })
+    if (!response.ok) {
+      const errorBody = await response.text()
+      throw new Error(
+        `Failed to register lattice. Status: ${response.status}. Error: ${errorBody}`
+      )
+    }
+    return await response.json()
+  })
+
   ipcMain.handle('generate', async (_event, generateData) => {
     try {
       const response = await fetchWithAuth(`${BACKEND_URL}/generate`, {

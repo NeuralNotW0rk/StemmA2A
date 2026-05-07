@@ -27,6 +27,7 @@ const api = {
     ipcRenderer.invoke('getAudioFile', audio_id),
   openFile: (options: unknown) => ipcRenderer.invoke('dialog:openFile', options),
   importModel: (data: unknown) => ipcRenderer.invoke('importModel', data),
+  registerLattice: (data: unknown) => ipcRenderer.invoke('registerLattice', data),
   generate: (data: unknown) => ipcRenderer.invoke('generate', data),
   removeElement: (elementId: string): Promise<any> =>
     ipcRenderer.invoke('removeElement', elementId),

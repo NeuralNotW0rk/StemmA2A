@@ -11,6 +11,7 @@
   import { startExecution } from '../../utils/execution'
   import DynamicForm from '../DynamicForm.svelte'
   import NodeSelector from '../NodeSelector.svelte'
+  import NodeSelectorList from '../NodeSelectorList.svelte'
 
   let { onClose, onError } = $props<{
     onClose: () => void
@@ -27,6 +28,8 @@
   let contextData = $state({})
   let dynamicForm: DynamicForm | undefined = $state()
   let modelNodeSelector: ReturnType<typeof NodeSelector>
+
+  let selectedLattices: { id: number; node: any }[] = $state([])
 
   function handleError(error: { title: string; message: string }): void {
     onError(error)
@@ -88,6 +91,23 @@
   }
 
   $effect(() => {
+    // Auto-clear selected lattices if the base model is changed to an incompatible one
+    const currentModelId = $formStateStore.generationModel?.id
+    if (currentModelId) {
+      let changed = false
+      selectedLattices.forEach((l) => {
+        if (l.node && l.node.base_model_id !== currentModelId) {
+          l.node = null
+          changed = true
+        }
+      })
+      if (changed) selectedLattices = selectedLattices
+    } else if (selectedLattices.length > 0) {
+      selectedLattices = []
+    }
+  })
+
+  $effect(() => {
     // This effect runs when the component mounts. It sets the initial state
     // of the form's model in the global store.
     const context = $contextStore
@@ -103,6 +123,10 @@
     } else {
       $formStateStore.generationModel = null
     }
+
+      if ($initiatorNodeStore?.type === 'lattice' && selectedLattices.length === 0) {
+        selectedLattices = [{ id: -1, node: $initiatorNodeStore }]
+      }
   })
 
   $effect(() => {
@@ -178,10 +202,13 @@
     const jobName = $formStateStore.generationModel.name || 'Generation'
 
     if (batchFields.size === 0) {
+      const lattice_ids = selectedLattices.map((l) => l.node?.id).filter(Boolean)
+
       // Single generation
       const singlePayload = {
         ...payload,
-        model_id: $formStateStore.generationModel.id
+        model_id: $formStateStore.generationModel.id,
+        ...(lattice_ids.length > 0 ? { lattice_ids } : {})
       }
       console.log('Generating with payload:', singlePayload)
 
@@ -219,10 +246,12 @@
           batchPayload[paramNames[index]] = value
         })
 
+        const lattice_ids = selectedLattices.map((l) => l.node?.id).filter(Boolean)
         const fullPayload = {
           ...batchPayload,
           model_id: $formStateStore.generationModel!.id,
-          batch_id: batchId
+          batch_id: batchId,
+          ...(lattice_ids.length > 0 ? { lattice_ids } : {})
         }
         console.log('Generating with payload:', fullPayload)
         startExecution(jobName, fullPayload).catch(console.error)
@@ -247,6 +276,16 @@
       bind:this={modelNodeSelector}
       id="model-selector"
     />
+
+    {#if $formStateStore.generationModel}
+      <NodeSelectorList
+        title="Lattices (Optional)"
+        addButtonText="Add Lattice"
+        filter={{ type: 'lattice', base_model_id: $formStateStore.generationModel.id }}
+        bind:items={selectedLattices}
+        idPrefix="lattice"
+      />
+    {/if}
 
     {#if isLoading}
       <p>Loading configuration...</p>
