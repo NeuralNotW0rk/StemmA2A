@@ -283,7 +283,12 @@
 
       if (isSelecting) {
         const selector = selectionFilter ? buildSelector(selectionFilter) : ''
-        console.log('[ParameterGraph] Node tapped during selection:', nodeData.id, '| Selector:', selector)
+        console.log(
+          '[ParameterGraph] Node tapped during selection:',
+          nodeData.id,
+          '| Selector:',
+          selector
+        )
 
         if (!selector || node.is(selector)) {
           console.log('[ParameterGraph] Valid node clicked. Resolving selection:', nodeData)

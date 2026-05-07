@@ -2,6 +2,7 @@
 <script lang="ts">
   import { initiatorNodeStore } from '../../utils/stores'
   import NodeSelector from '../NodeSelector.svelte'
+  import type { NodeData } from '../../utils/forms'
 
   let { onclose, onrefresh, onError } = $props<{
     onclose: () => void
@@ -13,11 +14,11 @@
   let checkpointPath = $state('')
   let inProgress = $state(false)
 
-  let baseModel = $state<any>($initiatorNodeStore)
+  let baseModel = $state<NodeData | null>($initiatorNodeStore as NodeData | null)
 
   let isFormValid = $derived(name.trim() !== '' && checkpointPath.trim() !== '' && !!baseModel)
 
-  async function selectFile() {
+  async function selectFile(): Promise<void> {
     const path = await window.api.openFile({
       title: 'Select Lattice File',
       filters: [{ name: 'SafeTensors', extensions: ['safetensors'] }]

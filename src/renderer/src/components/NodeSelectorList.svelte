@@ -3,10 +3,11 @@
   import { onDestroy } from 'svelte'
   import NodeSelector from './NodeSelector.svelte'
   import { selectionStore } from '../utils/stores'
+  import type { NodeData } from '../utils/forms'
 
   export interface NodeListItem {
     id: number | string
-    node: any
+    node: NodeData | null
   }
 
   let {
@@ -59,7 +60,7 @@
         }
         const item = items.find((i) => i.id === newItem.id)
         if (item) {
-          item.node = selected
+          item.node = selected as NodeData
         }
       })
     }
@@ -77,7 +78,7 @@
 <div class="node-selector-list">
   <div class="header-row">
     {#if title}
-      <label>{title}</label>
+      <span class="list-title">{title}</span>
     {:else}
       <div></div>
     {/if}
@@ -106,20 +107,60 @@
 </div>
 
 <style>
-  .node-selector-list { margin-bottom: 1rem; }
-  .header-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; }
-  .header-row label { margin: 0; font-weight: 500; color: var(--color-overlay-text); }
-  .small-btn { min-width: 0; min-height: 0; padding: 0.25rem 0.75rem; font-size: 0.85rem; }
-  .members-list { display: flex; flex-direction: column; gap: 0.5rem; }
-  .member-row { display: flex; align-items: center; gap: 0.5rem; }
-  .member-selector { flex-grow: 1; min-width: 0; }
-  .member-selector :global(.form-field) { margin-bottom: 0; }
+  .node-selector-list {
+    margin-bottom: 1rem;
+  }
+  .header-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.5rem;
+  }
+  .header-row .list-title {
+    margin: 0;
+    font-weight: 500;
+    color: var(--color-overlay-text);
+  }
+  .small-btn {
+    min-width: 0;
+    min-height: 0;
+    padding: 0.25rem 0.75rem;
+    font-size: 0.85rem;
+  }
+  .members-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+  .member-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .member-selector {
+    flex-grow: 1;
+    min-width: 0;
+  }
+  .member-selector :global(.form-field) {
+    margin-bottom: 0;
+  }
   .remove-button {
-    flex-shrink: 0; min-width: 0; min-height: 0; cursor: pointer;
-    font-weight: bold; width: 28px; height: 28px; border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
-    padding: 0; font-size: 12px; background-color: transparent;
-    border: 1px solid var(--color-border-glass-1); color: var(--color-text-muted);
+    flex-shrink: 0;
+    min-width: 0;
+    min-height: 0;
+    cursor: pointer;
+    font-weight: bold;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    font-size: 12px;
+    background-color: transparent;
+    border: 1px solid var(--color-border-glass-1);
+    color: var(--color-text-muted);
     transition: all 0.2s ease;
   }
   .remove-button:hover {

@@ -13,6 +13,8 @@ const selectedColor = getCssVar('--graph-selected')
 const boundColor = getCssVar('--graph-bound')
 const modelColor = gradientColor3
 const externalColor = gradientColor2
+const latticeColor = gradientColor4
+
 
 const defaultStyle: CssStyleDeclaration[] = [
   // General style configuration
@@ -41,17 +43,17 @@ const defaultStyle: CssStyleDeclaration[] = [
     style: {
       label: (node: NodeSingular) => node.data('name') || node.data('id'),
       'background-color': modelColor,
-      width: 80,
-      height: 80
+      width: 60,
+      height: 60
     }
   },
   {
     selector: 'node[type="lattice"]',
     style: {
       label: (node: NodeSingular) => node.data('name') || node.data('id'),
-      'background-color': modelColor,
-      width: 60,
-      height: 60
+      'background-color': latticeColor,
+      width: 50,
+      height: 50
     }
   },
   {
@@ -175,6 +177,19 @@ const defaultStyle: CssStyleDeclaration[] = [
     }
   },
   {
+    selector: 'edge[type="lattice"]',
+    style: {
+      'line-color': latticeColor,
+      'target-arrow-color': latticeColor
+    }
+  },
+  {
+    selector: 'edge[relation="binds_to"]',
+    style: {
+      'line-style': 'dashed'
+    }
+  },
+  {
     selector: 'edge[type="audio"]',
     style: {
       'line-color': audioColor,
@@ -188,6 +203,7 @@ const defaultStyle: CssStyleDeclaration[] = [
       'target-arrow-color': externalColor
     }
   },
+
 
   // Overrides
   {

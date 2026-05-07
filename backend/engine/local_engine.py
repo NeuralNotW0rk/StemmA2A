@@ -1,4 +1,5 @@
 import io
+import os
 import tempfile
 import queue
 import threading
@@ -20,7 +21,8 @@ from diffracture.topology.lattice import Lattice as DiffractureLattice
 class LocalEngine(Engine):
     def __init__(self, data_root: str = None):
         super().__init__()
-        self.model_cache = ModelCache()
+        cache_capacity = int(os.environ.get("MODEL_CACHE_CAPACITY", 1))
+        self.model_cache = ModelCache(capacity=cache_capacity)
         
         if data_root:
             self.data_root = Path(data_root)
@@ -34,6 +36,8 @@ class LocalEngine(Engine):
         # --- Job Queue and Worker Setup ---
         self.job_queue = queue.Queue()
         self.job_statuses = {}
+        self.is_sleeping = False
+        self.idle_timeout = int(os.environ.get("ENGINE_IDLE_TIMEOUT", 300))  # 5 minutes default
         self.worker_thread = threading.Thread(target=self._worker, daemon=True)
         self.worker_thread.start()
 
@@ -127,7 +131,16 @@ class LocalEngine(Engine):
     def _worker(self):
         """The worker function that processes jobs from the queue."""
         while True:
-            job_id, operation_id, op_kwargs = self.job_queue.get()
+            try:
+                job_id, operation_id, op_kwargs = self.job_queue.get(timeout=self.idle_timeout)
+                self.is_sleeping = False
+            except queue.Empty:
+                if not self.is_sleeping and len(self.model_cache.cache) > 0:
+                    print(f"Worker: Idle for {self.idle_timeout} seconds. Entering sleep mode (clearing VRAM).")
+                    self.model_cache.clear()
+                    self.is_sleeping = True
+                continue
+
             print(f"Worker: Picked up job {job_id} for operation '{operation_id}'")
 
             # Check if the job was cancelled while in the queue

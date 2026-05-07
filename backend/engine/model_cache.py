@@ -33,3 +33,10 @@ class ModelCache:
         self.cache[model_id] = adapter
         return adapter
 
+    def clear(self):
+        """Evicts all models from the cache to free up resources."""
+        while self.cache:
+            oldest_id, oldest_adapter = self.cache.popitem(last=False)
+            if hasattr(oldest_adapter, 'cleanup'):
+                oldest_adapter.cleanup()
+            del oldest_adapter

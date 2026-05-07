@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tick, onDestroy } from 'svelte'
-  import type { FormConfig } from '../../utils/forms'
+  import type { FormConfig, NodeData } from '../../utils/forms'
   import { initializeFormData } from '../../utils/forms'
   import {
     initiatorNodeStore,
@@ -11,7 +11,7 @@
   import { startExecution } from '../../utils/execution'
   import DynamicForm from '../DynamicForm.svelte'
   import NodeSelector from '../NodeSelector.svelte'
-  import NodeSelectorList from '../NodeSelectorList.svelte'
+  import NodeSelectorList, { type NodeListItem } from '../NodeSelectorList.svelte'
 
   let { onClose, onError } = $props<{
     onClose: () => void
@@ -29,7 +29,7 @@
   let dynamicForm: DynamicForm | undefined = $state()
   let modelNodeSelector: ReturnType<typeof NodeSelector>
 
-  let selectedLattices: { id: number; node: any }[] = $state([])
+  let selectedLattices: NodeListItem[] = $state([])
 
   function handleError(error: { title: string; message: string }): void {
     onError(error)
@@ -124,9 +124,9 @@
       $formStateStore.generationModel = null
     }
 
-      if ($initiatorNodeStore?.type === 'lattice' && selectedLattices.length === 0) {
-        selectedLattices = [{ id: -1, node: $initiatorNodeStore }]
-      }
+    if ($initiatorNodeStore?.type === 'lattice' && selectedLattices.length === 0) {
+      selectedLattices = [{ id: -1, node: $initiatorNodeStore as NodeData }]
+    }
   })
 
   $effect(() => {

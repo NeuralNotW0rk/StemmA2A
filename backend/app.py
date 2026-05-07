@@ -455,7 +455,7 @@ def register_lattice():
             )
 
             param_graph.add_element(lattice_artifact)
-            param_graph.link(base_model, lattice_artifact, action='binds_to')
+            param_graph.link(base_model, lattice_artifact, relation='binds_to')
             param_graph.save()
         
         return jsonify({
@@ -562,7 +562,12 @@ async def generate():
                     return jsonify({"error": f"Node '{element.id}' for field '{field_name}' is not a valid artifact."}), 400
 
         engine_args = {"model_element": model_element, **node_engine_args}
-        linked_elements = [model_element, *resolved_elements]
+        
+        # If lattices are used, the model is implied, so we omit the direct edge
+        if "lattice_elements" in node_engine_args and node_engine_args["lattice_elements"]:
+            linked_elements = [*resolved_elements]
+        else:
+            linked_elements = [model_element, *resolved_elements]
         
         # --- Batching Logic ---
         batch_id = json_data.get("batch_id")
@@ -663,7 +668,7 @@ async def get_job_status(job_id):
 
                 for element in job_context.get("linked_elements", []):
                     print(f"Linking {element.id} to {final_artifact.id}")
-                    param_graph.link(element, final_artifact)
+                    param_graph.link(element, final_artifact, relation='source')
                 param_graph.save()
             
             trigger_embedding_update()
@@ -824,7 +829,7 @@ def expand_path():
                 new_dir = Directory(id=existing_dir_id, name=path_element.name, path=path_element.path)
                 
                 param_graph.add_element(new_dir)
-                new_edge = param_graph.link(path_element, new_dir, action='expands')
+                new_edge = param_graph.link(path_element, new_dir, relation='expands')
                 new_dir_created = True
 
         # 2. Gather paths of existing children to prevent duplicates during sync
