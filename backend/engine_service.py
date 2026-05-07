@@ -12,7 +12,6 @@ from pydantic import ValidationError
 
 from engine.engine_provider import EngineProvider
 from utils.uid import path_from_uid
-from param_graph.utils import resolve_elements_from_dicts
 from param_graph.registry import resolve_element
 
 
@@ -96,8 +95,21 @@ async def execute():
             return jsonify({"error": "Missing 'operation' or 'params' in request."}), 400
 
         engine = engine_provider.get_engine()
-        resolved_params, all_elements = resolve_elements_from_dicts(params)
         
+        all_elements = {}
+        def _resolve_and_collect(val):
+            if isinstance(val, dict) and "id" in val and "type" in val:
+                element = resolve_element(val)
+                all_elements[element.id] = element
+                return element
+            elif isinstance(val, list):
+                return [_resolve_and_collect(v) for v in val]
+            elif isinstance(val, dict):
+                return {k: _resolve_and_collect(v) for k, v in val.items()}
+            return val
+
+        resolved_params = _resolve_and_collect(params)
+
         required_uids = {uid for element in all_elements.values() for uid in element.get_uids()}
         missing_uids = [uid for uid in required_uids if not (data_cache_root / path_from_uid(uid)).exists()]
         
@@ -105,11 +117,16 @@ async def execute():
             print(f"Missing assets: {missing_uids}")
             return jsonify({"error": "Missing assets", "missing_uids": missing_uids}), 422
         
-        # This was a bug. We need to anchor all resolved elements, not just `all_elements`.
-        # And we need to preserve the non-element params.
-        anchored_params = resolved_params.copy()
-        for key, element in all_elements.items():
-            anchored_params[key] = element.anchor(str(data_cache_root), with_extension=False)
+        def _anchor_elements(val):
+            if hasattr(val, 'anchor') and callable(val.anchor):
+                return val.anchor(str(data_cache_root), with_extension=False)
+            elif isinstance(val, list):
+                return [_anchor_elements(v) for v in val]
+            elif isinstance(val, dict):
+                return {k: _anchor_elements(v) for k, v in val.items()}
+            return val
+
+        anchored_params = _anchor_elements(resolved_params)
 
         op_id_str = operation_id['id'] if isinstance(operation_id, dict) and 'id' in operation_id else operation_id
 

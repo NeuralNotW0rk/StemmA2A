@@ -79,7 +79,7 @@ class LocalEngine(Engine):
             model_device = next(adapter.model.parameters()).device
             
             for lattice_element in lattice_elements:
-                print(f"Engine: Applying Lattice '{lattice_element.name}'...")
+                print(f"Engine: Applying Lattice '{lattice_element.id}'...")
                 lattice = DiffractureLattice.load(lattice_element.file.path)
                 lattice.to(model_device)
                 adapter.actant.activate(lattice, injection_strategy="graft")
