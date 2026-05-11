@@ -258,9 +258,9 @@
           batchPayload[paramNames[index]] = value
         })
 
-      const lattice_ids = selectedLattices
-        .map((l) => (typeof l.node === 'string' ? l.node : l.node?.id))
-        .filter(Boolean)
+        const lattice_ids = selectedLattices
+          .map((l) => (typeof l.node === 'string' ? l.node : l.node?.id))
+          .filter(Boolean)
         const fullPayload = {
           ...batchPayload,
           model_id: $formStateStore.generationModel!.id,

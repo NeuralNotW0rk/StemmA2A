@@ -65,7 +65,8 @@
       // Special evaluation: Ensure the node has exactly the same incoming structural dependencies
       if (key === '_incoming_node_ids') {
         const incomingIds = node.data('_incoming_node_ids') || []
-        if (!Array.isArray(expectedValue) || incomingIds.length !== expectedValue.length) return false
+        if (!Array.isArray(expectedValue) || incomingIds.length !== expectedValue.length)
+          return false
         const expectedSorted = [...expectedValue].sort()
         const actualSorted = [...incomingIds].sort()
         for (let i = 0; i < expectedSorted.length; i++) {
@@ -309,10 +310,7 @@
       const nodeData = node.data()
 
       if (isSelecting) {
-        console.log(
-          '[ParameterGraph] Node tapped during selection:',
-          nodeData.id
-        )
+        console.log('[ParameterGraph] Node tapped during selection:', nodeData.id)
 
         if (!selectionFilter || matchesFilter(node, selectionFilter)) {
           console.log('[ParameterGraph] Valid node clicked. Resolving selection:', nodeData)
