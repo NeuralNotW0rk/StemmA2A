@@ -5,6 +5,8 @@ import queue
 import threading
 import uuid
 import asyncio
+import gc
+import torch
 from pathlib import Path
 from dataclasses import replace
 
@@ -138,6 +140,13 @@ class LocalEngine(Engine):
                 if not self.is_sleeping and len(self.model_cache.cache) > 0:
                     print(f"Worker: Idle for {self.idle_timeout} seconds. Entering sleep mode (clearing VRAM).")
                     self.model_cache.clear()
+                    
+                    # Force Python to collect garbage immediately
+                    gc.collect()
+                    # Force PyTorch to release cached VRAM back to the OS
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                        
                     self.is_sleeping = True
                 continue
 

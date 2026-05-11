@@ -9,13 +9,14 @@
   }>()
 
   let isRemoving = $state(false)
+  let keepChildren = $state(true)
 
   async function remove(): Promise<void> {
     if (!$selectedForRemoval) return
 
     isRemoving = true
     try {
-      await window.api.removeElement($selectedForRemoval.id)
+      await window.api.removeElement($selectedForRemoval.id, keepChildren)
       onrefresh()
     } catch (e: unknown) {
       console.error('Failed to remove element:', e)
@@ -35,6 +36,25 @@
       <strong>{$selectedForRemoval.id}</strong>
       <span>({$selectedForRemoval.type})</span>
     </div>
+    {#if $selectedForRemoval.type === 'batch' || $selectedForRemoval.type === 'directory'}
+      <div class="options">
+        <label>
+          <input type="checkbox" bind:checked={keepChildren} disabled={isRemoving} />
+          {#if $selectedForRemoval.type === 'batch'}
+            Keep child elements (disband batch)
+          {:else}
+            Keep contained files
+          {/if}
+        </label>
+        <p class="hint-text">
+          {#if keepChildren}
+            The {$selectedForRemoval.type} will be removed, but its contents will remain on the graph.
+          {:else}
+            The {$selectedForRemoval.type} and all of its contents will be permanently removed.
+          {/if}
+        </p>
+      </div>
+    {/if}
     <div class="button-group">
       <button onclick={remove} class="danger" disabled={isRemoving}>
         {#if isRemoving}
@@ -68,6 +88,22 @@
     padding: 0.5rem;
     background-color: var(--color-background-glass-2);
     border-radius: 0.25rem;
+  }
+
+  .options {
+    margin-bottom: 1.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    text-align: left;
+  }
+
+  .hint-text {
+    font-size: 0.85rem;
+    margin: 0;
+    color: var(--color-text-dimmed, #aaa);
+    max-width: 250px;
+    line-height: 1.3;
   }
 
   .button-group {

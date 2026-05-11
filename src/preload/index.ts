@@ -29,8 +29,8 @@ const api = {
   importModel: (data: unknown) => ipcRenderer.invoke('importModel', data),
   registerLattice: (data: unknown) => ipcRenderer.invoke('registerLattice', data),
   generate: (data: unknown) => ipcRenderer.invoke('generate', data),
-  removeElement: (elementId: string): Promise<any> =>
-    ipcRenderer.invoke('removeElement', elementId),
+  removeElement: (elementId: string, keepChildren?: boolean): Promise<any> =>
+    ipcRenderer.invoke('removeElement', elementId, keepChildren),
   logMessage: (message: string): Promise<any> => ipcRenderer.invoke('logMessage', message),
   updateLabels: (): Promise<any> => ipcRenderer.invoke('updateLabels'),
   updateEmbeddings: (): Promise<any> => ipcRenderer.invoke('updateEmbeddings'),

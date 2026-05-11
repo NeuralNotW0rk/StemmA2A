@@ -220,12 +220,21 @@ def upload():
     if file.filename == '':
         return jsonify({"error": "No selected file"}), 400
 
+    uid = request.form.get("uid") or file.filename
+    chunk_index = int(request.form.get("chunk_index", 0))
+    total_chunks = int(request.form.get("total_chunks", 1))
+
     if file:
-        uid = file.filename
         destination = data_cache_root / path_from_uid(uid)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        file.save(destination)
-        return jsonify({"message": f"File {uid} uploaded successfully"})
+        
+        mode = 'wb' if chunk_index == 0 else 'ab'
+        with open(destination, mode) as f:
+            f.write(file.read())
+            
+        if chunk_index == total_chunks - 1:
+            return jsonify({"message": f"File {uid} uploaded successfully"})
+        return jsonify({"message": f"Chunk {chunk_index} of {uid} uploaded"})
 
     return jsonify({"error": "File upload failed"}), 500
 

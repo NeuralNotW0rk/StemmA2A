@@ -96,7 +96,7 @@
     if (currentModelId) {
       let changed = false
       selectedLattices.forEach((l) => {
-        if (l.node && l.node.base_model_id !== currentModelId) {
+        if (typeof l.node === 'object' && l.node && l.node.base_model_id !== currentModelId) {
           l.node = null
           changed = true
         }
@@ -126,6 +126,15 @@
 
     if ($initiatorNodeStore?.type === 'lattice' && selectedLattices.length === 0) {
       selectedLattices = [{ id: -1, node: $initiatorNodeStore as NodeData }]
+    } else if (
+      context &&
+      context.lattice_ids &&
+      Array.isArray(context.lattice_ids) &&
+      selectedLattices.length === 0
+    ) {
+      selectedLattices = context.lattice_ids.map((l_id: string, idx: number) => {
+        return { id: -1 - idx, node: l_id }
+      })
     }
   })
 
@@ -202,7 +211,9 @@
     const jobName = $formStateStore.generationModel.name || 'Generation'
 
     if (batchFields.size === 0) {
-      const lattice_ids = selectedLattices.map((l) => l.node?.id).filter(Boolean)
+      const lattice_ids = selectedLattices
+        .map((l) => (typeof l.node === 'string' ? l.node : l.node?.id))
+        .filter(Boolean)
 
       // Single generation
       const singlePayload = {
@@ -246,7 +257,9 @@
           batchPayload[paramNames[index]] = value
         })
 
-        const lattice_ids = selectedLattices.map((l) => l.node?.id).filter(Boolean)
+      const lattice_ids = selectedLattices
+        .map((l) => (typeof l.node === 'string' ? l.node : l.node?.id))
+        .filter(Boolean)
         const fullPayload = {
           ...batchPayload,
           model_id: $formStateStore.generationModel!.id,

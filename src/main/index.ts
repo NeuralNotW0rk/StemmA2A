@@ -297,8 +297,12 @@ app.whenReady().then(async () => {
     }
   })
 
-  ipcMain.handle('removeElement', async (_event, elementId) => {
-    const response = await fetchWithAuth(`${BACKEND_URL}/element/${elementId}`, {
+  ipcMain.handle('removeElement', async (_event, elementId, keepChildren = false) => {
+    const url = new URL(`${BACKEND_URL}/element/${elementId}`)
+    if (keepChildren) {
+      url.searchParams.append('keep_children', 'true')
+    }
+    const response = await fetchWithAuth(url.toString(), {
       method: 'DELETE'
     })
     if (!response.ok) {

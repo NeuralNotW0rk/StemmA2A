@@ -590,10 +590,14 @@ async def generate():
         print(f"app.py: Engine returned job_id: {job_id}")
         
         # Store job context to process the artifact later when the frontend polls /job_status
+        v_params = validated_params.model_dump()
+        if lattice_ids:
+            v_params["lattice_ids"] = lattice_ids
+            
         active_jobs[job_id] = {
             "batch_id": batch_id,
             "linked_elements": linked_elements,
-            "validated_params": validated_params.model_dump()
+            "validated_params": v_params
         }
 
         return jsonify({
@@ -1401,8 +1405,27 @@ def remove_element(element_id):
     if param_graph is None:
         return jsonify({"error": "No project loaded"}), 400
 
+    keep_children = request.args.get('keep_children', 'false').lower() == 'true'
+
     try:
         with graph_lock:
+            if keep_children and param_graph.G.has_node(element_id):
+                node_attrs = param_graph.G.nodes[element_id]
+                
+                # Find and unlink any nodes specifying this element as their parent
+                children = [n for n, d in param_graph.G.nodes(data=True) if d.get('parent') == element_id]
+                for child_id in children:
+                    param_graph.update_element(child_id, {"parent": None, "alias": None})
+
+                if node_attrs.get('type') == 'batch':
+                    member_ids = node_attrs.get('member_ids', [])
+                    for m_id in member_ids:
+                        param_graph.update_element(m_id, {"parent": None, "alias": None})
+                    
+                    # CRITICAL: strip the batch of its members so remove_element doesn't cascade
+                    param_graph.update_element(element_id, {"member_ids": []})
+                    node_attrs['member_ids'] = []
+
             param_graph.remove_element(element_id)
             param_graph.save()
 

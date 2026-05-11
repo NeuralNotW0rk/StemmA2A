@@ -63,6 +63,9 @@
     return Object.entries(filter)
       .map(([key, value]) => {
         if (value == null) return `[!${key}]`
+        if (Array.isArray(value)) {
+          return value.map((v) => `[${key} = "${v}"]`).join('')
+        }
         if (typeof value === 'string') return `[${key} = "${value}"]`
         return `[${key} = ${value}]` // Omit quotes for numbers and booleans
       })

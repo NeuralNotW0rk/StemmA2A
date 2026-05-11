@@ -7,7 +7,7 @@
 
   export interface NodeListItem {
     id: number | string
-    node: NodeData | null
+    node: NodeData | string | null
   }
 
   let {

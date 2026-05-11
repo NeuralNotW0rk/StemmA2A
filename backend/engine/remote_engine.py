@@ -162,14 +162,21 @@ class RemoteEngine(Engine):
                 return False
             paths_to_upload.append((asset_uid, asset_path))
 
+        chunk_size = 10 * 1024 * 1024  # 10 MB
         for asset_uid, asset_path in paths_to_upload:
-            data = aiohttp.FormData()
-            data.add_field('file',
-                           open(asset_path, 'rb'),
-                           filename=asset_uid,
-                           content_type='application/octet-stream')
+            file_size = os.path.getsize(asset_path)
+            total_chunks = max(1, (file_size + chunk_size - 1) // chunk_size)
+            
+            with open(asset_path, 'rb') as f:
+                for i in range(total_chunks):
+                    chunk_data = f.read(chunk_size)
+                    data = aiohttp.FormData()
+                    data.add_field('uid', asset_uid)
+                    data.add_field('chunk_index', str(i))
+                    data.add_field('total_chunks', str(total_chunks))
+                    data.add_field('file', chunk_data, filename=asset_uid, content_type='application/octet-stream')
 
-            async with session.post(f"{self.remote_url}/upload", data=data) as response:
-                response.raise_for_status()
+                    async with session.post(f"{self.remote_url}/upload", data=data) as response:
+                        response.raise_for_status()
         
         return True

@@ -43,18 +43,22 @@
 
     if (!refNode) return {}
 
-    const newFilter: Record<string, string | number | boolean | null> = {}
+    const newFilter: Record<string, any> = {}
     if (refNode.type) newFilter.type = refNode.type
 
-    const ctx = refNode.context as Record<string, string | number | boolean | null> | undefined
+    const ctx = refNode.context as Record<string, any> | undefined
     if (ctx?.model_id) newFilter['context.model_id'] = ctx.model_id
     if (ctx?.init_audio_id) newFilter['context.init_audio_id'] = ctx.init_audio_id
     if (ctx?.prompt) newFilter['context.prompt'] = ctx.prompt
 
-    //newFilter.parent = null // Exclude nodes that are already in a batch
+    if (ctx?.lattice_ids && Array.isArray(ctx.lattice_ids) && ctx.lattice_ids.length > 0) {
+      newFilter['context.lattice_ids'] = ctx.lattice_ids
+    } else {
+      newFilter['context.lattice_ids'] = null
+    }
 
     console.log('Filter:', newFilter)
-    return newFilter as Record<string, string | number | boolean>
+    return newFilter
   })
 
   let nextMemberId = 0
@@ -82,11 +86,13 @@
   })
 
   async function saveBatch(): Promise<void> {
-    const member_ids = members.map((m) => m.node?.id).filter(Boolean)
-    if (member_ids.length < 2) {
+    const member_ids = members
+      .map((m) => (typeof m.node === 'string' ? m.node : m.node?.id))
+      .filter(Boolean)
+    if (member_ids.length < 1) {
       onerror({
         title: 'Batching Error',
-        message: 'You must select at least two members for a batch.'
+        message: 'You must select at least one member for a batch.'
       })
       return
     }
