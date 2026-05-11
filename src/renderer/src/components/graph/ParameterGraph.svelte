@@ -59,17 +59,45 @@
     selectionBoundNodeId = store.boundNodeId
   })
 
-  function buildSelector(filter: Record<string, any>): string {
-    return Object.entries(filter)
-      .map(([key, value]) => {
-        if (value == null) return `[!${key}]`
-        if (Array.isArray(value)) {
-          return value.map((v) => `[${key} = "${v}"]`).join('')
+  function matchesFilter(node: cytoscape.NodeSingular, filter: Record<string, any>): boolean {
+    const data = node.data()
+    for (const [key, expectedValue] of Object.entries(filter)) {
+      // Special evaluation: Ensure the node has exactly the same incoming structural dependencies
+      if (key === '_incoming_node_ids') {
+        const incomingIds = node.data('_incoming_node_ids') || []
+        if (!Array.isArray(expectedValue) || incomingIds.length !== expectedValue.length) return false
+        const expectedSorted = [...expectedValue].sort()
+        const actualSorted = [...incomingIds].sort()
+        for (let i = 0; i < expectedSorted.length; i++) {
+          if (expectedSorted[i] !== actualSorted[i]) return false
         }
-        if (typeof value === 'string') return `[${key} = "${value}"]`
-        return `[${key} = ${value}]` // Omit quotes for numbers and booleans
-      })
-      .join('')
+        continue
+      }
+
+      // Standard evaluation: Check nested node data properties
+      const keys = key.split('.')
+      let actualValue = data
+      for (const k of keys) {
+        if (actualValue == null) break
+        actualValue = actualValue[k]
+      }
+
+      if (expectedValue == null) {
+        if (actualValue != null && (!Array.isArray(actualValue) || actualValue.length > 0)) {
+          return false
+        }
+      } else if (Array.isArray(expectedValue)) {
+        if (!Array.isArray(actualValue) || actualValue.length !== expectedValue.length) return false
+        const expectedSorted = [...expectedValue].sort()
+        const actualSorted = [...actualValue].sort()
+        for (let i = 0; i < expectedSorted.length; i++) {
+          if (expectedSorted[i] !== actualSorted[i]) return false
+        }
+      } else {
+        if (actualValue !== expectedValue) return false
+      }
+    }
+    return true
   }
 
   $effect(() => {
@@ -77,16 +105,12 @@
       cy.elements().removeClass('highlighted dimmed')
 
       if (isSelecting && selectionFilter) {
-        const selector = buildSelector(selectionFilter)
+        const highlightedNodes = cy.nodes().filter((node) => matchesFilter(node, selectionFilter!))
+        const ancestorNodes = highlightedNodes.ancestors()
 
-        if (selector) {
-          const highlightedNodes = cy.nodes(selector)
-          const ancestorNodes = highlightedNodes.ancestors()
-
-          highlightedNodes.addClass('highlighted')
-          cy.nodes().not(highlightedNodes).not(ancestorNodes).addClass('dimmed')
-          cy.edges().addClass('dimmed')
-        }
+        highlightedNodes.addClass('highlighted')
+        cy.nodes().not(highlightedNodes).not(ancestorNodes).addClass('dimmed')
+        cy.edges().addClass('dimmed')
 
         if (selectionBoundNodeId) {
           cy.getElementById(selectionBoundNodeId).removeClass('dimmed').addClass('bound')
@@ -285,15 +309,12 @@
       const nodeData = node.data()
 
       if (isSelecting) {
-        const selector = selectionFilter ? buildSelector(selectionFilter) : ''
         console.log(
           '[ParameterGraph] Node tapped during selection:',
-          nodeData.id,
-          '| Selector:',
-          selector
+          nodeData.id
         )
 
-        if (!selector || node.is(selector)) {
+        if (!selectionFilter || matchesFilter(node, selectionFilter)) {
           console.log('[ParameterGraph] Valid node clicked. Resolving selection:', nodeData)
           // Pass a clean clone of the data to avoid Svelte 5 proxy / Cytoscape internal conflicts
           selectionStore.resolveSelection({ ...nodeData })
@@ -447,12 +468,26 @@
     cy.batch(() => {
       cy.elements().remove()
 
+      // Pre-calculate raw structural dependencies before proxy-edge mutations
+      const incomingMap: Record<string, string[]> = {}
+      newElements.forEach((ele: any) => {
+        if ((ele.group === 'edges' || ele.data.source) && ele.data.type !== 'spring') {
+          const t = ele.data.target
+          if (!incomingMap[t]) incomingMap[t] = []
+          if (!incomingMap[t].includes(ele.data.source)) incomingMap[t].push(ele.data.source)
+        }
+      })
+
       const seenProxyEdges = new SvelteSet<string>()
 
       let processedElements = newElements.reduce((acc: any[], ele: any) => {
         // Backend saves position inside element 'data' attributes, but Cytoscape expects it at the root
         if (ele.data && ele.data.position) {
           ele.position = { ...ele.data.position }
+        }
+
+        if (ele.group === 'nodes' || (!ele.data.source && !ele.data.target)) {
+          ele.data._incoming_node_ids = incomingMap[ele.data.id] || []
         }
 
         if (use_proxy_edges && (ele.group === 'edges' || ele.data.source)) {

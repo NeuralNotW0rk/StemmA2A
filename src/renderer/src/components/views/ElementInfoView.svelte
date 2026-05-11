@@ -1,26 +1,42 @@
 <!-- src/renderer/src/components/views/ElementInfoView.svelte -->
 <script lang="ts">
-  /* eslint-disable @typescript-eslint/no-explicit-any */
+  import { ELEMENT_INFO_CONFIG } from '../../utils/app-config'
+  import type { ElementData } from '../../utils/types'
+
   interface Props {
-    selectedElementData: Record<string, any> | null
+    selectedElementData: ElementData | null
   }
 
   let { selectedElementData }: Props = $props()
 
-  // A list of keys to ignore for a cleaner display
-  const ignoredKeys = new Set(['x', 'y', 'vx', 'vy', 'fx', 'fy', 'index', 'clap', 'embeddings'])
+  let displayEntries = $derived(
+    selectedElementData
+      ? Object.entries(selectedElementData)
+          .filter(([key]) => !(ELEMENT_INFO_CONFIG.ignoredKeys as Set<string>).has(key))
+          .sort(([keyA], [keyB]) => {
+            const indexA = (ELEMENT_INFO_CONFIG.priorityKeys as readonly string[]).indexOf(keyA)
+            const indexB = (ELEMENT_INFO_CONFIG.priorityKeys as readonly string[]).indexOf(keyB)
+
+            // If both are priority keys, preserve their order defined in the array
+            if (indexA !== -1 && indexB !== -1) return indexA - indexB
+            if (indexA !== -1) return -1 // Only A is a priority key
+            if (indexB !== -1) return 1 // Only B is a priority key
+
+            // Neither are priority keys, sort alphabetically
+            return keyA.localeCompare(keyB)
+          })
+      : []
+  )
 </script>
 
 <div class="view-content">
   {#if selectedElementData}
     <ul>
-      {#each Object.entries(selectedElementData) as [key, value] (key)}
-        {#if !ignoredKeys.has(key)}
-          <li>
-            <strong class="key">{key}</strong>
-            <span class="value">{JSON.stringify(value, null, 2)}</span>
-          </li>
-        {/if}
+      {#each displayEntries as [key, value] (key)}
+        <li>
+          <strong class="key">{key}</strong>
+          <span class="value">{JSON.stringify(value, null, 2)}</span>
+        </li>
       {/each}
     </ul>
   {:else}

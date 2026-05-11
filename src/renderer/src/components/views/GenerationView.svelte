@@ -12,11 +12,12 @@
   import DynamicForm from '../DynamicForm.svelte'
   import NodeSelector from '../NodeSelector.svelte'
   import NodeSelectorList, { type NodeListItem } from '../NodeSelectorList.svelte'
+  import type { ErrorInfo } from '../../utils/types'
 
   let { onClose, onError } = $props<{
     onClose: () => void
     onGenerate: (data: unknown) => void
-    onError: (error: { title: string; message: string }) => void
+    onError: (error: ErrorInfo) => void
   }>()
 
   let adapterFields: FormConfig | null = $state(null)
@@ -31,7 +32,7 @@
 
   let selectedLattices: NodeListItem[] = $state([])
 
-  function handleError(error: { title: string; message: string }): void {
+  function handleError(error: ErrorInfo): void {
     onError(error)
     onClose()
   }

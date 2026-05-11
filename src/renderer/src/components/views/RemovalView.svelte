@@ -1,11 +1,12 @@
 <!-- c:\Users\griff\Documents\GitHub\StemmA2A\src\renderer\src\components\views\RemovalView.svelte -->
 <script lang="ts">
   import { selectedForRemoval } from '../../utils/stores'
+  import type { ErrorInfo } from '../../utils/types'
 
   let { onclose, onrefresh, onerror } = $props<{
     onclose: () => void
     onrefresh: () => void
-    onerror: (error: { title: string; message: string }) => void
+    onerror: (error: ErrorInfo) => void
   }>()
 
   let isRemoving = $state(false)

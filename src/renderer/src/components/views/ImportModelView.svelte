@@ -1,6 +1,7 @@
 <!-- src/renderer/src/components/views/ImportModelView.svelte -->
 <script lang="ts">
   import type { FormConfig } from '../../utils/forms'
+  import type { ErrorInfo } from '../../utils/types'
   import DynamicForm from '../DynamicForm.svelte'
 
   interface AdapterConfig {
@@ -20,7 +21,7 @@
   let { onclose, onrefresh, onError } = $props<{
     onclose: () => void
     onrefresh: () => void
-    onError: (error: { title: string; message: string }) => void
+    onError: (error: ErrorInfo) => void
   }>()
 
   let selectedAdapter = $state(adapters[0].id)
@@ -28,25 +29,28 @@
   let formData: Record<string, unknown> = $state({})
   let inProgress = $state(false)
   let isFormValid = $state(false)
-  
+
   let currentAdapterConfig = $derived(adapters.find((e) => e.id === selectedAdapter))
 
-  $effect(async () => {
-    inProgress = true
-    try {
-      const config = await window.api.get_import_form_config(selectedAdapter)
-      if (config && Array.isArray(config)) {
-        formFields = config
-      } else {
-        throw new Error('Invalid config format for import received from backend.')
+  $effect(() => {
+    const loadConfig = async (): Promise<void> => {
+      inProgress = true
+      try {
+        const config = await window.api.get_import_form_config(selectedAdapter)
+        if (config && Array.isArray(config)) {
+          formFields = config
+        } else {
+          throw new Error('Invalid config format for import received from backend.')
+        }
+      } catch (e: unknown) {
+        console.error('Failed to load import config:', e)
+        const message = e instanceof Error ? e.message : String(e)
+        onError({ title: 'Config Error', message })
+      } finally {
+        inProgress = false
       }
-    } catch (e) {
-      console.error('Failed to load import config:', e)
-      const message = e instanceof Error ? e.message : String(e)
-      onError({ title: 'Config Error', message })
-    } finally {
-      inProgress = false
     }
+    loadConfig()
   })
 
   async function importModel(): Promise<void> {
@@ -61,7 +65,7 @@
       formData = {}
       onclose()
       onrefresh()
-    } catch (e) {
+    } catch (e: unknown) {
       console.error('Failed to import model:', e)
       const message = e instanceof Error ? e.message : String(e)
       onError({ title: 'Import Failed', message })

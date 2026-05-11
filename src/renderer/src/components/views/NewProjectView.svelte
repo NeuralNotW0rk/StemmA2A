@@ -19,8 +19,8 @@
         projectPath = path
         projectName = path.split(/[/\\]/).pop() || ''
       }
-    } catch (error: any) {
-      errorMessage = error.message || 'Failed to open directory dialog.'
+    } catch (error: unknown) {
+      errorMessage = error instanceof Error ? error.message : 'Failed to open directory dialog.'
     }
   }
 
@@ -40,8 +40,8 @@
     try {
       await oncreate({ project_path: projectPath, project_name: projectName.trim() })
       onclose() // Close panel on success
-    } catch (error: any) {
-      errorMessage = error.message || 'An unknown error occurred.'
+    } catch (error: unknown) {
+      errorMessage = error instanceof Error ? error.message : 'An unknown error occurred.'
     } finally {
       isLoading = false
     }

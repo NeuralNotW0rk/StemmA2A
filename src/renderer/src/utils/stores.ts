@@ -1,6 +1,7 @@
 import { writable } from 'svelte/store'
 import type { Core } from 'cytoscape'
 import type { ModelData, NodeData } from './forms'
+import type { NodeFilter } from './types'
 
 export const cyInstanceStore = writable<Core | null>(null);
 
@@ -8,7 +9,7 @@ type SelectableNodeData = NodeData
 
 interface SelectionState {
   isSelecting: boolean
-  filter: Record<string, string | number | boolean> | null
+  filter: NodeFilter | null
   boundNodeId: string | null
   onSelect: ((node: SelectableNodeData) => void) | null
 }
@@ -25,7 +26,7 @@ function createSelectionStore() {
   return {
     subscribe,
     startSelection: (
-      filter: Record<string, string | number | boolean>,
+      filter: NodeFilter,
       boundNodeId: string | null,
       onSelect: (node: SelectableNodeData) => void
     ) =>

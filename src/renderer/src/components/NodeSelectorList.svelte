@@ -4,6 +4,7 @@
   import NodeSelector from './NodeSelector.svelte'
   import { selectionStore } from '../utils/stores'
   import type { NodeData } from '../utils/forms'
+  import type { NodeFilter } from '../utils/types'
 
   export interface NodeListItem {
     id: number | string
@@ -21,7 +22,7 @@
   } = $props<{
     title?: string
     addButtonText?: string
-    filter?: Record<string, string | number | boolean>
+    filter?: NodeFilter
     items: NodeListItem[]
     idPrefix?: string
     minItems?: number

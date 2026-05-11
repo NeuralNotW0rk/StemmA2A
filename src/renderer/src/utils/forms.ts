@@ -1,3 +1,5 @@
+import type { NodeFilter } from './types'
+
 export interface FormFieldOption {
   label: string;
   value: any;
@@ -8,7 +10,7 @@ export interface FormField {
   label:string;
   type: 'string' | 'number' | 'boolean' | 'textarea' | 'select' | 'file' | 'node';
   defaultValue?: any;
-  filter?: Record<string, string | number | boolean>;
+  filter?: NodeFilter;
   options?: FormFieldOption[];
   placeholder?: string;
   validation?: {

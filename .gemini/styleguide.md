@@ -1,0 +1,22 @@
+# Project Rules & Coding Standards
+
+## 1. Svelte 5 Paradigms & Runes
+- **Strictly Use Runes:** Always use Svelte 5 Runes (`$state`, `$derived`, `$effect`, `$props`, `$bindable`) for reactivity and state management. Never use Svelte 4 reactive statements (`$:`) or Svelte 4 prop exports (`export let`).
+- **Event Handlers:** Use Svelte 5 event handler syntax (e.g., `onclick={handler}`, `onkeydown={handler}`). Do not use Svelte 4 syntax (`on:click={handler}`).
+- **Component Props:** Always declare props using `$props()`. Provide clear TypeScript interfaces for all props.
+  *Example:* `let { myProp, defaultProp = 'default' }: Props = $props();`
+- **Slots vs. Snippets:** Use Svelte 5 snippets (`{#snippet mySnippet()}`) and `{@render mySnippet()}`. Avoid using Svelte 4 `<slot />` elements.
+- **Effects and Lifecycle:** Prefer `$effect(() => { ... return () => { cleanup } })` over traditional lifecycle hooks (`onMount`, `onDestroy`) unless explicitly necessary. Note that `$effect` must remain synchronous.
+
+## 2. Strict TypeScript & Return Types
+- **Mandatory Return Types:** Every single function, method, and arrow function *must* have an explicit return type defined, including `void` or `Promise<void>`.
+  *Example:* `const calculateTotal = (a: number, b: number): number => { ... }`
+  *Example:* `async function fetchData(): Promise<void> { ... }`
+- **Strict State Typing:** Always provide explicit types for `$state` and `$derived` when the type cannot be safely and narrowly inferred by TypeScript.
+  *Example:* `let user = $state<User | null>(null);`
+- **Never Use `any`:** The `any` type is strictly forbidden. Use `unknown` if the shape of the data is truly not guaranteed, and perform type narrowing/checking before accessing properties.
+- **Error Handling Types:** In `try/catch` blocks, always type the caught error as `unknown` (e.g., `catch (error: unknown)`), and check `error instanceof Error` before accessing `.message`.
+
+## 3. General Code Quality
+- **Line Endings:** Always use LF (`\n`) for line endings.
+- **Linting & Formatting:** Ensure code adheres strictly to ESLint and Prettier configurations. Do not bypass linting rules using `eslint-disable` unless absolutely necessary and documented with a comment.

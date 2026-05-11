@@ -307,7 +307,7 @@
   function handleElementSelect(elementData: any): void {
     selectedElementData = elementData
     errorInInfoPanel = null // Clear any existing errors when a new element is selected
-    console.log(`Element selected: ${selectedElementData?.name || 'Unknown'}`)
+    console.log(`Element selected: ${(selectedElementData?.name as string) || 'Unknown'}`)
   }
 
   function handleModelSelect(modelData: any): void {
@@ -347,7 +347,7 @@
     actionPanelView = 'batching'
   }
 
-  function handleGenerationError(error: { title: string; message: string }): void {
+  function handleGenerationError(error: ErrorInfo): void {
     errorInInfoPanel = error
   }
 
@@ -521,7 +521,9 @@
 
     {#if selectedElementData}
       <ContentPanel
-        title={selectedElementData.alias || selectedElementData.name || 'Element Details'}
+        title={(selectedElementData.name as string) ||
+          (selectedElementData.alias as string) ||
+          'Element Details'}
         onclose={() => {
           selectedElementData = null
         }}

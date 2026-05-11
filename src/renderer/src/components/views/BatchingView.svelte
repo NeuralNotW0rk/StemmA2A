@@ -2,6 +2,8 @@
   import { initiatorNodeStore, cyInstanceStore, type GraphElement } from '../../utils/stores'
   import NodeSelectorList, { type NodeListItem } from '../NodeSelectorList.svelte'
   import type { NodeData } from '../../utils/forms'
+  import { BATCHING_CONFIG } from '../../utils/app-config'
+  import type { NodeFilter, ErrorInfo } from '../../utils/types'
 
   let {
     initiatorNode = $initiatorNodeStore,
@@ -12,7 +14,7 @@
     initiatorNode?: GraphElement | null
     onclose: () => void
     onrefresh: () => void
-    onerror: (error: { title: string; message: string }) => void
+    onerror: (error: ErrorInfo) => void
   }>()
 
   $effect(() => {
@@ -28,9 +30,9 @@
 
   let filter = $derived.by(() => {
     let refNode: NodeData | null | undefined = null
+    const cy = $cyInstanceStore
 
     if (isUpdate) {
-      const cy = $cyInstanceStore
       if (cy && initiatorNode?.id) {
         const children = cy.$id(initiatorNode.id).children()
         if (children.length > 0) {
@@ -43,18 +45,17 @@
 
     if (!refNode) return {}
 
-    const newFilter: Record<string, any> = {}
+    const newFilter: NodeFilter = {}
     if (refNode.type) newFilter.type = refNode.type
 
-    const ctx = refNode.context as Record<string, any> | undefined
-    if (ctx?.model_id) newFilter['context.model_id'] = ctx.model_id
-    if (ctx?.init_audio_id) newFilter['context.init_audio_id'] = ctx.init_audio_id
-    if (ctx?.prompt) newFilter['context.prompt'] = ctx.prompt
+    const ctx = refNode.context as Record<string, unknown> | undefined
+    BATCHING_CONFIG.strictContextKeys.forEach((key) => {
+      newFilter[`context.${key}`] = ctx?.[key] ?? null
+    })
 
-    if (ctx?.lattice_ids && Array.isArray(ctx.lattice_ids) && ctx.lattice_ids.length > 0) {
-      newFilter['context.lattice_ids'] = ctx.lattice_ids
-    } else {
-      newFilter['context.lattice_ids'] = null
+    // Enforce identical structural dependencies based on incoming graph edges
+    if (cy && refNode.id) {
+      newFilter['_incoming_node_ids'] = cy.$id(refNode.id).data('_incoming_node_ids') || []
     }
 
     console.log('Filter:', newFilter)
