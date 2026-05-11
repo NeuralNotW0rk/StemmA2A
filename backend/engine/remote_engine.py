@@ -174,6 +174,7 @@ class RemoteEngine(Engine):
                     data.add_field('uid', asset_uid)
                     data.add_field('chunk_index', str(i))
                     data.add_field('total_chunks', str(total_chunks))
+                    data.add_field('total_size', str(file_size))
                     data.add_field('file', chunk_data, filename=asset_uid, content_type='application/octet-stream')
 
                     async with session.post(f"{self.remote_url}/upload", data=data) as response:

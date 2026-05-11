@@ -223,6 +223,7 @@ def upload():
     uid = request.form.get("uid") or file.filename
     chunk_index = int(request.form.get("chunk_index", 0))
     total_chunks = int(request.form.get("total_chunks", 1))
+    total_size = int(request.form.get("total_size", 0))
 
     if file:
         destination = data_cache_root / path_from_uid(uid)
@@ -233,6 +234,13 @@ def upload():
             f.write(file.read())
             
         if chunk_index == total_chunks - 1:
+            # Verify the fully reassembled file size matches the original
+            if total_size > 0:
+                reconstructed_size = os.path.getsize(destination)
+                if reconstructed_size != total_size:
+                    os.remove(destination)  # Clean up the corrupted file
+                    return jsonify({"error": f"Size mismatch for {uid}. Expected {total_size}, got {reconstructed_size}"}), 400
+                    
             return jsonify({"message": f"File {uid} uploaded successfully"})
         return jsonify({"message": f"Chunk {chunk_index} of {uid} uploaded"})
 
