@@ -75,6 +75,7 @@ class LocalEngine(Engine):
 
         # Engine-level Lattice intervention orchestration
         lattice_elements = kwargs.get("lattice_elements", [])
+        lattice_strengths = kwargs.get("lattice_strengths", [])
         if lattice_elements:
             if not hasattr(adapter, 'model') or adapter.model is None:
                 raise RuntimeError(f"Adapter '{model_element.adapter}' does not expose a loaded 'model' for lattice injection.")
@@ -84,11 +85,12 @@ class LocalEngine(Engine):
                 
             model_device = next(adapter.model.parameters()).device
             
-            for lattice_element in lattice_elements:
-                print(f"Engine: Applying Lattice '{lattice_element.id}'...")
+            for i, lattice_element in enumerate(lattice_elements):
+                strength = lattice_strengths[i] if lattice_strengths and i < len(lattice_strengths) else 1.0
+                print(f"Engine: Applying Lattice '{lattice_element.id}' with strength {strength}...")
                 lattice = DiffractureLattice.load(lattice_element.file.path)
                 lattice.to(model_device)
-                adapter.actant.activate(lattice, injection_strategy="graft")
+                adapter.actant.activate(lattice, injection_strategy="graft", strength=strength)
 
         artifact, tensor = adapter.generate(**kwargs)
 

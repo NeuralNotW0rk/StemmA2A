@@ -9,6 +9,7 @@
   export interface NodeListItem {
     id: number | string
     node: NodeData | string | null
+    strength?: number
   }
 
   let {
@@ -18,6 +19,11 @@
     items = $bindable([]),
     idPrefix = 'list-item',
     minItems = 0,
+    showStrengths = false,
+    strengthMin = 0.0,
+    strengthMax = 1.0,
+    strengthStep = 0.01,
+    defaultStrength = 1.0,
     onAdd
   } = $props<{
     title?: string
@@ -26,6 +32,11 @@
     items: NodeListItem[]
     idPrefix?: string
     minItems?: number
+    showStrengths?: boolean
+    strengthMin?: number
+    strengthMax?: number
+    strengthStep?: number
+    defaultStrength?: number
     onAdd?: () => void
   }>()
 
@@ -49,7 +60,7 @@
     if (onAdd) {
       onAdd()
     } else {
-      const newItem = { id: nextId++, node: null }
+      const newItem: NodeListItem = { id: nextId++, node: null, strength: defaultStrength }
       items.push(newItem)
 
       isSelecting = true
@@ -87,20 +98,36 @@
   </div>
   <div class="members-list">
     {#each items as item, index (item.id)}
-      <div class="member-row">
-        <div class="member-selector">
-          <NodeSelector {filter} bind:node={items[index].node} id={`${idPrefix}-${item.id}`} />
+      <div class="list-item-container">
+        <div class="member-row">
+          <div class="member-selector">
+            <NodeSelector {filter} bind:node={items[index].node} id={`${idPrefix}-${item.id}`} />
+          </div>
+          {#if index >= minItems}
+            <button
+              type="button"
+              class="remove-button"
+              onclick={() => handleRemove(item.id)}
+              title="Remove item"
+              aria-label="Remove item"
+            >
+              ✕
+            </button>
+          {/if}
         </div>
-        {#if index >= minItems}
-          <button
-            type="button"
-            class="remove-button"
-            onclick={() => handleRemove(item.id)}
-            title="Remove item"
-            aria-label="Remove item"
-          >
-            ✕
-          </button>
+        {#if showStrengths && items[index].node}
+          <div class="strength-control">
+            <span class="strength-label">Strength</span>
+            <input
+              type="range"
+              min={strengthMin}
+              max={strengthMax}
+              step={strengthStep}
+              bind:value={items[index].strength}
+              title={`Strength: ${items[index].strength}`}
+            />
+            <span class="strength-value">{Number(items[index].strength).toFixed(2)}</span>
+          </div>
         {/if}
       </div>
     {/each}
@@ -131,7 +158,18 @@
   .members-list {
     display: flex;
     flex-direction: column;
+    gap: 0.75rem;
+  }
+  .list-item-container {
+    display: flex;
+    flex-direction: column;
     gap: 0.5rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--color-border-glass-1);
+  }
+  .list-item-container:last-child {
+    border-bottom: none;
+    padding-bottom: 0;
   }
   .member-row {
     display: flex;
@@ -144,6 +182,27 @@
   }
   .member-selector :global(.form-field) {
     margin-bottom: 0;
+  }
+  .strength-control {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding-left: 0.25rem;
+    padding-right: 2.25rem;
+  }
+  .strength-label {
+    font-size: 0.85rem;
+    color: var(--color-text-muted);
+  }
+  .strength-control input[type="range"] {
+    flex-grow: 1;
+    accent-color: var(--color-primary);
+  }
+  .strength-value {
+    font-size: 0.85rem;
+    min-width: 2.5rem;
+    text-align: right;
+    color: var(--color-text-muted);
   }
   .remove-button {
     flex-shrink: 0;

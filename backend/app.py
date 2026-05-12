@@ -527,6 +527,7 @@ async def generate():
                         node_engine_args[f"{field_name}_element"] = element
 
         lattice_ids = json_data.get("lattice_ids")
+        lattice_strengths = json_data.get("lattice_strengths")
         if lattice_ids:
             lattice_elements = []
             for l_id in lattice_ids:
@@ -535,6 +536,8 @@ async def generate():
                     return jsonify({"error": f"Node '{l_id}' is not a valid lattice."}), 400
                 lattice_elements.append(l_element)
             node_engine_args["lattice_elements"] = lattice_elements
+            if lattice_strengths:
+                node_engine_args["lattice_strengths"] = lattice_strengths
 
         resolved_elements = []
         for val in node_engine_args.values():
@@ -593,6 +596,8 @@ async def generate():
         v_params = validated_params.model_dump()
         if lattice_ids:
             v_params["lattice_ids"] = lattice_ids
+            if lattice_strengths:
+                v_params["lattice_strengths"] = lattice_strengths
             
         active_jobs[job_id] = {
             "batch_id": batch_id,
