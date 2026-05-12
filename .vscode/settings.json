@@ -16,5 +16,8 @@
     "javascript",
     "javascriptreact",
     "svelte"
+  ],
+  "python.analysis.extraPaths": [
+    "../Diffracture"
   ]
 }
