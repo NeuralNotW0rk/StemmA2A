@@ -45,7 +45,7 @@
 
     if (!refNode) return {}
 
-    const newFilter: NodeFilter = {}
+    const newFilter: Record<string, any> = {}
     if (refNode.type) newFilter.type = refNode.type
 
     const ctx = refNode.context as Record<string, unknown> | undefined
@@ -56,6 +56,14 @@
     // Enforce identical structural dependencies based on incoming graph edges
     if (cy && refNode.id) {
       newFilter['_incoming_node_ids'] = cy.$id(refNode.id).data('_incoming_node_ids') || []
+    }
+
+    // Ensure any node already selected in the list is excluded from being a candidate
+    const memberIds = members
+      .map((m) => (typeof m.node === 'string' ? m.node : m.node?.id))
+      .filter(Boolean)
+    if (memberIds.length > 0) {
+      newFilter['_exclude_node_ids'] = memberIds
     }
 
     console.log('Filter:', newFilter)

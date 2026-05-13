@@ -129,13 +129,12 @@
       selectedLattices = [{ id: -1, node: $initiatorNodeStore as NodeData, strength: 1.0 }]
     } else if (
       context &&
-      context.lattice_ids &&
-      Array.isArray(context.lattice_ids) &&
+      context.lattices &&
+      Array.isArray(context.lattices) &&
       selectedLattices.length === 0
     ) {
-      const strengths = context.lattice_strengths || []
-      selectedLattices = context.lattice_ids.map((l_id: string, idx: number) => {
-        return { id: -1 - idx, node: l_id, strength: strengths[idx] ?? 1.0 }
+      selectedLattices = context.lattices.map((l_conf: any, idx: number) => {
+        return { id: -1 - idx, node: l_conf.id, strength: l_conf.strength ?? 1.0 }
       })
     }
   })
@@ -214,14 +213,16 @@
 
     if (batchFields.size === 0) {
       const validLattices = selectedLattices.filter((l) => l.node)
-      const lattice_ids = validLattices.map((l) => (typeof l.node === 'string' ? l.node : l.node?.id))
-      const lattice_strengths = validLattices.map((l) => l.strength ?? 1.0)
+      const lattices = validLattices.map((l) => ({
+        id: typeof l.node === 'string' ? l.node : l.node?.id,
+        strength: l.strength ?? 1.0
+      }))
 
       // Single generation
       const singlePayload = {
         ...payload,
         model_id: $formStateStore.generationModel.id,
-        ...(lattice_ids.length > 0 ? { lattice_ids, lattice_strengths } : {})
+        ...(lattices.length > 0 ? { lattices } : {})
       }
       console.log('Generating with payload:', singlePayload)
 
@@ -260,13 +261,15 @@
         })
 
         const validLattices = selectedLattices.filter((l) => l.node)
-        const lattice_ids = validLattices.map((l) => (typeof l.node === 'string' ? l.node : l.node?.id))
-        const lattice_strengths = validLattices.map((l) => l.strength ?? 1.0)
+        const lattices = validLattices.map((l) => ({
+          id: typeof l.node === 'string' ? l.node : l.node?.id,
+          strength: l.strength ?? 1.0
+        }))
         const fullPayload = {
           ...batchPayload,
           model_id: $formStateStore.generationModel!.id,
           batch_id: batchId,
-          ...(lattice_ids.length > 0 ? { lattice_ids, lattice_strengths } : {})
+          ...(lattices.length > 0 ? { lattices } : {})
         }
         console.log('Generating with payload:', fullPayload)
         startExecution(jobName, fullPayload).catch(console.error)

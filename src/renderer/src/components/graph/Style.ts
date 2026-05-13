@@ -10,10 +10,11 @@ const gradientColor5 = getCssVar('--graph-gradient-5')
 const audioColor = getCssVar('--graph-audio')
 const batchColor = getCssVar('--graph-batch')
 const selectedColor = getCssVar('--graph-selected')
-const boundColor = getCssVar('--graph-bound')
 const modelColor = gradientColor3
 const externalColor = gradientColor2
 const latticeColor = gradientColor4
+const favoriteColor = gradientColor5
+const validColor = '#4CAF50'
 
 
 const defaultStyle: CssStyleDeclaration[] = [
@@ -23,7 +24,8 @@ const defaultStyle: CssStyleDeclaration[] = [
     style: {
       color: 'white',
       'text-valign': 'center',
-      'text-halign': 'center'
+      'text-halign': 'center',
+      'text-wrap': 'wrap'
     }
   },
   {
@@ -59,45 +61,41 @@ const defaultStyle: CssStyleDeclaration[] = [
   {
     selector: 'node[type="audio"]',
     style: {
-      label: (node: NodeSingular) => node.data('alias') || node.data('context')["prompt"] || node.data('name'),
+      label: (node: NodeSingular) => {
+        const name = node.data('name');
+        const alias = node.data('alias');
+        const promptTxt = node.data('context') && node.data('context')["prompt"];
+        const secondary = alias || promptTxt;
+        
+        return secondary ? secondary : (name || node.data('id'));
+      },
       'background-color': audioColor,
       width: 30,
       height: 30
     }
   },
   {
-    selector: 'node[type="audio"][rating="1"]',
+    selector: 'node[type="audio"].detailed',
     style: {
-      'border-color': gradientColor1,
-      'border-width': 2
+      label: (node: NodeSingular) => {
+        const name = node.data('name');
+        const alias = node.data('alias');
+        const promptTxt = node.data('context') && node.data('context')["prompt"];
+        const secondary = alias || promptTxt;
+        
+        if (name && secondary && name !== secondary) {
+          return `${name}\n[${secondary}]`;
+        }
+        return name || (secondary ? `[${secondary}]` : node.data('id'));
+      }
     }
   },
   {
-    selector: 'node[type="audio"][rating="2"]',
+    selector: 'node[type="audio"][?favorite]',
     style: {
-      'border-color': gradientColor2,
-      'border-width': 2
-    }
-  },
-  {
-    selector: 'node[type="audio"][rating="3"]',
-    style: {
-      'border-color': gradientColor3,
-      'border-width': 2
-    }
-  },
-  {
-    selector: 'node[type="audio"][rating="4"]',
-    style: {
-      'border-color': gradientColor4,
-      'border-width': 2
-    }
-  },
-  {
-    selector: 'node[type="audio"][rating="5"]',
-    style: {
-      'border-color': gradientColor5,
-      'border-width': 2
+      'border-color': favoriteColor,
+      'border-width': 4,
+      'border-style': 'solid'
     }
   },
 
@@ -105,7 +103,14 @@ const defaultStyle: CssStyleDeclaration[] = [
   {
     selector: 'node[type="batch"]',
     style: {
-      label: 'data(alias)',
+      label: (node: NodeSingular) => {
+        const name = node.data('name');
+        const alias = node.data('alias');
+        const promptTxt = node.data('context') && node.data('context')["prompt"];
+        const secondary = alias || promptTxt;
+        
+        return secondary ? secondary : (name || node.data('id'));
+      },
       'text-valign': 'top',
       'background-color': batchColor,
       'background-opacity': 0.5,
@@ -115,9 +120,42 @@ const defaultStyle: CssStyleDeclaration[] = [
     }
   },
   {
+    selector: 'node[type="batch"].detailed',
+    style: {
+      label: (node: NodeSingular) => {
+        const name = node.data('name');
+        const alias = node.data('alias');
+        const promptTxt = node.data('context') && node.data('context')["prompt"];
+        const secondary = alias || promptTxt;
+        
+        if (name && secondary && name !== secondary) {
+          return `${name}\n[${secondary}]`;
+        }
+        return name || (secondary ? `[${secondary}]` : node.data('id'));
+      }
+    }
+  },
+  {
     selector: 'node[type="batch"][member_type="audio"]',
     style: {
       'border-color': audioColor
+    }
+  },
+  {
+    selector: 'node.compatible-drop-target',
+    style: {
+      'border-color': validColor,
+      'border-width': 3,
+      'border-style': 'dashed'
+    }
+  },
+  {
+    selector: 'node.active-drop-target',
+    style: {
+      'border-color': validColor,
+      'border-width': 5,
+      'border-style': 'solid',
+      'background-opacity': 0.8
     }
   },
   {
@@ -207,22 +245,37 @@ const defaultStyle: CssStyleDeclaration[] = [
 
   // Overrides
   {
-    selector: 'node.bound',
-    style: {
-      'border-color': boundColor,
-      'border-width': '3px',
-      'border-style': 'double'
-    }
-  },
-  {
     selector: 'node.highlighted',
     style: {
-      'border-color': 'yellow',
-      'border-width': '3px'
+      'border-color': validColor,
+      'border-width': 3,
+      'border-style': 'dashed'
     }
   },
   {
-    selector: '.dimmed, edge.dimmed, edge[type="spring"].dimmed',
+    selector: 'node.bound',
+    style: {
+      'border-color': 'yellow',
+      'border-width': 4,
+      'border-style': 'solid',
+      'shadow-blur': 20,
+      'shadow-color': 'yellow',
+      'shadow-opacity': 0.8
+    }
+  },
+  {
+    selector: 'node.bound-active',
+    style: {
+      'border-color': validColor,
+      'border-width': 4,
+      'border-style': 'solid',
+      'shadow-blur': 20,
+      'shadow-color': validColor,
+      'shadow-opacity': 0.8
+    }
+  },
+  {
+    selector: '.dimmed, node.dimmed, edge.dimmed, edge[type="spring"].dimmed',
     style: {
       opacity: 0.4
     }

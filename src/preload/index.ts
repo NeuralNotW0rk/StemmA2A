@@ -42,7 +42,9 @@ const api = {
   expandPath: (pathNodeId: string): Promise<any> => ipcRenderer.invoke('expandPath', pathNodeId),
   cancelJob: (jobId: string): Promise<any> => ipcRenderer.invoke('cancel-job', jobId),
   saveNodePositions: (projectName: string, positions: Record<string, { x: number; y: number }>): Promise<void> =>
-    ipcRenderer.invoke('saveNodePositions', projectName, positions)
+    ipcRenderer.invoke('saveNodePositions', projectName, positions),
+  updateElement: (elementName: string, attributes: Record<string, any>): Promise<any> =>
+    ipcRenderer.invoke('updateElement', elementName, attributes)
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to

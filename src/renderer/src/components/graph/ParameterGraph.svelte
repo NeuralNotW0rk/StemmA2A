@@ -9,11 +9,13 @@
   import graphStyle from './Style'
   import layoutConfig from './Layout'
   import { cyInstanceStore, selectionStore } from '../../utils/stores'
+  import { BATCHING_CONFIG } from '../../utils/app-config'
 
   interface Props {
     graphData?: { elements: cytoscape.ElementDefinition[] } | null
     viewMode?: 'batch' | 'cluster'
     showSpringEdges?: boolean
+    showDetailedLabels?: boolean
     onmodelSelect?: (data: any) => void
     onaudioSelect?: (data: any) => void
     onaudioNodeSelectForGeneration?: (data: any, useContext?: boolean) => void
@@ -25,13 +27,23 @@
     onedgeSelect?: (data: any) => void
     onElementRemove?: (data: any) => void
     onstartBatching?: (data: any) => void
-    onsavePositions?: (positions: Record<string, { x: number; y: number }>) => void
+    onsavePositions?: (positions: Record<string, { x: number; y: number }>) => void | Promise<void>
     onexpandPath?: (id: string) => void
+    ontoggleFavorite?: (data: any, isFavorite: boolean) => void
+    onupdateElement?: (id: string, attributes: Record<string, any>) => void
+    onchangeBatchMembership?: (
+      nodeId: string,
+      oldBatchId: string | null,
+      oldMembers: string[],
+      newBatchId: string | null,
+      newMembers: string[]
+    ) => void | Promise<void>
   }
 
   let {
     graphData = null,
     showSpringEdges = false,
+    showDetailedLabels = true,
     onmodelSelect,
     onaudioSelect,
     onaudioNodeSelectForGeneration,
@@ -43,7 +55,10 @@
     onElementRemove,
     onstartBatching,
     onsavePositions,
-    onexpandPath
+    onexpandPath,
+    ontoggleFavorite,
+    onupdateElement,
+    onchangeBatchMembership
   }: Props = $props()
 
   let graphContainer: HTMLElement | undefined = $state()
@@ -62,6 +77,17 @@
   function matchesFilter(node: cytoscape.NodeSingular, filter: Record<string, any>): boolean {
     const data = node.data()
     for (const [key, expectedValue] of Object.entries(filter)) {
+      // Special evaluation: Exclude specified nodes
+      if (key === '_exclude_node_ids') {
+        if (Array.isArray(expectedValue)) {
+          const strExpected = expectedValue.map(String)
+          if (strExpected.includes(String(node.id()))) {
+            return false
+          }
+        }
+        continue
+      }
+
       // Special evaluation: Ensure the node has exactly the same incoming structural dependencies
       if (key === '_incoming_node_ids') {
         const incomingIds = node.data('_incoming_node_ids') || []
@@ -101,21 +127,61 @@
     return true
   }
 
+  function isBatchCompatible(batch: cytoscape.NodeSingular, node: cytoscape.NodeSingular): boolean {
+    const filter: Record<string, any> = batch.data('member_type') ? { type: batch.data('member_type') } : {}
+
+    // Extract the structural dependencies from the batch's existing members to match BatchingView's logic
+    const memberIds = batch.data('member_ids') || []
+    if (memberIds.length > 0) {
+      const firstMember = cy!.getElementById(memberIds[0])
+      if (firstMember && firstMember.length > 0) {
+        const incomingIds = firstMember.data('_incoming_node_ids')
+        if (incomingIds) filter._incoming_node_ids = incomingIds
+
+        const ctx = firstMember.data('context')
+        BATCHING_CONFIG.strictContextKeys.forEach((key) => {
+          filter[`context.${key}`] = ctx?.[key] ?? null
+        })
+      }
+    }
+    return matchesFilter(node, filter)
+  }
+
   $effect(() => {
     if (isInitialized && cy && graphData) {
-      cy.elements().removeClass('highlighted dimmed')
+      cy.batch(() => {
+        // We do NOT remove 'bound' here. NodeSelectors naturally manage their own 'bound' class!
+        cy.elements().removeClass('highlighted dimmed bound-active bound-other')
 
-      if (isSelecting && selectionFilter) {
-        const highlightedNodes = cy.nodes().filter((node) => matchesFilter(node, selectionFilter!))
-        const ancestorNodes = highlightedNodes.ancestors()
+        if (isSelecting && selectionFilter) {
+          // 1. Dim everything by default
+          cy.elements().addClass('dimmed')
 
-        highlightedNodes.addClass('highlighted')
-        cy.nodes().not(highlightedNodes).not(ancestorNodes).addClass('dimmed')
-        cy.edges().addClass('dimmed')
+          // 2. Identify valid candidates based on the filter
+          const highlightedNodes = cy.nodes().filter((node) => matchesFilter(node, selectionFilter!))
+          const ancestorNodes = highlightedNodes.ancestors()
 
-        if (selectionBoundNodeId) {
-          cy.getElementById(selectionBoundNodeId).removeClass('dimmed').addClass('bound')
+          // 3. Un-dim and highlight valid candidates, and keep their structural ancestors visible
+          highlightedNodes.removeClass('dimmed').addClass('highlighted')
+          ancestorNodes.removeClass('dimmed')
+
+          // 4. Force the active bound node to show its indicator and un-dim it
+          if (selectionBoundNodeId) {
+            cy.getElementById(String(selectionBoundNodeId))
+              .removeClass('highlighted dimmed')
+              .addClass('bound-active')
+          }
         }
+      })
+    }
+  })
+
+  $effect(() => {
+    if (isInitialized && cy) {
+      if (showDetailedLabels) {
+        cy.nodes().addClass('detailed')
+      } else {
+        cy.nodes().removeClass('detailed')
       }
     }
   })
@@ -182,6 +248,17 @@
     ]
 
     const nodeCommands = (ele: Singular): Command[] => [
+      {
+        content: 'Rename',
+        select: () => {
+          const currentName = ele.data('name') || ''
+          const newName = prompt('Enter new name:', currentName)
+          if (newName !== null && newName.trim() !== '' && newName !== currentName) {
+            ele.data('name', newName)
+            onupdateElement?.(ele.id(), { name: newName })
+          }
+        }
+      },
       // Inherits from elementCommands
       ...elementCommands(ele)
     ]
@@ -208,7 +285,16 @@
     ]
 
     const audioNodeCommands = (ele: Singular): Command[] => {
-      const specificCommands: Command[] = []
+      const specificCommands: Command[] = [
+        {
+          content: ele.data('favorite') ? 'Unfavorite' : 'Favorite',
+          select: () => {
+            const newState = !ele.data('favorite')
+            ele.data('favorite', newState)
+            ontoggleFavorite?.(ele.data(), newState)
+          }
+        }
+      ]
       if (ele.data().context) {
         specificCommands.push({
           content: 'Replicate',
@@ -344,7 +430,157 @@
       }
     })
 
-    cy.on('dragfree', 'node', extractAndSavePositions)
+    let ghostNode: cytoscape.NodeCollection | null = null
+    let sourceNode: Singular | null = null
+
+    cy.on('mousedown', 'node', (evt: EventObject) => {
+      const node = evt.target
+      const oe = evt.originalEvent as MouseEvent
+
+      if (node.children().length === 0 && oe && (oe.ctrlKey || oe.metaKey)) {
+        sourceNode = node
+        ghostNode = cy!.add({
+          group: 'nodes',
+          data: { id: `ghost-node-${Date.now()}` },
+          position: { ...node.position() }
+        })
+
+        ghostNode.style({
+          'background-color': node.style('background-color'),
+          'shape': node.style('shape'),
+          'width': node.style('width'),
+          'height': node.style('height'),
+          'label': node.style('label'),
+          'opacity': 0.5,
+          'border-width': node.style('border-width'),
+          'border-color': node.style('border-color'),
+          'text-valign': node.style('text-valign'),
+          'text-halign': node.style('text-halign'),
+          'color': node.style('color'),
+          'z-index': 9999,
+          'events': 'no' // Do not capture events on the ghost node
+        })
+
+        cy!.nodes('[type="batch"]').forEach((batch) => {
+          if (batch.id() === sourceNode!.id()) return
+          if (isBatchCompatible(batch, sourceNode!)) {
+            batch.addClass('compatible-drop-target')
+          }
+        })
+      }
+    })
+
+    cy.on('mousemove', (evt: EventObject) => {
+      if (ghostNode && sourceNode) {
+        ghostNode.position(evt.position)
+
+        const nodePos = ghostNode.position()
+        cy!.nodes('.compatible-drop-target').forEach((batch) => {
+          const bb = batch.boundingBox()
+          if (
+            nodePos.x >= bb.x1 &&
+            nodePos.x <= bb.x2 &&
+            nodePos.y >= bb.y1 &&
+            nodePos.y <= bb.y2
+          ) {
+            batch.addClass('active-drop-target')
+          } else {
+            batch.removeClass('active-drop-target')
+          }
+        })
+      }
+    })
+
+    cy.on('mouseup', async (evt: EventObject) => {
+      if (ghostNode && sourceNode) {
+        const nodePos = ghostNode.position()
+        let targetBatchId: string | null = null
+        let invalidDrop = false
+
+        cy!.nodes('[type="batch"]').forEach((batch) => {
+          if (batch.id() === sourceNode!.id()) return
+          const bb = batch.boundingBox()
+          if (
+            nodePos.x >= bb.x1 &&
+            nodePos.x <= bb.x2 &&
+            nodePos.y >= bb.y1 &&
+            nodePos.y <= bb.y2
+          ) {
+            if (batch.hasClass('compatible-drop-target')) {
+              targetBatchId = batch.id()
+            } else {
+              invalidDrop = true
+            }
+          }
+        })
+
+        // Ensure classes are cleared regardless of whether the drop was valid
+        cy!.nodes('[type="batch"]').removeClass('compatible-drop-target active-drop-target')
+
+        if (invalidDrop && !targetBatchId) {
+          ghostNode.remove()
+          ghostNode = null
+          sourceNode = null
+          return
+        }
+
+        const currentParentId = sourceNode.data('parent') || null
+        const sourceNodeId = sourceNode.id()
+
+        if (currentParentId !== targetBatchId) {
+          const oldMembers = currentParentId
+            ? cy!.getElementById(currentParentId).data('member_ids')?.filter((id: string) => id !== sourceNodeId) || []
+            : []
+          const newMembers = targetBatchId
+            ? [...(cy!.getElementById(targetBatchId).data('member_ids') || []), sourceNodeId]
+            : []
+
+          // 1. Set the physical position immediately before snapshotting
+          sourceNode.position({ ...nodePos })
+
+          // 2. Remove ghost node early so it isn't swept into the graph rebuild
+          ghostNode.remove()
+          ghostNode = null
+
+          // 3. Temporarily mutate local graphData to accurately recalculate proxy edges
+          if (graphData && graphData.elements) {
+            const elementsList = Array.isArray(graphData.elements)
+              ? graphData.elements
+              : [...(graphData.elements.nodes || []), ...(graphData.elements.edges || [])]
+            
+            const rawNode = elementsList.find((e: any) => e.data.id === sourceNodeId)
+            if (rawNode) {
+              if (targetBatchId) {
+                rawNode.data.parent = targetBatchId
+              } else {
+                delete rawNode.data.parent
+              }
+            }
+          }
+
+          // 4. Instantly re-aggregate and redraw proxy edges without network delay
+          updateGraph()
+
+          // 5. Persist
+          await extractAndSavePositions()
+          if (onchangeBatchMembership) {
+            await onchangeBatchMembership(sourceNodeId, currentParentId, oldMembers, targetBatchId, newMembers)
+          }
+        } else {
+          sourceNode.position({ ...nodePos })
+          extractAndSavePositions()
+        }
+
+        if (ghostNode) ghostNode.remove()
+        ghostNode = null
+        sourceNode = null
+      }
+    })
+
+    cy.on('dragfree', 'node', () => {
+      // Always save position so it remains physically exactly where it was dropped
+      extractAndSavePositions()
+    })
   }
 
   function getDynamicPadding(): { top: number; bottom: number; left: number; right: number } {
@@ -417,7 +653,7 @@
     layout.run()
   }
 
-  function extractAndSavePositions(): void {
+  async function extractAndSavePositions(): Promise<void> {
     if (!cy) return
     const positions: Record<string, { x: number; y: number }> = {}
     cy.nodes().forEach((node) => {
@@ -425,7 +661,7 @@
         positions[node.id()] = { ...node.position() }
       }
     })
-    onsavePositions?.(positions)
+    await onsavePositions?.(positions)
   }
 
   function updateGraph(use_proxy_edges = true): void {
@@ -527,6 +763,9 @@
       if (showSpringEdges) {
         addedElements.filter('edge[type="spring"]').addClass('visible')
       }
+      if (showDetailedLabels) {
+        addedElements.nodes().addClass('detailed')
+      }
 
       addedElements.nodes().forEach((node) => {
         const isChildless = node.children().length === 0
@@ -580,6 +819,25 @@
     cy?.center()
   }
 </script>
+
+<svelte:window
+  onkeydown={(e) => {
+    if (e.key === 'Control' || e.key === 'Meta') {
+      cy?.boxSelectionEnabled(false)
+      cy?.autoungrabify(true)
+    }
+  }}
+  onkeyup={(e) => {
+    if (e.key === 'Control' || e.key === 'Meta') {
+      cy?.boxSelectionEnabled(true)
+      cy?.autoungrabify(false)
+    }
+  }}
+  onblur={() => {
+    cy?.boxSelectionEnabled(true)
+    cy?.autoungrabify(false)
+  }}
+/>
 
 <div class="graph-wrapper" class:selecting={isSelecting}>
   <div bind:this={graphContainer} class="graph-container"></div>

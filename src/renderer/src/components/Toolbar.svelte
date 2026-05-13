@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
-  import { isCreatingNewProject, cyInstanceStore } from '../utils/stores'
+  import { isCreatingNewProject } from '../utils/stores'
 
   interface Props {
     currentProject?: string | null
@@ -13,6 +13,7 @@
     onupdateEmbeddings?: () => void
     onupdateLabels?: () => void
     showSpringEdges?: boolean
+    showDetailedLabels?: boolean
   }
 
   let {
@@ -25,7 +26,8 @@
     onimportModel,
     onupdateEmbeddings,
     onupdateLabels,
-    showSpringEdges = $bindable(false)
+    showSpringEdges = $bindable(false),
+    showDetailedLabels = $bindable(false)
   }: Props = $props()
 
   let showFileMenu = $state(false)
@@ -83,6 +85,11 @@
 
   function toggleSprings(): void {
     showSpringEdges = !showSpringEdges
+    showUtilitiesMenu = false
+  }
+
+  function toggleDetailedLabels(): void {
+    showDetailedLabels = !showDetailedLabels
     showUtilitiesMenu = false
   }
 
@@ -280,6 +287,9 @@
           </button>
           <button class="dropdown-item" onclick={toggleSprings}>
             {showSpringEdges ? 'Hide Spring Edges' : 'Show Spring Edges'}
+          </button>
+          <button class="dropdown-item" onclick={toggleDetailedLabels}>
+            {showDetailedLabels ? 'Hide Detailed Labels' : 'Show Detailed Labels'}
           </button>
         </div>
       {/if}

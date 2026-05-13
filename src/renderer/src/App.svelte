@@ -38,6 +38,9 @@
   let audioSrc: string | null = $state(null)
   let audioTitle: string | null = $state(null)
   let showSpringEdges = $state(false)
+  let showDetailedLabelsToggle = $state(false)
+  let isPeekPressed = $state(false)
+  let showDetailedLabels = $derived(showDetailedLabelsToggle || isPeekPressed)
   let selectedElementData: ElementData | null = $state(null)
   let actionPanelView: ActionPanelView = $state('none')
   let errorInInfoPanel: ErrorInfo | null = $state(null)
@@ -347,6 +350,29 @@
     actionPanelView = 'batching'
   }
 
+  async function handleChangeBatchMembership(
+    nodeId: string,
+    oldBatchId: string | null,
+    oldMembers: string[],
+    newBatchId: string | null,
+    newMembers: string[]
+  ): Promise<void> {
+    try {
+      // Unlink from the old batch if applicable
+      if (oldBatchId) {
+        await window.api.updateBatch(oldBatchId, oldMembers)
+      }
+      // Link to the new batch if applicable
+      if (newBatchId) {
+        await window.api.updateBatch(newBatchId, newMembers)
+      }
+      await refreshGraphData()
+    } catch (error: any) {
+      console.error('Error changing batch membership:', error)
+      errorInInfoPanel = { title: 'Batch Update Failed', message: error.message || String(error) }
+    }
+  }
+
   function handleGenerationError(error: ErrorInfo): void {
     errorInInfoPanel = error
   }
@@ -380,6 +406,24 @@
     return 'Action'
   }
 
+  async function handleToggleFavorite(data: any, isFavorite: boolean): Promise<void> {
+    try {
+      await window.api.updateElement(data.id, { favorite: isFavorite })
+    } catch (error: any) {
+      console.error('Error toggling favorite:', error)
+      errorInInfoPanel = { title: 'Favorite Toggle Failed', message: error.message || String(error) }
+    }
+  }
+
+  async function handleUpdateElement(id: string, attributes: Record<string, any>): Promise<void> {
+    try {
+      await window.api.updateElement(id, attributes)
+    } catch (error: any) {
+      console.error('Error updating element:', error)
+      errorInInfoPanel = { title: 'Update Failed', message: error.message || String(error) }
+    }
+  }
+
   async function handleSavePositions(
     positions: Record<string, { x: number; y: number }>
   ): Promise<void> {
@@ -396,7 +440,15 @@
 <svelte:window
   onkeydown={(e) => {
     if (e.key === 'Escape') selectionStore.cancelSelection()
+    if (e.key === 'Alt') {
+      e.preventDefault()
+      isPeekPressed = true
+    }
   }}
+  onkeyup={(e) => {
+    if (e.key === 'Alt') isPeekPressed = false
+  }}
+  onblur={() => isPeekPressed = false}
 />
 
 <main class="container">
@@ -419,6 +471,7 @@
     {currentProject}
     {viewMode}
     bind:showSpringEdges
+    bind:showDetailedLabels={showDetailedLabelsToggle}
   />
 
   {#if errorInInfoPanel}
@@ -549,6 +602,10 @@
     onstartBatching={handleStartBatching}
     onsavePositions={handleSavePositions}
     onexpandPath={handleExpandPath}
+    ontoggleFavorite={handleToggleFavorite}
+    onupdateElement={handleUpdateElement}
+    {showDetailedLabels}
+    onchangeBatchMembership={handleChangeBatchMembership}
   />
   {#if audioSrc}
     <AudioPlayer src={audioSrc} title={audioTitle} onclose={() => (audioSrc = null)} />

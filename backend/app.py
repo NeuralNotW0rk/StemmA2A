@@ -526,18 +526,18 @@ async def generate():
                     if element:
                         node_engine_args[f"{field_name}_element"] = element
 
-        lattice_ids = json_data.get("lattice_ids")
-        lattice_strengths = json_data.get("lattice_strengths")
-        if lattice_ids:
+        lattice_strengths = []
+        lattices = json_data.get("lattices")
+        if lattices:
             lattice_elements = []
-            for l_id in lattice_ids:
+            for l_conf in lattices:
+                l_id = l_conf.get("id")
                 l_element = param_graph.get_element(l_id)
                 if not isinstance(l_element, Lattice):
                     return jsonify({"error": f"Node '{l_id}' is not a valid lattice."}), 400
                 lattice_elements.append(l_element)
+                lattice_strengths.append(l_conf.get("strength", 1.0))
             node_engine_args["lattice_elements"] = lattice_elements
-            if lattice_strengths:
-                node_engine_args["lattice_strengths"] = lattice_strengths
 
         resolved_elements = []
         for val in node_engine_args.values():
@@ -565,6 +565,8 @@ async def generate():
                     return jsonify({"error": f"Node '{element.id}' for field '{field_name}' is not a valid artifact."}), 400
 
         engine_args = {"model_element": model_element, **node_engine_args}
+        if lattices:
+            engine_args["lattice_strengths"] = lattice_strengths
         
         # If lattices are used, the model is implied, so we omit the direct edge
         if "lattice_elements" in node_engine_args and node_engine_args["lattice_elements"]:
@@ -594,10 +596,8 @@ async def generate():
         
         # Store job context to process the artifact later when the frontend polls /job_status
         v_params = validated_params.model_dump()
-        if lattice_ids:
-            v_params["lattice_ids"] = lattice_ids
-            if lattice_strengths:
-                v_params["lattice_strengths"] = lattice_strengths
+        if lattices:
+            v_params["lattices"] = lattices
             
         active_jobs[job_id] = {
             "batch_id": batch_id,

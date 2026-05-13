@@ -123,6 +123,8 @@ function createWindow(): void {
     }
   })
 
+  mainWindow.setMenu(null)
+
   mainWindow.on('ready-to-show', () => {
     mainWindow.show()
   })
@@ -569,6 +571,19 @@ app.whenReady().then(async () => {
       throw new Error(
         `Failed to save node positions. Status: ${response.status}. Error: ${errorBody}`
       )
+    }
+    return await response.json()
+  })
+
+  ipcMain.handle('updateElement', async (_event, elementName, attributes) => {
+    const response = await fetchWithAuth(`${BACKEND_URL}/update_element`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: elementName, attributes })
+    })
+    if (!response.ok) {
+      const errorBody = await response.text()
+      throw new Error(`Failed to update element. Status: ${response.status}. Error: ${errorBody}`)
     }
     return await response.json()
   })
