@@ -244,6 +244,21 @@ app.whenReady().then(async () => {
     return await response.json()
   })
 
+  ipcMain.handle('exportAudio', async (_event, names: string[], exportDir?: string) => {
+    const response = await fetchWithAuth(`${BACKEND_URL}/export`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ names, export_dir: exportDir })
+    })
+    if (!response.ok) {
+      const errorBody = await response.text()
+      throw new Error(
+        `Failed to export audio. Status: ${response.status}. Error: ${errorBody}`
+      )
+    }
+    return await response.json()
+  })
+
   ipcMain.handle('generate', async (_event, generateData) => {
     try {
       const response = await fetchWithAuth(`${BACKEND_URL}/generate`, {

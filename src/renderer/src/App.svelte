@@ -350,6 +350,23 @@
     actionPanelView = 'batching'
   }
 
+  async function handleExport(data: { names: string[] }): Promise<void> {
+    try {
+      const customPath = await window.api.selectDirectory()
+      if (!customPath) return // User cancelled
+
+      const response = await window.api.exportAudio(data.names, customPath)
+      
+      errorInInfoPanel = {
+        title: 'Export Successful',
+        message: `Successfully exported to: ${response?.export_path || 'project export folder'}`
+      }
+    } catch (error: any) {
+      console.error('Export failed:', error)
+      errorInInfoPanel = { title: 'Export Failed', message: error.message || String(error) }
+    }
+  }
+
   async function handleChangeBatchMembership(
     nodeId: string,
     oldBatchId: string | null,
@@ -597,6 +614,7 @@
     onlatticeSelectForGeneration={handleLatticeSelectForGeneration}
     onaudioNodeSelectForGeneration={handleAudioNodeSelectForGeneration}
     onnodeSelect={handleElementSelect}
+    onexport={handleExport}
     onedgeSelect={handleElementSelect}
     onElementRemove={handleElementRemove}
     onstartBatching={handleStartBatching}

@@ -50,6 +50,7 @@
     onimportLattice,
     onlatticeSelectForGeneration,
     onrescanSource,
+    onexport,
     onnodeSelect,
     onedgeSelect,
     onElementRemove,
@@ -248,17 +249,6 @@
     ]
 
     const nodeCommands = (ele: Singular): Command[] => [
-      {
-        content: 'Rename',
-        select: () => {
-          const currentName = ele.data('name') || ''
-          const newName = prompt('Enter new name:', currentName)
-          if (newName !== null && newName.trim() !== '' && newName !== currentName) {
-            ele.data('name', newName)
-            onupdateElement?.(ele.id(), { name: newName })
-          }
-        }
-      },
       // Inherits from elementCommands
       ...elementCommands(ele)
     ]
@@ -313,6 +303,11 @@
           select: () => onstartBatching?.(ele.data())
         })
       }
+      
+      specificCommands.push({
+        content: 'Export',
+        select: () => onexport?.({ names: [ele.data('name')] })
+      })
 
       // Inherits from nodeCommands
       return [...specificCommands, ...nodeCommands(ele)]
@@ -339,6 +334,14 @@
       {
         content: 'Update Batch',
         select: () => onstartBatching?.(ele.data())
+      },
+      {
+        content: 'Export Batch',
+        select: () => {
+          const memberIds = ele.data('member_ids') || []
+          const names = memberIds.map((id: string) => cy!.getElementById(id).data('name')).filter(Boolean)
+          if (names.length > 0) onexport?.({ names })
+        }
       },
       ...nodeCommands(ele)
     ]

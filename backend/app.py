@@ -1321,20 +1321,50 @@ def export_audio():
         data = request.get_json()
         names = data.get('names', [])
         export_name = data.get('export_name', 'export')
+        export_dir = data.get('export_dir')
         
         if not names:
             return jsonify({"error": "names list is required"}), 400
         
-        if len(names) == 1:
-            export_path = param_graph.export_single(names[0], export_name)
+        if export_dir:
+            export_path_obj = Path(export_dir)
+            export_path_obj.mkdir(parents=True, exist_ok=True)
+            exported_count = 0
+            
+            with graph_lock:
+                for name in names:
+                    node_id = None
+                    for n, d in param_graph.G.nodes(data=True):
+                        if d.get('name') == name and d.get('type') == 'audio':
+                            node_id = n
+                            break
+                    
+                    if node_id:
+                        src_path = resolve_audio_path(node_id)
+                        if src_path and src_path.exists():
+                            dest_path = export_path_obj / f"{name}{src_path.suffix}"
+                            shutil.copy2(src_path, dest_path)
+                            exported_count += 1
+            
+            if exported_count == 0:
+                return jsonify({"error": "No valid audio files found to export."}), 404
+                
+            return jsonify({
+                "message": f"Exported {exported_count} files",
+                "export_path": str(export_path_obj),
+                "success": True
+            })
         else:
-            export_path = param_graph.export_batch(names, export_name)
-        
-        return jsonify({
-            "message": "Export completed",
-            "export_path": str(export_path),
-            "success": True
-        })
+            if len(names) == 1:
+                export_path = param_graph.export_single(names[0], export_name)
+            else:
+                export_path = param_graph.export_batch(names, export_name)
+            
+            return jsonify({
+                "message": "Export completed",
+                "export_path": str(export_path),
+                "success": True
+            })
         
     except Exception as e:
         print(f"Export failed: {e}")

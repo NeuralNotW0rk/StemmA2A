@@ -23,6 +23,7 @@ interface API {
   registerLattice: (data: { name: string; checkpoint_path: string; base_model_id: string }) => Promise<any>
   openFile: (options?: { title?: string; filters?: { name: string; extensions: string[] }[] }) => Promise<string | null>
   importModel: (data: any) => Promise<any>
+  exportAudio: (names: string[], exportDir?: string) => Promise<any>
   generate: (data: any) => Promise<any>
   removeElement: (elementId: string, keepChildren?: boolean) => Promise<any>
   logMessage: (message: string) => Promise<any>
