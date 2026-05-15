@@ -69,7 +69,7 @@ if (-not $CudaVersion) {
 
 # 5. Install PyTorch
 Write-Host "Step 5: Installing PyTorch..."
-$arguments = @("install", "torch", "torchvision", "torchaudio", "--extra-index-url", "https://download.pytorch.org/whl/cpu")
+$arguments = @("install", "torch", "torchvision", "torchaudio", "--default-timeout=1000", "--retries", "20", "--extra-index-url", "https://download.pytorch.org/whl/cpu")
 
 if ($CudaVersion) {
     # Force cuda version 12.1 for now
@@ -77,14 +77,17 @@ if ($CudaVersion) {
     $CudaVersionFormatted = "cu" + $CudaVersion.Replace(".", "")
     $IndexUrl = "https://download.pytorch.org/whl/$CudaVersionFormatted"
     # Overwrite arguments for CUDA
-    $arguments = @("install", "torch", "torchvision", "torchaudio", "--index-url", $IndexUrl)
+    $arguments = @("install", "torch", "torchvision", "torchaudio", "--default-timeout=1000", "--retries", "20", "--index-url", $IndexUrl)
     Write-Host "Preparing to install PyTorch for CUDA $CudaVersion..."
 } else {
     Write-Host "Preparing to install CPU-optimized version of PyTorch..."
 }
 
 try {
-    & $PythonExe $arguments
+    & $PythonExe -m pip $arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "pip install failed with exit code $LASTEXITCODE"
+    }
     Write-Host "PyTorch installed successfully."
 } catch {
     Write-Error "ERROR: Failed to install PyTorch. If using a CUDA version, please ensure the NVIDIA drivers and toolkit are correctly installed."
@@ -95,11 +98,43 @@ try {
 # 6. Install other dependencies
 Write-Host "Step 6: Installing other dependencies from requirements.txt..."
 try {
-    & $PythonExe -m pip install -r (Join-Path $ProjectRoot "backend/requirements.txt")
+    if ($CudaVersion) {
+        & $PythonExe -m pip install -r (Join-Path $ProjectRoot "backend/requirements.txt") --extra-index-url $IndexUrl
+    } else {
+        & $PythonExe -m pip install -r (Join-Path $ProjectRoot "backend/requirements.txt") --extra-index-url "https://download.pytorch.org/whl/cpu"
+    }
 } catch {
     Write-Error "ERROR: Failed to install dependencies from requirements.txt."
     Write-Error "PIP ERROR: $_"
     exit 1
+}
+
+
+# 7. Install Diffracture (if available)
+Write-Host "Step 7: Checking for Diffracture locally..."
+$DiffracturePath = (Resolve-Path (Join-Path $ProjectRoot "../Diffracture") -ErrorAction SilentlyContinue).Path
+if ($DiffracturePath) {
+    $SetupPy = Join-Path $DiffracturePath "setup.py"
+    $PyProject = Join-Path $DiffracturePath "pyproject.toml"
+    if ((Test-Path $SetupPy) -or (Test-Path $PyProject)) {
+        Write-Host "Found Diffracture at $DiffracturePath. Installing in editable mode..."
+        try {
+            if ($CudaVersion) {
+                & $PythonExe -m pip install -e $DiffracturePath --extra-index-url $IndexUrl
+            } else {
+                & $PythonExe -m pip install -e $DiffracturePath --extra-index-url "https://download.pytorch.org/whl/cpu"
+            }
+            Write-Host "Diffracture installed successfully."
+        } catch {
+            Write-Error "ERROR: Failed to install Diffracture."
+            Write-Error "PIP ERROR: $_"
+            exit 1
+        }
+    } else {
+        Write-Host "Diffracture directory found, but no setup.py or pyproject.toml present. Skipping."
+    }
+} else {
+    Write-Host "Diffracture not found at ../Diffracture. Skipping."
 }
 
 Write-Host "Backend setup completed successfully!"
