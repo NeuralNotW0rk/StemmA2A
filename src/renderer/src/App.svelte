@@ -6,6 +6,7 @@
   import ContentPanel from './components/ContentPanel.svelte'
   import ElementInfoView from './components/views/ElementInfoView.svelte'
   import GenerationView from './components/views/GenerationView.svelte'
+  import InversionView from './components/views/InversionView.svelte'
   import ErrorView from './components/views/ErrorView.svelte'
   import ImportLatticeView from './components/views/ImportLatticeView.svelte'
   import ImportModelView from './components/views/ImportModelView.svelte'
@@ -42,7 +43,7 @@
   let isPeekPressed = $state(false)
   let showDetailedLabels = $derived(showDetailedLabelsToggle || isPeekPressed)
   let selectedElementData: ElementData | null = $state(null)
-  let actionPanelView: ActionPanelView = $state('none')
+  let actionPanelView: ActionPanelView | 'inversion' = $state('none')
   let errorInInfoPanel: ErrorInfo | null = $state(null)
   let toolbarComponent: Toolbar
 
@@ -177,6 +178,24 @@
       console.error('Failed to update labels:', error)
       errorInInfoPanel = {
         title: 'Update Labels Failed',
+        message: error?.message || String(error)
+      }
+    }
+  }
+
+  async function handleRepairEdges(): Promise<void> {
+    try {
+      const response = await window.api.repairEdges()
+      await refreshGraphData()
+      
+      errorInInfoPanel = {
+        title: 'Repair Edges Successful',
+        message: response?.message || 'Missing edges were successfully restored.'
+      }
+    } catch (error: any) {
+      console.error('Failed to repair edges:', error)
+      errorInInfoPanel = {
+        title: 'Repair Edges Failed',
         message: error?.message || String(error)
       }
     }
@@ -340,6 +359,11 @@
     actionPanelView = 'generation'
   }
 
+  function handleAudioNodeSelectForInversion(audioData: any): void {
+    initiatorNodeStore.set(audioData)
+    actionPanelView = 'inversion'
+  }
+
   function handleElementRemove(elementData: any): void {
     selectedForRemoval.set(elementData)
     actionPanelView = 'removal'
@@ -414,6 +438,9 @@
     if (actionPanelView === 'generation') {
       return 'Generation'
     }
+    if (actionPanelView === 'inversion') {
+      return 'Invert Audio'
+    }
     if (actionPanelView === 'removal') {
       return 'Confirm Removal'
     }
@@ -485,6 +512,7 @@
     onaddExternalSource={handleAddExternalSource}
     onupdateEmbeddings={handleUpdateEmbeddings}
     onupdateLabels={handleUpdateLabels}
+    onrepairEdges={handleRepairEdges}
     {currentProject}
     {viewMode}
     bind:showSpringEdges
@@ -505,6 +533,12 @@
         <GenerationView
           onClose={closeActionPanel}
           onGenerate={closeActionPanel}
+          onError={handleGenerationError}
+        />
+      {:else if actionPanelView === 'inversion'}
+        <InversionView
+          onClose={closeActionPanel}
+          onInvert={closeActionPanel}
           onError={handleGenerationError}
         />
       {:else if actionPanelView === 'import-model'}
@@ -613,6 +647,7 @@
     onimportLattice={handleImportLattice}
     onlatticeSelectForGeneration={handleLatticeSelectForGeneration}
     onaudioNodeSelectForGeneration={handleAudioNodeSelectForGeneration}
+    onaudioNodeSelectForInversion={handleAudioNodeSelectForInversion}
     onnodeSelect={handleElementSelect}
     onexport={handleExport}
     onedgeSelect={handleElementSelect}

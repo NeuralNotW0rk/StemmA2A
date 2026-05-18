@@ -25,9 +25,12 @@ interface API {
   importModel: (data: any) => Promise<any>
   exportAudio: (names: string[], exportDir?: string) => Promise<any>
   generate: (data: any) => Promise<any>
+  invert: (data: any) => Promise<any>
   removeElement: (elementId: string, keepChildren?: boolean) => Promise<any>
+  removeElements: (elementIds: string[], keepChildren?: boolean) => Promise<any>
   logMessage: (message: string) => Promise<any>
   updateLabels: () => Promise<any>
+  repairEdges: () => Promise<any>
   pollJobStatus: (jobId: string) => Promise<any>
   updateEmbeddings: () => Promise<any>
   batchElements: (memberIds: string[]) => Promise<any>

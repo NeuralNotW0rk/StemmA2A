@@ -132,6 +132,32 @@ class LocalEngine(Engine):
         """
         return await self._generate_logic(**kwargs)
 
+    async def _invert_logic(self, **kwargs) -> GraphElement:
+        """
+        The actual inversion logic. Gets a cached model adapter and uses it to perform DDIM inversion.
+        Saves the resulting latent tensor to a persistent location.
+        """
+        model_element = kwargs["model_element"]
+        adapter_class = self._get_adapter_class(model_element.adapter)
+        adapter = self.model_cache.get(model_element, adapter_class)
+
+        artifact, tensor = adapter.invert(**kwargs)
+
+        local_path = self.data_root / path_from_uid(artifact.id)
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Save the latent tensor file
+        torch.save(tensor.cpu(), local_path)
+
+        # Update the artifact with the persistent path
+        new_file_asset = replace(artifact.file, path=str(local_path))
+        artifact = replace(artifact, file=new_file_asset)
+
+        return artifact
+
+    async def invert(self, **kwargs) -> GraphElement:
+        return await self._invert_logic(**kwargs)
+
     def _worker(self):
         """The worker function that processes jobs from the queue."""
         while True:
@@ -194,6 +220,8 @@ class LocalEngine(Engine):
         op_to_run = operation_id
         if operation_id == 'generate':
             op_to_run = '_generate_logic'
+        elif operation_id == 'invert':
+            op_to_run = '_invert_logic'
 
         self.job_queue.put((job_id, op_to_run, kwargs))
         self.job_statuses[job_id] = {"status": "pending"}

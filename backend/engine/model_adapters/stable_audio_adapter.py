@@ -13,6 +13,7 @@ from coolname import generate_slug
 from .base_adapter import ModelAdapter
 from param_graph.elements.base_elements import Asset
 from param_graph.elements.artifacts.audio_element import Audio
+from param_graph.elements.artifacts.latent_element import Latent
 from param_graph.elements.models.stable_audio_element import StableAudioModel
 from utils.uid import UIDMismatchError
 
@@ -199,3 +200,110 @@ class StableAudioAdapter(ModelAdapter):
         )
 
         return artifact, output
+
+    def invert(self, **kwargs) -> tuple[Latent, torch.Tensor]:
+        model = self.model.to(self.device)
+        sample_rate = self.model_info.config["sample_rate"]
+        seconds_start = kwargs.get("seconds_start", 0)
+        seconds_total = kwargs.get("seconds_total", 11)
+
+        # Set up text and timing conditioning
+        conditioning = [{
+            "prompt": kwargs.get("prompt", ""),
+            "seconds_start": seconds_start,
+            "seconds_total": seconds_total
+        }]
+
+        steps = kwargs.get("steps", 50)
+        inversion_strength = kwargs.get("inversion_strength", 0.5)
+        
+        source_audio_element = kwargs.get("source_audio_element")
+        if not source_audio_element:
+            raise ValueError("source_audio_element is required for DDIM inversion.")
+            
+        audio_path = Path(source_audio_element.file.path)
+        if audio_path and audio_path.exists():
+            from utils.audio import load_audio
+            source_audio_tensor = load_audio(self.device, audio_path, sample_rate)
+        else:
+            raise FileNotFoundError(f"Audio path not found: {audio_path}")
+
+        source_audio_tensor = source_audio_tensor.unsqueeze(0).to(self.device)
+        
+        with torch.no_grad():
+            # Encode to get the clean latent representation (x_0)
+            init_latents = model.pretransform.encode(source_audio_tensor)[0]
+
+            # Preprocess the text/timing conditioning
+            cond = model.conditioner(conditioning)
+
+        # 1. Fetch exact cumulative noise schedule arrays from stable-audio-tools
+        # Note: If your setup encapsulates this inside model.diffusion.pretransform or model.schedule, 
+        # make sure this targets the active alphas_cumprod vector.
+        alphas = model.diffusion.schedule.alphas_cumprod
+        total_schedule_len = len(alphas)
+
+        # Convert our execution steps into specific indices matching the alpha array length
+        # Mapping our inversion steps linearly down across the scheduler's timeline
+        step_indices = torch.linspace(0, total_schedule_len - 1, steps, dtype=torch.long, device=self.device)
+        stop_step = int(steps * inversion_strength)
+        
+        current_latents = init_latents
+
+        # 2. DDIM Inversion Loop: Moving step-by-step from clean data to structured noise
+        for i in range(stop_step - 1):
+            # Extract schedule indices for step t and step t+1
+            idx_t = step_indices[i]
+            idx_next = step_indices[i + 1]
+            
+            alpha_t = alphas[idx_t]
+            alpha_next = alphas[idx_next]
+            
+            # Convert index values into single-element time conditioning tensors for the DiT block
+            t_tensor = torch.tensor([idx_t / total_schedule_len], device=self.device)
+            
+            with torch.no_grad():
+                # Run the Diffusion Transformer forward pass to predict the current step noise
+                noise_pred = model.diffusion(current_latents, t_tensor, **cond)
+                
+            # 3. Exact DDIM ODE Inversion step calculation
+            # Compute the scale matching the content direction vs the structural noise injection
+            latents_scaled = torch.sqrt(alpha_next / alpha_t) * current_latents
+            noise_direction = (torch.sqrt(1 - alpha_next) - torch.sqrt((alpha_next / alpha_t) * (1 - alpha_t))) * noise_pred
+            
+            # Step the latent explicitly to the higher noise level
+            current_latents = latents_scaled + noise_direction
+
+        # Save the finalized latent tensor array state
+        latent_tensor = current_latents
+
+        # Create latent artifact tracking IDs
+        content_uid = self.uid_generator.from_tensor(latent_tensor)
+
+        # Filter context metadata properties
+        context = {}
+        for k, v in kwargs.items():
+            if k.endswith('_element'):
+                context[k.replace('_element', '_id')] = v.id
+            elif k.endswith('_elements'):
+                context[k.replace('_elements', '_ids')] = [el.id for el in v]
+            else:
+                context[k] = v
+
+        # Inject execution variables explicitly into our self-documenting context dictionary
+        context["inversion_metadata"] = {
+            "algorithm": "ddim_inversion",
+            "sampler": "ddim",
+            "inversion_steps": steps,
+            "stop_step_index": stop_step,
+            "inversion_strength": inversion_strength
+        }
+
+        artifact = Latent(
+            id=content_uid,
+            name=generate_slug(2),
+            file=Asset(path=None, uid=content_uid, extension=".pt"),
+            context=context
+        )
+        
+        return artifact, latent_tensor

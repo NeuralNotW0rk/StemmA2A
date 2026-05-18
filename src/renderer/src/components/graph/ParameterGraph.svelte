@@ -19,6 +19,7 @@
     onmodelSelect?: (data: any) => void
     onaudioSelect?: (data: any) => void
     onaudioNodeSelectForGeneration?: (data: any, useContext?: boolean) => void
+    onaudioNodeSelectForInversion?: (data: any) => void
     onexport?: (data: { names: string[] }) => void
     onimportLattice?: (data: any) => void
     onlatticeSelectForGeneration?: (data: any) => void
@@ -47,6 +48,7 @@
     onmodelSelect,
     onaudioSelect,
     onaudioNodeSelectForGeneration,
+    onaudioNodeSelectForInversion,
     onimportLattice,
     onlatticeSelectForGeneration,
     onrescanSource,
@@ -243,7 +245,12 @@
       {
         content: 'Remove',
         select: () => {
-          onElementRemove?.(ele.data())
+          const selectedEles = cy!.$(':selected')
+          if (selectedEles.length > 1 && selectedEles.contains(ele)) {
+            onElementRemove?.(selectedEles.map(e => e.data()))
+          } else {
+            onElementRemove?.(ele.data())
+          }
         }
       }
     ]
@@ -294,6 +301,10 @@
       specificCommands.push({
         content: 'Audio to Audio',
         select: () => onaudioNodeSelectForGeneration?.(ele.data(), false)
+      })
+      specificCommands.push({
+        content: 'Invert',
+        select: () => onaudioNodeSelectForInversion?.(ele.data())
       })
 
       // Only allow batch creation for independent artifacts
@@ -710,8 +721,11 @@
       newElements.forEach((ele: any) => {
         if ((ele.group === 'edges' || ele.data.source) && ele.data.type !== 'spring') {
           const t = ele.data.target
+
+          const sourceId = ele.data.source
+
           if (!incomingMap[t]) incomingMap[t] = []
-          if (!incomingMap[t].includes(ele.data.source)) incomingMap[t].push(ele.data.source)
+          if (!incomingMap[t].includes(sourceId)) incomingMap[t].push(sourceId)
         }
       })
 
@@ -740,8 +754,13 @@
           const targetNode = newElements.find((n) => n.data.id === edgeData.target)
           const target = targetNode?.data.parent || edgeData.target
 
+          // We explicitly DO NOT proxy the source to its parent batch.
+          // This ensures that when a single sample is used as init_audio, 
+          // the edge visually originates from that specific sample, not the whole batch.
+          const source = edgeData.source
+
           // Prevent alpha-stacking visual bugs by deduplicating edges that share the same endpoints
-          const sig = `${edgeData.source}->${target}:${edgeData.type}`
+          const sig = `${source}->${target}:${edgeData.type}`
           if (seenProxyEdges.has(sig)) return acc
           seenProxyEdges.add(sig)
 
@@ -750,7 +769,7 @@
             data: {
               ...edgeData,
               // Redirect target to parent if it exists, but keep original source
-              source: edgeData.source,
+              source: source,
               target: target
             }
           })
@@ -828,6 +847,19 @@
     if (e.key === 'Control' || e.key === 'Meta') {
       cy?.boxSelectionEnabled(false)
       cy?.autoungrabify(true)
+    }
+    if (e.key === 'Delete' || e.key === 'Backspace') {
+      const target = e.target as HTMLElement
+      const isInput =
+        target.tagName === 'INPUT' ||
+        target.tagName === 'TEXTAREA' ||
+        target.isContentEditable
+      if (!isInput) {
+        const selectedEles = cy?.$(':selected')
+        if (selectedEles && selectedEles.length > 0) {
+          onElementRemove?.(selectedEles.map((el) => el.data()))
+        }
+      }
     }
   }}
   onkeyup={(e) => {

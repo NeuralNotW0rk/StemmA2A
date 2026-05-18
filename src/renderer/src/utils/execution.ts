@@ -25,7 +25,7 @@ export const embeddingUpdateExecutionStore: Writable<ExecutionState> = writable(
   error: null
 })
 
-export async function startExecution(name: string, payload: unknown): Promise<void> {
+export async function startExecution(name: string, payload: unknown, operation: 'generate' | 'invert' = 'generate'): Promise<void> {
   const job = addJob(name, payload, 'pending')
 
   try {
@@ -34,7 +34,7 @@ export async function startExecution(name: string, payload: unknown): Promise<vo
         ? { ...payload, job_id: job.id }
         : { job_id: job.id, payload }
     
-    const initData = await window.api.generate(payloadWithId)
+    const initData = operation === 'invert' ? await window.api.invert(payloadWithId) : await window.api.generate(payloadWithId)
     
     if (initData.status === 'running' || initData.status === 'pending') {
       const finalResult = await pollJobStatus(initData.job_id)

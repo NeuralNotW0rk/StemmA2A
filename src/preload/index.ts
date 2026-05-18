@@ -31,10 +31,14 @@ const api = {
     ipcRenderer.invoke('exportAudio', names, exportDir),
   registerLattice: (data: unknown) => ipcRenderer.invoke('registerLattice', data),
   generate: (data: unknown) => ipcRenderer.invoke('generate', data),
+  invert: (data: unknown) => ipcRenderer.invoke('invert', data),
   removeElement: (elementId: string, keepChildren?: boolean): Promise<any> =>
     ipcRenderer.invoke('removeElement', elementId, keepChildren),
+  removeElements: (elementIds: string[], keepChildren?: boolean): Promise<any> =>
+    ipcRenderer.invoke('removeElements', elementIds, keepChildren),
   logMessage: (message: string): Promise<any> => ipcRenderer.invoke('logMessage', message),
   updateLabels: (): Promise<any> => ipcRenderer.invoke('updateLabels'),
+  repairEdges: (): Promise<any> => ipcRenderer.invoke('repairEdges'),
   updateEmbeddings: (): Promise<any> => ipcRenderer.invoke('updateEmbeddings'),
   pollJobStatus: (jobId: string): Promise<any> => ipcRenderer.invoke('pollJobStatus', jobId),
   batchElements: (memberIds: string[]): Promise<any> => ipcRenderer.invoke('batchElements', memberIds),

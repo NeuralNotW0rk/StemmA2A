@@ -36,6 +36,10 @@ class ModelAdapter(ABC):
     def generate(self, **kwargs) -> tuple[GraphElement, torch.Tensor]:
         pass
 
+    @abstractmethod
+    def invert(self, **kwargs) -> tuple[GraphElement, torch.Tensor]:
+        pass
+
     def cleanup(self):
         """Called to explicitly clean up resources when the adapter is removed from the cache."""
         pass

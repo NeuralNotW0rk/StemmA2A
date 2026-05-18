@@ -284,6 +284,31 @@ app.whenReady().then(async () => {
     }
   })
 
+  ipcMain.handle('invert', async (_event, invertData) => {
+    try {
+      const response = await fetchWithAuth(`${BACKEND_URL}/invert`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(invertData)
+      })
+      if (!response.ok) {
+        const errorBody = await response.text()
+        let parsedError = `Failed to invert. Status: ${response.status}. Error: ${errorBody}`
+        try {
+          const parsed = JSON.parse(errorBody)
+          if (parsed.error) {
+            parsedError = parsed.error + (parsed.traceback ? `\n\nTraceback:\n${parsed.traceback}` : '')
+          }
+        } catch (_) {}
+        throw new Error(parsedError)
+      }
+      return await response.json()
+    } catch (error) {
+      console.error('Inversion Error:', error)
+      throw error
+    }
+  })
+
   ipcMain.handle('pollJobStatus', async (_event, jobId) => {
     try {
       const response = await fetchWithAuth(`${BACKEND_URL}/job_status/${jobId}`)
@@ -331,6 +356,21 @@ app.whenReady().then(async () => {
     return await response.json()
   })
 
+  ipcMain.handle('removeElements', async (_event, elementIds: string[], keepChildren = false) => {
+    const response = await fetchWithAuth(`${BACKEND_URL}/elements`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ element_ids: elementIds, keep_children: keepChildren })
+    })
+    if (!response.ok) {
+      const errorBody = await response.text()
+      throw new Error(
+        `Failed to remove elements. Status: ${response.status}. Error: ${errorBody}`
+      )
+    }
+    return await response.json()
+  })
+
   ipcMain.handle('addExternalSource', async (_event, sourcePath) => {
     const response = await fetchWithAuth(`${BACKEND_URL}/add_external_source`, {
       method: 'POST',
@@ -365,6 +405,19 @@ app.whenReady().then(async () => {
       const errorBody = await response.text()
       throw new Error(
         `Failed to update labels. Status: ${response.status}. Error: ${errorBody}`
+      )
+    }
+    return await response.json()
+  })
+
+  ipcMain.handle('repairEdges', async () => {
+    const response = await fetchWithAuth(`${BACKEND_URL}/repair_edges`, {
+      method: 'POST'
+    })
+    if (!response.ok) {
+      const errorBody = await response.text()
+      throw new Error(
+        `Failed to repair edges. Status: ${response.status}. Error: ${errorBody}`
       )
     }
     return await response.json()

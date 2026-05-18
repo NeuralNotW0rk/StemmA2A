@@ -12,12 +12,19 @@
   let isRemoving = $state(false)
   let keepChildren = $state(true)
 
+  let elements = $derived(
+    Array.isArray($selectedForRemoval)
+      ? $selectedForRemoval
+      : [$selectedForRemoval].filter(Boolean)
+  )
+
   async function remove(): Promise<void> {
-    if (!$selectedForRemoval) return
+    if (elements.length === 0) return
 
     isRemoving = true
     try {
-      await window.api.removeElement($selectedForRemoval.id, keepChildren)
+      const ids = elements.map(el => el.id)
+      await window.api.removeElements(ids, keepChildren)
       onrefresh()
     } catch (e: unknown) {
       console.error('Failed to remove element:', e)
@@ -30,18 +37,29 @@
 </script>
 
 <div class="view-content">
-  {#if $selectedForRemoval}
+  {#if elements.length > 0}
     <h2>Confirm Removal</h2>
-    <p>Are you sure you want to remove the following element?</p>
-    <div class="element-info">
-      <strong>{$selectedForRemoval.id}</strong>
-      <span>({$selectedForRemoval.type})</span>
-    </div>
-    {#if $selectedForRemoval.type === 'batch' || $selectedForRemoval.type === 'directory'}
+    <p>
+      Are you sure you want to remove 
+      {#if elements.length > 1}
+        these {elements.length} elements?
+      {:else}
+        the following element?
+      {/if}
+    </p>
+    
+    {#if elements.length === 1}
+      <div class="element-info">
+        <strong>{elements[0].id}</strong>
+        <span>({elements[0].type})</span>
+      </div>
+    {/if}
+
+    {#if elements.some(el => el.type === 'batch' || el.type === 'directory')}
       <div class="options">
         <label>
           <input type="checkbox" bind:checked={keepChildren} disabled={isRemoving} />
-          {#if $selectedForRemoval.type === 'batch'}
+          {#if elements.some(el => el.type === 'batch')}
             Keep child elements (disband batch)
           {:else}
             Keep contained files
@@ -49,9 +67,9 @@
         </label>
         <p class="hint-text">
           {#if keepChildren}
-            The {$selectedForRemoval.type} will be removed, but its contents will remain on the graph.
+            The container elements will be removed, but their contents will remain on the graph.
           {:else}
-            The {$selectedForRemoval.type} and all of its contents will be permanently removed.
+            The container elements and all of their contents will be permanently removed.
           {/if}
         </p>
       </div>

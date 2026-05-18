@@ -12,6 +12,7 @@
     onimportModel?: () => void
     onupdateEmbeddings?: () => void
     onupdateLabels?: () => void
+    onrepairEdges?: () => void
     showSpringEdges?: boolean
     showDetailedLabels?: boolean
   }
@@ -26,6 +27,7 @@
     onimportModel,
     onupdateEmbeddings,
     onupdateLabels,
+    onrepairEdges,
     showSpringEdges = $bindable(false),
     showDetailedLabels = $bindable(false)
   }: Props = $props()
@@ -284,6 +286,15 @@
             }}
           >
             Update Labels
+          </button>
+          <button
+            class="dropdown-item"
+            onclick={() => {
+              onrepairEdges?.()
+              showUtilitiesMenu = false
+            }}
+          >
+            Repair Edges
           </button>
           <button class="dropdown-item" onclick={toggleSprings}>
             {showSpringEdges ? 'Hide Spring Edges' : 'Show Spring Edges'}

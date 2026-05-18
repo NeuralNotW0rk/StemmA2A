@@ -620,6 +620,82 @@ async def generate():
         traceback.print_exc()
         return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
+@app.route("/invert", methods=["POST"])
+async def invert():
+    """
+    Handles the full audio inversion lifecycle: validation, queuing, and artifact processing.
+    """
+    if param_graph is None or engine_provider is None:
+        return jsonify({"error": "No project loaded"}), 400
+    
+    try:
+        json_data = request.get_json()
+        print(f"app.py: Received /invert payload: {json_data}")
+        model_id = json_data.get("model_id")
+        job_id = json_data.get("job_id")
+        
+        if not job_id:
+            return jsonify({"error": "'job_id' is required."}), 400
+        if not model_id:
+            return jsonify({"error": "'model_id' is required."}), 400
+
+        model_element = param_graph.get_element(model_id)
+        if not isinstance(model_element, Model):
+            return jsonify({"error": f"Node '{model_id}' is not a valid model."}), 400
+        
+        engine = engine_provider.get_engine()
+        form_config = await engine.get_adapter_config(model_element.adapter)
+        form_config = form_config.get("invert", [])
+        if not form_config:
+            return jsonify({"error": f"Adapter '{model_element.adapter}' has no 'invert' configuration"}), 404
+
+        DynamicArgsModel = create_dynamic_model(form_config)
+        validated_params = DynamicArgsModel.model_validate(json_data)
+        dumped_params = validated_params.model_dump()
+        
+        node_engine_args = {}
+        for field in form_config:
+            if field.get("type") == "node":
+                field_name = field.get("name")
+                node_id = dumped_params.pop(field_name, None)
+                if node_id:
+                    element = param_graph.get_element(node_id)
+                    if element:
+                        node_engine_args[f"{field_name}_element"] = element
+
+        # Explicitly wire up the source audio element
+        source_audio_id = json_data.get("source_audio_id")
+        if source_audio_id:
+            source_audio_element = param_graph.get_element(source_audio_id)
+            if not isinstance(source_audio_element, Audio):
+                return jsonify({"error": f"Node '{source_audio_id}' is not a valid audio artifact."}), 400
+            node_engine_args["source_audio_element"] = source_audio_element
+            
+            cache_used_audio(source_audio_element.id)
+            valid_path = resolve_audio_path(source_audio_element.id)
+            if valid_path and str(valid_path) != source_audio_element.file.path:
+                source_audio_element.file = replace(source_audio_element.file, path=str(valid_path))
+
+        engine_args = {"model_element": model_element, **node_engine_args}
+        
+        # --- Execute ---
+        print(f"Submitting inversion job {job_id} to engine...")
+        returned_job_id = await engine.execute("invert", job_id=job_id, **engine_args, **dumped_params)
+        
+        if returned_job_id != job_id:
+             job_id = returned_job_id
+             
+        active_jobs[job_id] = {
+            "linked_elements": [model_element, source_audio_element] if source_audio_id else [model_element],
+            "validated_params": validated_params.model_dump()
+        }
+
+        return jsonify({"message": "Job started successfully.", "job_id": job_id, "status": "pending"}), 202
+
+    except Exception as e:
+        print(f"Inversion failed: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
 @app.route("/job_status/<job_id>", methods=["GET"])
 async def get_job_status(job_id):
@@ -1236,6 +1312,62 @@ def update_labels():
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
+@app.route("/repair_edges", methods=["POST"])
+def repair_edges():
+    """Rebuild missing structural edges based on node context."""
+    if param_graph is None:
+        return jsonify({"error": "No project loaded"}), 400
+
+    try:
+        with graph_lock:
+            edges_added = 0
+            
+            for node_id, node_data in param_graph.G.nodes(data=True):
+                element = param_graph.get_element(node_id)
+                if not element:
+                    continue
+
+                potential_source_ids = []
+                
+                if hasattr(element, 'base_model_id') and element.base_model_id:
+                    potential_source_ids.append((element.base_model_id, 'binds_to'))
+                    
+                if hasattr(element, 'context') and isinstance(element.context, dict):
+                    for key, value in element.context.items():
+                        if key.endswith('_id') and isinstance(value, str):
+                            potential_source_ids.append((value, 'source'))
+                        elif key == 'lattices' and isinstance(value, list):
+                            for lattice in value:
+                                l_id = lattice.get('id')
+                                if l_id:
+                                    potential_source_ids.append((l_id, 'source'))
+                                    
+                for source_id, relation in potential_source_ids:
+                    if param_graph.G.has_node(source_id):
+                        # We check out_edges explicitly to ensure we don't skip structural edges 
+                        # just because a 'spring' edge already exists between the nodes.
+                        edge_exists = any(v == node_id and attrs.get('type') != 'spring' 
+                                          for _, v, attrs in param_graph.G.out_edges(source_id, data=True))
+                        if not edge_exists:
+                            print(f"Restoring missing edge: {source_id} -> {node_id}")
+                            source_el = param_graph.get_element(source_id)
+                            param_graph.link(source_el, element, relation=relation)
+                            edges_added += 1
+
+            if edges_added > 0:
+                param_graph.save()
+
+        return jsonify({
+            "message": f"Graph repaired: {edges_added} missing edges restored.",
+            "edges_added": edges_added,
+            "success": True
+        })
+
+    except Exception as e:
+        print(f"Failed to repair edges: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
 # --------------------
 #  Audio Operations
 # --------------------
@@ -1321,50 +1453,20 @@ def export_audio():
         data = request.get_json()
         names = data.get('names', [])
         export_name = data.get('export_name', 'export')
-        export_dir = data.get('export_dir')
         
         if not names:
             return jsonify({"error": "names list is required"}), 400
         
-        if export_dir:
-            export_path_obj = Path(export_dir)
-            export_path_obj.mkdir(parents=True, exist_ok=True)
-            exported_count = 0
-            
-            with graph_lock:
-                for name in names:
-                    node_id = None
-                    for n, d in param_graph.G.nodes(data=True):
-                        if d.get('name') == name and d.get('type') == 'audio':
-                            node_id = n
-                            break
-                    
-                    if node_id:
-                        src_path = resolve_audio_path(node_id)
-                        if src_path and src_path.exists():
-                            dest_path = export_path_obj / f"{name}{src_path.suffix}"
-                            shutil.copy2(src_path, dest_path)
-                            exported_count += 1
-            
-            if exported_count == 0:
-                return jsonify({"error": "No valid audio files found to export."}), 404
-                
-            return jsonify({
-                "message": f"Exported {exported_count} files",
-                "export_path": str(export_path_obj),
-                "success": True
-            })
+        if len(names) == 1:
+            export_path = param_graph.export_single(names[0], export_name)
         else:
-            if len(names) == 1:
-                export_path = param_graph.export_single(names[0], export_name)
-            else:
-                export_path = param_graph.export_batch(names, export_name)
-            
-            return jsonify({
-                "message": "Export completed",
-                "export_path": str(export_path),
-                "success": True
-            })
+            export_path = param_graph.export_batch(names, export_name)
+        
+        return jsonify({
+            "message": "Export completed",
+            "export_path": str(export_path),
+            "success": True
+        })
         
     except Exception as e:
         print(f"Export failed: {e}")
@@ -1471,6 +1573,49 @@ def remove_element(element_id):
 
     except Exception as e:
         print(f"Failed to remove element: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/elements", methods=["DELETE"])
+def remove_elements():
+    """Remove multiple elements from the graph"""
+    if param_graph is None:
+        return jsonify({"error": "No project loaded"}), 400
+
+    try:
+        data = request.get_json()
+        element_ids = data.get('element_ids', [])
+        keep_children = data.get('keep_children', False)
+
+        with graph_lock:
+            for element_id in element_ids:
+                if keep_children and param_graph.G.has_node(element_id):
+                    node_attrs = param_graph.G.nodes[element_id]
+                    
+                    # Find and unlink any nodes specifying this element as their parent
+                    children = [n for n, d in param_graph.G.nodes(data=True) if d.get('parent') == element_id]
+                    for child_id in children:
+                        param_graph.update_element(child_id, {"parent": None, "alias": None})
+
+                    if node_attrs.get('type') == 'batch':
+                        member_ids = node_attrs.get('member_ids', [])
+                        for m_id in member_ids:
+                            param_graph.update_element(m_id, {"parent": None, "alias": None})
+                        
+                        # CRITICAL: strip the batch of its members so remove_element doesn't cascade
+                        param_graph.update_element(element_id, {"member_ids": []})
+                        node_attrs['member_ids'] = []
+
+                param_graph.remove_element(element_id)
+            param_graph.save()
+
+        return jsonify({
+            "message": f"Successfully removed {len(element_ids)} elements",
+            "success": True
+        })
+
+    except Exception as e:
+        print(f"Failed to remove elements: {e}")
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
