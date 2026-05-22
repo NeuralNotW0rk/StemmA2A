@@ -243,7 +243,9 @@ class StableAudioAdapter(ModelAdapter):
         
         with torch.no_grad():
             # Encode to get the clean latent representation (x_0)
-            init_latents = model.pretransform.encode(source_audio_tensor)[0]
+            init_latents = model.pretransform.encode(source_audio_tensor)
+            if isinstance(init_latents, tuple):
+                init_latents = init_latents[0]
 
             # Preprocess the text/timing conditioning
             cond = model.conditioner(conditioning, self.device)
