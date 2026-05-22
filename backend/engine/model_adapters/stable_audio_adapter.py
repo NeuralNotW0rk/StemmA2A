@@ -250,7 +250,7 @@ class StableAudioAdapter(ModelAdapter):
         # 1. Fetch exact cumulative noise schedule arrays from stable-audio-tools
         # Note: If your setup encapsulates this inside model.diffusion.pretransform or model.schedule, 
         # make sure this targets the active alphas_cumprod vector.
-        alphas = model.diffusion.schedule.alphas_cumprod
+        alphas = model.model.schedule.alphas_cumprod
         total_schedule_len = len(alphas)
 
         # Convert our execution steps into specific indices matching the alpha array length
@@ -274,7 +274,7 @@ class StableAudioAdapter(ModelAdapter):
             
             with torch.no_grad():
                 # Run the Diffusion Transformer forward pass to predict the current step noise
-                noise_pred = model.diffusion(current_latents, t_tensor, **cond)
+                noise_pred = model.model(current_latents, t_tensor, **cond)
                 
             # 3. Exact DDIM ODE Inversion step calculation
             # Compute the scale matching the content direction vs the structural noise injection
