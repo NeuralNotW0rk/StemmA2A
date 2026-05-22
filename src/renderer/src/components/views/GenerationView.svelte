@@ -79,7 +79,7 @@
         )
         formData = newFormData
       } else {
-        throw new Error('Invalid config format received from backend.')
+        throw new Error(`The adapter "${adapter}" does not support generation (missing "generate" config).`)
       }
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : 'Failed to load configuration.'

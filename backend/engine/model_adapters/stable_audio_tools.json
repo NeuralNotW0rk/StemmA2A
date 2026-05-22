@@ -115,6 +115,43 @@
             }
         }
     ],
+    "invert": [
+        {
+            "name": "prompt",
+            "label": "Prompt",
+            "type": "textarea",
+            "defaultValue": "",
+            "placeholder": "Enter the original generation prompt..."
+        },
+        {
+            "name": "steps",
+            "label": "Steps",
+            "type": "integer",
+            "defaultValue": 50,
+            "placeholder": "Enter number of steps"
+        },
+        {
+            "name": "inversion_strength",
+            "label": "Inversion Strength",
+            "type": "float",
+            "defaultValue": 0.5,
+            "placeholder": "Enter inversion strength (0 to 1)"
+        },
+        {
+            "name": "seconds_start",
+            "label": "Seconds Start",
+            "type": "float",
+            "defaultValue": 0,
+            "placeholder": "Enter start time in seconds"
+        },
+        {
+            "name": "seconds_total",
+            "label": "Seconds Total",
+            "type": "float",
+            "defaultValue": 11,
+            "placeholder": "Enter duration in seconds"
+        }
+    ],
     "import": [
         {
             "name": "name",

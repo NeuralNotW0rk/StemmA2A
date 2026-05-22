@@ -120,16 +120,20 @@ class StableAudioAdapter(ModelAdapter):
         print(f"Sample Rate: {sample_rate}")
         print(f"Sample Size: {sample_size}")
 
-        sampler_type = "pingpong" # default
+        sampler_type = None
         if self.model_info.model_type == "k_diffusion":
             # The key from the form is 'k_sampler_type'
             sampler_type = kwargs.get("k_sampler_type")
+            if not sampler_type:
+                raise ValueError("k_sampler_type is required for k_diffusion models.")
         elif self.model_info.model_type == "rectified_flow":
             # The key from the form is 'rf_sampler_type'
             sampler_type = kwargs.get("rf_sampler_type")
+            if not sampler_type:
+                raise ValueError("rf_sampler_type is required for rectified_flow models.")
         
         if not sampler_type:
-            sampler_type = "pingpong"
+            raise ValueError(f"Unable to determine sampler type for model_type: {self.model_info.model_type}")
             
         # Set up generation arguments
         args = {

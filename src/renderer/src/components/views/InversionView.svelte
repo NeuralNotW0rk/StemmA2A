@@ -72,17 +72,8 @@
           $initiatorNodeStore
         )
         formData = newFormData
-      } else if (config && config.generate && Array.isArray(config.generate)) {
-        // Fallback to generation config just to scaffold the UI if invert doesn't exist yet
-        adapterFields = config.generate
-        const { formData: newFormData } = initializeFormData(
-          adapterFields,
-          $contextStore,
-          $initiatorNodeStore
-        )
-        formData = newFormData
       } else {
-        throw new Error('Invalid config format received from backend.')
+        throw new Error(`The adapter "${adapter}" does not support inversion (missing "invert" config).`)
       }
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : 'Failed to load configuration.'
