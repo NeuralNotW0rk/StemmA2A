@@ -50,13 +50,14 @@
             "defaultValue": "dpmpp-3m-sde",
             "options": [
                 { "label": "DPM++ 3M SDE", "value": "dpmpp-3m-sde" },
-                { "label": "DPM++ 2M", "value": "dpmpp_2m" },
-                { "label": "DPM++ SDE", "value": "dpmpp_sde" },
-                { "label": "k-Heun", "value": "k_heun" },
-                { "label": "k-LMS", "value": "k_lms" },
-                { "label": "k-Euler", "value": "k_euler" },
-                { "label": "k-DPM2", "value": "k_dpm_2" },
-                { "label": "k-DPM Adaptive", "value": "k_dpm_adaptive" }
+                { "label": "DPM++ 2M SDE", "value": "dpmpp-2m-sde" },
+                { "label": "DPM++ 2M", "value": "dpmpp-2m" },
+                { "label": "Heun", "value": "heun" },
+                { "label": "LMS", "value": "lms" },
+                { "label": "Euler", "value": "euler" },
+                { "label": "Euler Ancestral", "value": "euler-ancestral" },
+                { "label": "DPM2", "value": "dpm2" },
+                { "label": "DPM2 Ancestral", "value": "dpm2-ancestral" }
             ],
             "show_if": {"model_type": "k_diffusion"}
         },

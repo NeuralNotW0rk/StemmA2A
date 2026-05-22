@@ -200,6 +200,16 @@ class StableAudioAdapter(ModelAdapter):
                             else:
                                 custom_noise = torch.nn.functional.pad(custom_noise, (0, target_len - custom_noise.shape[-1]))
 
+                            # Match target noise distribution to prevent high-frequency artifacts
+                            target_std = noise.std().item()
+                            current_std = custom_noise.std().item()
+                            if current_std > 0:
+                                custom_noise = custom_noise * (target_std / current_std)
+                                
+                            target_mean = noise.mean().item()
+                            current_mean = custom_noise.mean().item()
+                            custom_noise = custom_noise - current_mean + target_mean
+
                         if len(inner_args) > 1:
                             inner_args[1] = custom_noise
                         else:
@@ -329,11 +339,14 @@ class StableAudioAdapter(ModelAdapter):
             d_sigma = sigma_next - sigma_curr
             current_latents = current_latents + v_velocity * d_sigma
 
-        # In stable-audio-tools, the generation sampler expects unit-variance initial noise, 
-        # multiplying it by sigma_max internally. Our inverted latents are currently scaled 
-        # to sigma_max, so we must divide by the final sigma to return to unit variance.
-        final_sigma = sigmas[stop_step]
-        latent_tensor = current_latents / final_sigma
+        # In stable-audio-tools, the generation sampler expects unit-variance initial noise.
+        # Due to Euler integration discretization errors across large step sizes, the variance 
+        # can drift significantly. We explicitly normalize the inverted latents to unit variance.
+        latent_std = current_latents.std().item()
+        if latent_std > 0:
+            latent_tensor = (current_latents - current_latents.mean().item()) / latent_std
+        else:
+            latent_tensor = current_latents
 
         # Create latent artifact tracking IDs
         content_uid = self.uid_generator.from_tensor(latent_tensor)
