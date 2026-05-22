@@ -10,6 +10,7 @@ from stable_audio_tools.inference.generation import generate_diffusion_cond
 from safetensors.torch import load_file
 from coolname import generate_slug
 from tqdm import tqdm
+from k_diffusion.sampling import get_sigmas_karras
 
 from .base_adapter import ModelAdapter
 from param_graph.elements.base_elements import Asset
@@ -247,42 +248,34 @@ class StableAudioAdapter(ModelAdapter):
             # Preprocess the text/timing conditioning
             cond = model.conditioner(conditioning, self.device)
 
-        # 1. Fetch exact cumulative noise schedule arrays from stable-audio-tools
-        # Note: If your setup encapsulates this inside model.diffusion.pretransform or model.schedule, 
-        # make sure this targets the active alphas_cumprod vector.
-        alphas = model.model.schedule.alphas_cumprod
-        total_schedule_len = len(alphas)
+        # 1. Build Continuous Sigmas Grid
+        sigma_min = kwargs.get("sigma_min", 0.3)
+        sigma_max = kwargs.get("sigma_max", 500.0)
+        sigmas = get_sigmas_karras(steps, sigma_min, sigma_max, device=self.device).flip(0)
 
-        # Convert our execution steps into specific indices matching the alpha array length
-        # Mapping our inversion steps linearly down across the scheduler's timeline
-        step_indices = torch.linspace(0, total_schedule_len - 1, steps, dtype=torch.long, device=self.device)
         stop_step = int(steps * inversion_strength)
         
         current_latents = init_latents
 
-        # 2. DDIM Inversion Loop: Moving step-by-step from clean data to structured noise
-        for i in tqdm(range(stop_step - 1), desc="DDIM Inversion"):
-            # Extract schedule indices for step t and step t+1
-            idx_t = step_indices[i]
-            idx_next = step_indices[i + 1]
+        # 2. Euler ODE Inversion Step Loop: Moving step-by-step from clean data to structured noise
+        for i in tqdm(range(stop_step), desc="Euler ODE Inversion"):
+            sigma_curr = sigmas[i]
+            sigma_next = sigmas[i + 1]
             
-            alpha_t = alphas[idx_t]
-            alpha_next = alphas[idx_next]
-            
-            # Convert index values into single-element time conditioning tensors for the DiT block
-            t_tensor = torch.tensor([idx_t / total_schedule_len], device=self.device)
+            # Expand sigma_curr into a matching tensor shape
+            t_tensor = torch.full((current_latents.shape[0],), sigma_curr.item(), device=self.device)
             
             with torch.no_grad():
-                # Run the Diffusion Transformer forward pass to predict the current step noise
-                noise_pred = model.model(current_latents, t_tensor, **cond)
+                # Query the DiT model backbone using its native forward pass signature
+                denoised_pred = model.model(current_latents, t_tensor, **cond)
                 
-            # 3. Exact DDIM ODE Inversion step calculation
-            # Compute the scale matching the content direction vs the structural noise injection
-            latents_scaled = torch.sqrt(alpha_next / alpha_t) * current_latents
-            noise_direction = (torch.sqrt(1 - alpha_next) - torch.sqrt((alpha_next / alpha_t) * (1 - alpha_t))) * noise_pred
+            # Compute the local trajectory velocity vector
+            sigma_val = max(sigma_curr.item(), 1e-7)
+            v_velocity = (current_latents - denoised_pred) / sigma_val
             
-            # Step the latent explicitly to the higher noise level
-            current_latents = latents_scaled + noise_direction
+            # Integrate the new latent coordinate upstream using an explicit Euler stepping equation
+            d_sigma = sigma_next - sigma_curr
+            current_latents = current_latents + v_velocity * d_sigma
 
         # Save the finalized latent tensor array state
         latent_tensor = current_latents
@@ -302,11 +295,13 @@ class StableAudioAdapter(ModelAdapter):
 
         # Inject execution variables explicitly into our self-documenting context dictionary
         context["inversion_metadata"] = {
-            "algorithm": "ddim_inversion",
-            "sampler": "ddim",
+            "algorithm": "euler_ode_inversion",
+            "sampler": "euler",
             "inversion_steps": steps,
             "stop_step_index": stop_step,
-            "inversion_strength": inversion_strength
+            "inversion_strength": inversion_strength,
+            "sigma_min": sigma_min,
+            "sigma_max": sigma_max
         }
 
         artifact = Latent(
