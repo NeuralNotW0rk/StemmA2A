@@ -47,7 +47,7 @@
             "name": "k_sampler_type",
             "label": "K-Sampler",
             "type": "select",
-            "defaultValue": "dpmpp-3m-sde",
+            "defaultValue": "dpmpp-2m",
             "options": [
                 { "label": "DPM++ 3M SDE", "value": "dpmpp-3m-sde" },
                 { "label": "DPM++ 2M", "value": "dpmpp-2m" },
@@ -55,8 +55,7 @@
                 { "label": "k-LMS", "value": "k-lms" },
                 { "label": "k-DPM2", "value": "k-dpm-2" },
                 { "label": "k-DPM Fast", "value": "k-dpm-fast" },
-                { "label": "k-DPM Adaptive", "value": "k-dpm-adaptive" },
-                { "label": "Euler", "value": "euler" }
+                { "label": "k-DPM Adaptive", "value": "k-dpm-adaptive" }
             ],
             "show_if": {"model_type": "k_diffusion"}
         },
