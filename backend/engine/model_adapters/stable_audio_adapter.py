@@ -248,7 +248,11 @@ class StableAudioAdapter(ModelAdapter):
                 init_latents = init_latents[0]
 
             # Preprocess the text/timing conditioning
-            cond = model.conditioner(conditioning, self.device)
+            raw_cond = model.conditioner(conditioning, self.device)
+            
+            # Explicitly create a new dictionary with only the embedded tensors the transformer expects
+            valid_cond_keys = ["cross_attn_cond", "global_cond", "prepend_cond", "prepend_inputs", "cross_attn_cond_mask"]
+            cond = {k: raw_cond[k] for k in valid_cond_keys if k in raw_cond}
 
         # 1. Build Continuous Sigmas Grid
         sigma_min = kwargs.get("sigma_min", 0.3)
