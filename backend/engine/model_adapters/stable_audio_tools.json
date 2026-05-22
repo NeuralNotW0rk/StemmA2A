@@ -113,6 +113,13 @@
             "show_if": {
                 "init_audio": "exists"
             }
+        },
+        {
+            "name": "init_latent",
+            "label": "Initial Latent",
+            "type": "node",
+            "filter": { "type": "latent" },
+            "defaultValue": null
         }
     ],
     "invert": [

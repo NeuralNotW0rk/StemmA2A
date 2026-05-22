@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tick, onDestroy } from 'svelte'
-  import type { FormConfig, NodeData } from '../../utils/forms'
+  import type { FormConfig, FormField, NodeData } from '../../utils/forms'
   import { initializeFormData } from '../../utils/forms'
   import {
     initiatorNodeStore,
@@ -31,6 +31,8 @@
   let modelNodeSelector: ReturnType<typeof NodeSelector>
 
   let selectedLattices: NodeListItem[] = $state([])
+
+  let hasBothInitTypes = $derived(!!formData.init_audio && !!formData.init_latent)
 
   function handleError(error: ErrorInfo): void {
     onError(error)
@@ -77,6 +79,13 @@
           $contextStore,
           isReplication ? null : $initiatorNodeStore
         )
+
+        if ($initiatorNodeStore && ($initiatorNodeStore as Record<string, unknown>).type === 'latent') {
+          if (adapterFields.some((f: FormField) => f.name === 'init_latent')) {
+            newFormData.init_latent = $initiatorNodeStore
+          }
+        }
+
         formData = newFormData
       } else {
         throw new Error(`The adapter "${adapter}" does not support generation (missing "generate" config).`)
@@ -306,6 +315,12 @@
       />
     {/if}
 
+    {#if hasBothInitTypes}
+      <div class="warning-message">
+        <p>Warning: You have selected both an Initial Audio and an Initial Latent. The generation might behave unpredictably or fail.</p>
+      </div>
+    {/if}
+
     {#if isLoading}
       <p>Loading configuration...</p>
     {:else if error}
@@ -363,6 +378,14 @@
     text-align: center;
     padding: 2rem 1rem;
     color: var(--color-text-muted);
+  }
+  .warning-message {
+    padding: 1rem;
+    color: var(--color-warning, #f59e0b);
+    background: var(--color-warning-t-10, rgba(245, 158, 11, 0.1));
+    border-left: 4px solid var(--color-warning, #f59e0b);
+    margin-bottom: 1rem;
+    border-radius: 0.25rem;
   }
   .error-message {
     padding: 1rem;

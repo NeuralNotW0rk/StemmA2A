@@ -349,6 +349,12 @@
     actionPanelView = 'generation'
   }
 
+  function handleLatentSelectForGeneration(latentData: any): void {
+    initiatorNodeStore.set(latentData)
+    contextStore.set(latentData.context || null)
+    actionPanelView = 'generation'
+  }
+
   function handleAudioNodeSelectForGeneration(audioData: any, useContext?: boolean): void {
     initiatorNodeStore.set(audioData)
     if (useContext) {
@@ -648,6 +654,7 @@
     onlatticeSelectForGeneration={handleLatticeSelectForGeneration}
     onaudioNodeSelectForGeneration={handleAudioNodeSelectForGeneration}
     onaudioNodeSelectForInversion={handleAudioNodeSelectForInversion}
+    onlatentSelectForGeneration={handleLatentSelectForGeneration}
     onnodeSelect={handleElementSelect}
     onexport={handleExport}
     onedgeSelect={handleElementSelect}

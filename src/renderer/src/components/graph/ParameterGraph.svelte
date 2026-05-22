@@ -25,6 +25,7 @@
     onlatticeSelectForGeneration?: (data: any) => void
     onrescanSource?: (name: string) => void
     onnodeSelect?: (data: any) => void
+    onlatentSelectForGeneration?: (data: any) => void
     onedgeSelect?: (data: any) => void
     onElementRemove?: (data: any) => void
     onstartBatching?: (data: any) => void
@@ -53,6 +54,7 @@
     onlatticeSelectForGeneration,
     onrescanSource,
     onexport,
+    onlatentSelectForGeneration,
     onnodeSelect,
     onedgeSelect,
     onElementRemove,
@@ -281,6 +283,14 @@
       ...nodeCommands(ele)
     ]
 
+    const latentNodeCommands = (ele: Singular): Command[] => [
+      {
+        content: 'Generate Audio',
+        select: () => onlatentSelectForGeneration?.(ele.data())
+      },
+      ...nodeCommands(ele)
+    ]
+
     const audioNodeCommands = (ele: Singular): Command[] => {
       const specificCommands: Command[] = [
         {
@@ -383,6 +393,8 @@
             return pathNodeCommands(ele)
           case 'batch':
             return batchNodeCommands(ele)
+          case 'latent':
+            return latentNodeCommands(ele)
           default:
             return nodeCommands(ele) // Fallback for any other node type
         }

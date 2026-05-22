@@ -166,6 +166,13 @@ class StableAudioAdapter(ModelAdapter):
                 args["init_audio"] = (sample_rate, init_audio_tensor)
                 args["init_noise_level"] = noise_level
 
+        # Handle initial latent noise if provided
+        init_latent_element = kwargs.get("init_latent_element")
+        if init_latent_element:
+            latent_path = Path(init_latent_element.file.path)
+            if latent_path and latent_path.exists():
+                init_latent_tensor = torch.load(latent_path, map_location=self.device, weights_only=True)
+                args["init_noise"] = init_latent_tensor
 
         # Generate stereo audio
         with torch.no_grad():
@@ -257,7 +264,9 @@ class StableAudioAdapter(ModelAdapter):
         # 1. Build Continuous Sigmas Grid
         sigma_min = kwargs.get("sigma_min", 0.3)
         sigma_max = kwargs.get("sigma_max", 500.0)
-        sigmas = get_sigmas_karras(steps, sigma_min, sigma_max, device=self.device).flip(0)
+        
+        # Request steps+1 to get enough intervals, drop the 0.0 at the end, and flip to go min->max
+        sigmas = get_sigmas_karras(steps + 1, sigma_min, sigma_max, device=self.device)[:-1].flip(0)
 
         stop_step = int(steps * inversion_strength)
         
@@ -276,15 +285,17 @@ class StableAudioAdapter(ModelAdapter):
                 denoised_pred = model.model(current_latents, t_tensor, **cond)
                 
             # Compute the local trajectory velocity vector
-            sigma_val = max(sigma_curr.item(), 1e-7)
-            v_velocity = (current_latents - denoised_pred) / sigma_val
+            v_velocity = (current_latents - denoised_pred) / sigma_curr
             
             # Integrate the new latent coordinate upstream using an explicit Euler stepping equation
             d_sigma = sigma_next - sigma_curr
             current_latents = current_latents + v_velocity * d_sigma
 
-        # Save the finalized latent tensor array state
-        latent_tensor = current_latents
+        # In stable-audio-tools, the generation sampler expects unit-variance initial noise, 
+        # multiplying it by sigma_max internally. Our inverted latents are currently scaled 
+        # to sigma_max, so we must divide by the final sigma to return to unit variance.
+        final_sigma = sigmas[stop_step]
+        latent_tensor = current_latents / final_sigma
 
         # Create latent artifact tracking IDs
         content_uid = self.uid_generator.from_tensor(latent_tensor)

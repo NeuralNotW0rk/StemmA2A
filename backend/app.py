@@ -23,6 +23,7 @@ from param_graph.graph import ParameterGraph
 from param_graph.elements.models.base_model_element import Model
 from param_graph.elements.artifacts.audio_element import Audio
 from param_graph.elements.artifacts.lattice_element import Lattice
+from param_graph.elements.artifacts.latent_element import Latent
 from param_graph.elements.base_elements import Asset
 from param_graph.elements.collections.batch_element import Batch
 from param_graph.elements.collections.directory_element import Directory
@@ -550,7 +551,7 @@ async def generate():
         for arg_name, element in node_engine_args.items():
             if isinstance(element, list):
                 for el in element:
-                    if not isinstance(el, (Audio, Model, Lattice)):
+                    if not isinstance(el, (Audio, Model, Lattice, Latent)):
                         return jsonify({"error": f"Node '{el.id}' is not a valid artifact."}), 400
             else:
                 if isinstance(element, Audio):
@@ -560,7 +561,7 @@ async def generate():
                         element.file = replace(element.file, path=str(valid_path))
                         node_engine_args[arg_name] = element
                 
-                if not isinstance(element, (Audio, Model, Lattice)):
+                if not isinstance(element, (Audio, Model, Lattice, Latent)):
                     field_name = arg_name.removesuffix("_element")
                     return jsonify({"error": f"Node '{element.id}' for field '{field_name}' is not a valid artifact."}), 400
 
