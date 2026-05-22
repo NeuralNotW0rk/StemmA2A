@@ -137,6 +137,10 @@ class StableAudioAdapter(ModelAdapter):
         if not sampler_type:
             raise ValueError(f"Unable to determine sampler type for model_type: {self.model_info.model_type}")
             
+        is_euler = sampler_type == "euler"
+        if is_euler:
+            sampler_type = "k-heun"  # Bypass stable-audio-tools string validation
+            
         # Set up generation arguments
         args = {
             "steps": kwargs.get("steps", 8),
@@ -176,55 +180,61 @@ class StableAudioAdapter(ModelAdapter):
 
         # Generate stereo audio
         with torch.no_grad():
-            if init_latent_tensor is not None:
-                # stable-audio-tools doesn't expose a custom noise parameter, so we intercept the sampler hook
-                import stable_audio_tools.inference.generation as sat_gen
-                original_sample_k = sat_gen.sample_k
+            import stable_audio_tools.inference.generation as sat_gen
+            import k_diffusion.sampling as k_samp
+            
+            original_sample_k = sat_gen.sample_k
+            original_heun = k_samp.sample_heun
+            
+            if is_euler:
+                k_samp.sample_heun = k_samp.sample_euler
                 
-                def patched_sample_k(*inner_args, **inner_kwargs):
-                    inner_args = list(inner_args)
-                    noise = inner_args[1] if len(inner_args) > 1 else inner_kwargs.get("noise")
+            # Always patch sample_k to conditionally inject latent noise if present
+            def patched_sample_k(*inner_args, **inner_kwargs):
+                inner_args = list(inner_args)
+                noise = inner_args[1] if len(inner_args) > 1 else inner_kwargs.get("noise")
+                
+                if noise is not None and init_latent_tensor is not None:
+                    custom_noise = init_latent_tensor.clone()
                     
-                    if noise is not None:
-                        custom_noise = init_latent_tensor.clone()
+                    # Expand to match batch size if necessary
+                    if custom_noise.shape[0] == 1 and noise.shape[0] > 1:
+                        custom_noise = custom_noise.repeat(noise.shape[0], 1, 1)
                         
-                        # Expand to match batch size if necessary
-                        if custom_noise.shape[0] == 1 and noise.shape[0] > 1:
-                            custom_noise = custom_noise.repeat(noise.shape[0], 1, 1)
-                            
-                        # Align sequence lengths just in case of slight rounding differences
-                        if custom_noise.shape[-1] != noise.shape[-1]:
-                            target_len = noise.shape[-1]
-                            if custom_noise.shape[-1] > target_len:
-                                custom_noise = custom_noise[..., :target_len]
-                            else:
-                                custom_noise = torch.nn.functional.pad(custom_noise, (0, target_len - custom_noise.shape[-1]))
-
-                            # Match target noise distribution to prevent high-frequency artifacts
-                            target_std = noise.std().item()
-                            current_std = custom_noise.std().item()
-                            if current_std > 0:
-                                custom_noise = custom_noise * (target_std / current_std)
-                                
-                            target_mean = noise.mean().item()
-                            current_mean = custom_noise.mean().item()
-                            custom_noise = custom_noise - current_mean + target_mean
-
-                        if len(inner_args) > 1:
-                            inner_args[1] = custom_noise
+                    # Align sequence lengths just in case of slight rounding differences
+                    if custom_noise.shape[-1] != noise.shape[-1]:
+                        target_len = noise.shape[-1]
+                        if custom_noise.shape[-1] > target_len:
+                            custom_noise = custom_noise[..., :target_len]
                         else:
-                            inner_kwargs["noise"] = custom_noise
+                            custom_noise = torch.nn.functional.pad(custom_noise, (0, target_len - custom_noise.shape[-1]))
 
-                    return original_sample_k(*inner_args, **inner_kwargs)
+                    # Match target noise distribution to prevent high-frequency artifacts
+                    target_std = noise.std().item()
+                    current_std = custom_noise.std().item()
+                    if current_std > 0:
+                        custom_noise = custom_noise * (target_std / current_std)
+                        
+                    target_mean = noise.mean().item()
+                    current_mean = custom_noise.mean().item()
+                    custom_noise = custom_noise - current_mean + target_mean
 
-                sat_gen.sample_k = patched_sample_k
-                try:
-                    output = generate_diffusion_cond(model, **args)
-                finally:
-                    # Restore original hook immediately after generation completes
-                    sat_gen.sample_k = original_sample_k
-            else:
+                    if len(inner_args) > 1:
+                        inner_args[1] = custom_noise
+                    else:
+                        inner_kwargs["noise"] = custom_noise
+
+                return original_sample_k(*inner_args, **inner_kwargs)
+
+            sat_gen.sample_k = patched_sample_k
+            
+            try:
                 output = generate_diffusion_cond(model, **args)
+            finally:
+                # Restore original hooks immediately after generation completes
+                sat_gen.sample_k = original_sample_k
+                if is_euler:
+                    k_samp.sample_heun = original_heun
 
             # Trim silence
             output = output[:,:,:int(seconds_total*sample_rate)]
