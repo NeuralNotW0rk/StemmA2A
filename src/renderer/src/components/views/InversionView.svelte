@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tick, onDestroy } from 'svelte'
-  import type { FormConfig, NodeData } from '../../utils/forms'
+  import type { FormConfig, FormField } from '../../utils/forms'
   import { initializeFormData } from '../../utils/forms'
   import {
     initiatorNodeStore,
@@ -13,7 +13,7 @@
   import NodeSelector from '../NodeSelector.svelte'
   import type { ErrorInfo } from '../../utils/types'
 
-  let { onClose, onInvert, onError } = $props<{
+  let { onClose, onError } = $props<{
     onClose: () => void
     onInvert: (data: unknown) => void
     onError: (error: ErrorInfo) => void
@@ -71,9 +71,38 @@
           $contextStore,
           $initiatorNodeStore
         )
+
+        if ($initiatorNodeStore) {
+          const initiator = $initiatorNodeStore as Record<string, unknown>
+          const initContext = (initiator.context as Record<string, unknown>) || {}
+          const nodeDuration = initiator.duration as number | undefined
+
+          const hasField = (name: string): boolean =>
+            adapterFields!.some((f: FormField) => f.name === name)
+
+          if (hasField('prompt') && initContext.prompt !== undefined) {
+            newFormData.prompt = initContext.prompt
+          }
+
+          if (hasField('seconds_start')) {
+            newFormData.seconds_start =
+              initContext.seconds_start !== undefined ? initContext.seconds_start : 0
+          }
+
+          if (hasField('seconds_total')) {
+            if (initContext.seconds_total !== undefined) {
+              newFormData.seconds_total = initContext.seconds_total
+            } else if (nodeDuration !== undefined) {
+              newFormData.seconds_total = Number(nodeDuration.toFixed(2))
+            }
+          }
+        }
+
         formData = newFormData
       } else {
-        throw new Error(`The adapter "${adapter}" does not support inversion (missing "invert" config).`)
+        throw new Error(
+          `The adapter "${adapter}" does not support inversion (missing "invert" config).`
+        )
       }
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : 'Failed to load configuration.'
@@ -132,9 +161,9 @@
       model_id: $formStateStore.generationModel.id,
       source_audio_id: $initiatorNodeStore?.id
     }
-    
+
     console.log('Inverting with payload:', singlePayload)
-    
+
     startExecution(jobName, singlePayload, 'invert').catch(console.error)
     onClose()
   }

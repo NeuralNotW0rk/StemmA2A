@@ -9,6 +9,7 @@ from stable_audio_tools import create_model_from_config
 from stable_audio_tools.inference.generation import generate_diffusion_cond
 from safetensors.torch import load_file
 from coolname import generate_slug
+from tqdm import tqdm
 
 from .base_adapter import ModelAdapter
 from param_graph.elements.base_elements import Asset
@@ -221,6 +222,11 @@ class StableAudioAdapter(ModelAdapter):
         steps = kwargs.get("steps", 50)
         inversion_strength = kwargs.get("inversion_strength", 0.5)
         
+        print(f"Inverting with conditioning:{str(conditioning)}")
+        print(f"Steps: {steps}")
+        print(f"Inversion Strength: {inversion_strength}")
+        print(f"Sample Rate: {sample_rate}")
+        
         source_audio_element = kwargs.get("source_audio_element")
         if not source_audio_element:
             raise ValueError("source_audio_element is required for DDIM inversion.")
@@ -239,7 +245,7 @@ class StableAudioAdapter(ModelAdapter):
             init_latents = model.pretransform.encode(source_audio_tensor)[0]
 
             # Preprocess the text/timing conditioning
-            cond = model.conditioner(conditioning)
+            cond = model.conditioner(conditioning, self.device)
 
         # 1. Fetch exact cumulative noise schedule arrays from stable-audio-tools
         # Note: If your setup encapsulates this inside model.diffusion.pretransform or model.schedule, 
@@ -255,7 +261,7 @@ class StableAudioAdapter(ModelAdapter):
         current_latents = init_latents
 
         # 2. DDIM Inversion Loop: Moving step-by-step from clean data to structured noise
-        for i in range(stop_step - 1):
+        for i in tqdm(range(stop_step - 1), desc="DDIM Inversion"):
             # Extract schedule indices for step t and step t+1
             idx_t = step_indices[i]
             idx_next = step_indices[i + 1]
