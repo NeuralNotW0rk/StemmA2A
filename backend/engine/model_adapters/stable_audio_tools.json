@@ -77,7 +77,7 @@
             "name": "sigma_min",
             "label": "Sigma Min",
             "type": "float",
-            "defaultValue": 0.03,
+            "defaultValue": 0.3,
             "placeholder": "Enter sigma min",
             "show_if": {"model_type": "k_diffusion"}
         },
@@ -85,7 +85,7 @@
             "name": "sigma_max",
             "label": "Sigma Max",
             "type": "float",
-            "defaultValue": 1000,
+            "defaultValue": 500,
             "placeholder": "Enter sigma max",
             "show_if": {"model_type": "k_diffusion"}
         },
