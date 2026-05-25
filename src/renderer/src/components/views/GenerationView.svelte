@@ -80,15 +80,41 @@
           isReplication ? null : $initiatorNodeStore
         )
 
-        if ($initiatorNodeStore && ($initiatorNodeStore as Record<string, unknown>).type === 'latent') {
-          if (adapterFields.some((f: FormField) => f.name === 'init_latent')) {
+        if (
+          $initiatorNodeStore &&
+          ($initiatorNodeStore as Record<string, unknown>).type === 'latent'
+        ) {
+          const hasField = (name: string): boolean =>
+            adapterFields!.some((f: FormField) => f.name === name)
+
+          if (hasField('init_latent')) {
             newFormData.init_latent = $initiatorNodeStore
+          }
+
+          const initContext =
+            (($initiatorNodeStore as Record<string, unknown>).context as Record<string, unknown>) ||
+            {}
+
+          if (hasField('cfg_scale')) {
+            newFormData.cfg_scale = 1.0
+          } else if (hasField('cfg')) {
+            newFormData.cfg = 1.0
+          }
+
+          if (hasField('prompt')) {
+            newFormData.prompt = initContext.prompt ?? ''
+          }
+
+          if (hasField('negative_prompt')) {
+            newFormData.negative_prompt = initContext.negative_prompt ?? ''
           }
         }
 
         formData = newFormData
       } else {
-        throw new Error(`The adapter "${adapter}" does not support generation (missing "generate" config).`)
+        throw new Error(
+          `The adapter "${adapter}" does not support generation (missing "generate" config).`
+        )
       }
     } catch (e: unknown) {
       const message = e instanceof Error ? e.message : 'Failed to load configuration.'
@@ -317,7 +343,10 @@
 
     {#if hasBothInitTypes}
       <div class="warning-message">
-        <p>Warning: You have selected both an Initial Audio and an Initial Latent. The generation might behave unpredictably or fail.</p>
+        <p>
+          Warning: You have selected both an Initial Audio and an Initial Latent. The generation
+          might behave unpredictably or fail.
+        </p>
       </div>
     {/if}
 

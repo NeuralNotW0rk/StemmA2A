@@ -8,5 +8,6 @@ from param_graph.registry import register
 class Audio(Artifact):
     file: Asset
     sample_rate: int = 44100
+    duration: float = 0.0
     embeddings: dict = field(default_factory=dict)
     type: str = 'audio'

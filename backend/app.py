@@ -949,7 +949,8 @@ def expand_path():
                     audio_tensor = load_audio(device_accelerator, entry_str, APP_SAMPLE_RATE)
                     element_id = uid_generator.from_tensor(audio_tensor)
                     asset = Asset(path=entry_str, uid=element_id, extension=entry.suffix.lower())
-                    new_elements.append(Audio(id=element_id, name=entry.name, context={}, file=asset))
+                    duration = audio_tensor.shape[-1] / float(APP_SAMPLE_RATE)
+                    new_elements.append(Audio(id=element_id, name=entry.name, context={}, file=asset, duration=duration))
                 except Exception as e:
                     print(f"Failed to load audio for {entry.name} to generate UID: {e}")
                 

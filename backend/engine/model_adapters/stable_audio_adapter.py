@@ -308,6 +308,7 @@ class StableAudioAdapter(ModelAdapter):
             name=generate_slug(2),
             file=Asset(path=None, uid=content_uid, extension=".wav"),
             sample_rate=sample_rate,
+            duration=float(output.shape[-1]) / sample_rate,
             context=context
         )
 
@@ -316,6 +317,7 @@ class StableAudioAdapter(ModelAdapter):
     def invert(self, **kwargs) -> tuple[Latent, torch.Tensor]:
         model = self.model.to(self.device)
         sample_rate = self.model_info.config["sample_rate"]
+        sample_size = self.model_info.config["sample_size"]
         seconds_start = kwargs.get("seconds_start", 0)
         seconds_total = kwargs.get("seconds_total", 11)
 
@@ -352,6 +354,10 @@ class StableAudioAdapter(ModelAdapter):
         elif source_audio_tensor.shape[-1] < target_length:
             source_audio_tensor = torch.nn.functional.pad(source_audio_tensor, (0, target_length - source_audio_tensor.shape[-1]))
 
+        # Pad up to the model's native sample_size
+        if source_audio_tensor.shape[-1] < sample_size:
+            source_audio_tensor = torch.nn.functional.pad(source_audio_tensor, (0, sample_size - source_audio_tensor.shape[-1]))
+
         source_audio_tensor = source_audio_tensor.unsqueeze(0).to(self.device)
         
         with torch.no_grad():
@@ -385,7 +391,7 @@ class StableAudioAdapter(ModelAdapter):
                 steps=steps,
                 cfg_scale=1.0, # Pure inversion, no CFG
                 conditioning=conditioning,
-                sample_size=source_audio_tensor.shape[-1],
+                sample_size=sample_size,
                 sigma_min=sigma_min,
                 sigma_max=sigma_max,
                 sampler_type="k-heun",

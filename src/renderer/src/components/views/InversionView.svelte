@@ -85,16 +85,11 @@
           }
 
           if (hasField('seconds_start')) {
-            newFormData.seconds_start =
-              initContext.seconds_start !== undefined ? initContext.seconds_start : 0
+            newFormData.seconds_start = initContext.seconds_start ?? 0
           }
 
           if (hasField('seconds_total')) {
-            if (initContext.seconds_total !== undefined) {
-              newFormData.seconds_total = initContext.seconds_total
-            } else if (nodeDuration !== undefined) {
-              newFormData.seconds_total = Number(nodeDuration.toFixed(2))
-            }
+            newFormData.seconds_total = initContext.seconds_total ?? (nodeDuration !== undefined ? Number(nodeDuration.toFixed(2)) : newFormData.seconds_total)
           }
         }
 

@@ -140,7 +140,7 @@
             "name": "inversion_strength",
             "label": "Inversion Strength",
             "type": "float",
-            "defaultValue": 0.5,
+            "defaultValue": 1.0,
             "placeholder": "Enter inversion strength (0 to 1)"
         },
         {
