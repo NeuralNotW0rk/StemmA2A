@@ -1,6 +1,5 @@
 import json
 import struct
-import math
 from pathlib import Path
 
 import torch
@@ -215,6 +214,12 @@ class StableAudioAdapter(ModelAdapter):
                     target_shape = inner_args[1].shape if len(inner_args) > 1 else inner_kwargs.get("noise").shape
                     if custom_coords.shape[0] == 1 and target_shape[0] > 1:
                         custom_coords = custom_coords.repeat(target_shape[0], 1, 1)
+                    
+                    # Overwrite the random seed noise immediately at the entrance of the wrapper
+                    if len(inner_args) > 1:
+                        inner_args[1] = custom_coords
+                    else:
+                        inner_kwargs["noise"] = custom_coords
 
                     # 2. Extract and patch the sampler_fn to use our sliced sigmas timeline
                     sampler_fn = None
@@ -251,22 +256,8 @@ class StableAudioAdapter(ModelAdapter):
 
                         # Build the clean proxy interceptor using the unified tensor coordinates
                         def custom_sampler_wrapper(model_wrap, x, sigmas_arg, *s_args, **s_kwargs):
-                            custom_coords_local = custom_coords.clone()
-                            if custom_coords_local.shape[0] == 1 and x.shape[0] > 1:
-                                custom_coords_local = custom_coords_local.repeat(x.shape[0], 1, 1)
-                            
-                            orig_mean = inversion_meta.get("original_mean", 0.0)
-                            orig_std = inversion_meta.get("original_std", 1.0)
-                            custom_coords_local = (custom_coords_local * orig_std) + orig_mean
-                            
-                            # Detect Hybrid Mode: Combine audio baseline with inverted latent
-                            if "init_audio" in args:
-                                alpha = kwargs.get("noise_level", 0.7)
-                                custom_coords_local = custom_coords_local * alpha
-                                x = (x * math.sqrt(1.0 - alpha)) + custom_coords_local
-                            else:
-                                x = custom_coords_local
-                            
+                            # Pass through x, which has now been safely overridden with your custom_coords 
+                            # at step 1, ensuring its internal variance profiles line up with generation_sigmas
                             return sampler_fn(model_wrap, x, generation_sigmas, *s_args, **s_kwargs)
 
                         if "sampler_fn" in inner_kwargs or sampler_arg_index is None:
@@ -420,18 +411,17 @@ class StableAudioAdapter(ModelAdapter):
         torch.manual_seed(kwargs.get("seed", 0))
         current_latents = init_latents + torch.randn_like(init_latents) * sigma_min
 
-        # Heun ODE Inversion Step Loop
+        # Euler ODE Inversion Step Loop with Heun Correction
         for i in tqdm(range(stop_step), desc="Heun ODE Inversion"):
             sigma_curr = sigmas[i]
             sigma_next = sigmas[i + 1]
             d_sigma = sigma_next - sigma_curr
             
-            sigma_mid = (sigma_curr * sigma_next).sqrt()
-            t_curr = torch.full((current_latents.shape[0],), sigma_mid.item(), device=self.device)
+            t_curr = torch.full((current_latents.shape[0],), sigma_curr.item(), device=self.device)
             t_next = torch.full((current_latents.shape[0],), sigma_next.item(), device=self.device)
             
             with torch.no_grad():
-                # 1. Calculate velocity at current position
+                # 1. Calculate velocity at current position (Standard Euler Step)
                 denoised_curr = denoiser(current_latents, t_curr, **extra_args)
                 v_curr = (current_latents - denoised_curr) / sigma_curr
                 
@@ -448,13 +438,10 @@ class StableAudioAdapter(ModelAdapter):
                 # 5. Take the actual step forward into noise space
                 current_latents = current_latents + v_corrected * d_sigma
 
-        # Variance normalization to prepare latent for unit-variance native samplers
-        original_mean = current_latents.mean().item()
-        original_std = current_latents.std().item()
-        
-        latent_std = original_std
+        # Explicit unit-variance scaling to normalize data before handing to generation samplers
+        latent_std = current_latents.std().item()
         if latent_std > 0:
-            latent_tensor = (current_latents - original_mean) / latent_std
+            latent_tensor = (current_latents - current_latents.mean().item()) / latent_std
         else:
             latent_tensor = current_latents
 
@@ -473,15 +460,13 @@ class StableAudioAdapter(ModelAdapter):
 
         # Inject execution config data explicitly for backend self-documentation
         context["inversion_metadata"] = {
-            "algorithm": "heun_ode_inversion",
-            "sampler": "heun",
+            "algorithm": "euler_ode_inversion",
+            "sampler": "euler",
             "inversion_steps": steps,
             "stop_step_index": stop_step,
             "inversion_strength": inversion_strength,
             "sigma_min": sigma_min,
-            "sigma_max": sigma_max,
-            "original_mean": original_mean,
-            "original_std": original_std
+            "sigma_max": sigma_max
         }
 
         artifact = Latent(
