@@ -1,5 +1,6 @@
 import json
 import struct
+import math
 from pathlib import Path
 
 import torch
@@ -179,7 +180,13 @@ class StableAudioAdapter(ModelAdapter):
         # Handle traditional initial audio if provided
         init_audio_element = kwargs.get("init_audio_element")
         if init_audio_element:
-            noise_level = kwargs.get("noise_level", 0.7)
+            # noise_level is a 0.0 to 1.0 percentage (denoising strength)
+            noise_percentage = float(kwargs.get("noise_level", 0.7))
+            
+            # Map the percentage to the actual sigma schedule
+            sigmas = get_sigmas_karras(steps, sigma_min, sigma_max, device=self.device)
+            step_index = max(0, min(steps, int((1.0 - noise_percentage) * steps)))
+            actual_sigma = sigmas[step_index].item()
             
             audio_path = Path(init_audio_element.file.path)
             if audio_path and audio_path.exists():
@@ -187,7 +194,7 @@ class StableAudioAdapter(ModelAdapter):
                 init_audio_tensor = load_audio(self.device, audio_path, sample_rate)
                 
                 args["init_audio"] = (sample_rate, init_audio_tensor)
-                args["init_noise_level"] = noise_level
+                args["init_noise_level"] = actual_sigma # Pass the actual sigma to stable-audio-tools
 
         # Generate stereo audio
         with torch.no_grad():
@@ -215,12 +222,6 @@ class StableAudioAdapter(ModelAdapter):
                     if custom_coords.shape[0] == 1 and target_shape[0] > 1:
                         custom_coords = custom_coords.repeat(target_shape[0], 1, 1)
                     
-                    # Overwrite the random seed noise immediately at the entrance of the wrapper
-                    if len(inner_args) > 1:
-                        inner_args[1] = custom_coords
-                    else:
-                        inner_kwargs["noise"] = custom_coords
-
                     # 2. Extract and patch the sampler_fn to use our sliced sigmas timeline
                     sampler_fn = None
                     sampler_arg_index = None
@@ -256,8 +257,17 @@ class StableAudioAdapter(ModelAdapter):
 
                         # Build the clean proxy interceptor using the unified tensor coordinates
                         def custom_sampler_wrapper(model_wrap, x, sigmas_arg, *s_args, **s_kwargs):
-                            # Pass through x, which has now been safely overridden with your custom_coords 
-                            # at step 1, ensuring its internal variance profiles line up with generation_sigmas
+                            custom_coords_local = custom_coords.clone()
+                            if custom_coords_local.shape[0] == 1 and x.shape[0] > 1:
+                                custom_coords_local = custom_coords_local.repeat(x.shape[0], 1, 1)
+                            
+                            # Detect Hybrid Mode: Combine audio baseline with inverted latent
+                            if "init_audio" in args:
+                                alpha = float(kwargs.get("hybrid_blend_alpha", 0.5))  # Must be between 0.0 and 1.0
+                                x = (x * math.sqrt(1.0 - alpha)) + (custom_coords_local * math.sqrt(alpha))
+                            else:
+                                x = custom_coords_local
+                            
                             return sampler_fn(model_wrap, x, generation_sigmas, *s_args, **s_kwargs)
 
                         if "sampler_fn" in inner_kwargs or sampler_arg_index is None:
