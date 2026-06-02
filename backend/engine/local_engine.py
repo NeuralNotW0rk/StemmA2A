@@ -39,7 +39,7 @@ class LocalEngine(Engine):
         self.job_queue = queue.Queue()
         self.job_statuses = {}
         self.is_sleeping = False
-        self.idle_timeout = int(os.environ.get("ENGINE_IDLE_TIMEOUT", 300))  # 5 minutes default
+        self.idle_timeout = int(os.environ.get("ENGINE_IDLE_TIMEOUT", 6000))  # 30 minutes default
         self.worker_thread = threading.Thread(target=self._worker, daemon=True)
         self.worker_thread.start()
 
