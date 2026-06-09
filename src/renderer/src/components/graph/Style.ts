@@ -13,7 +13,8 @@ const selectedColor = getCssVar('--graph-selected')
 const modelColor = gradientColor3
 const externalColor = gradientColor2
 const latticeColor = gradientColor4
-const favoriteColor = gradientColor5
+const latentColor = gradientColor5
+const favoriteColor = 'rgb(149, 0, 22)'
 const validColor = '#4CAF50'
 
 
@@ -96,6 +97,20 @@ const defaultStyle: CssStyleDeclaration[] = [
       'border-color': favoriteColor,
       'border-width': 4,
       'border-style': 'solid'
+    }
+  },
+  {
+    selector: 'node[type="latent"]',
+    style: {
+      label: (node: NodeSingular) => {
+        const promptTxt = node.data('context') && node.data('context')["prompt"] || "[empty]";
+        const strength = node.data('context') && node.data('context')["inversion_strength"];
+        return `${promptTxt}\nx${strength}`;
+      },
+      'background-color': latentColor,
+      shape: 'diamond',
+      width: 30,
+      height: 30
     }
   },
 
@@ -232,6 +247,13 @@ const defaultStyle: CssStyleDeclaration[] = [
     style: {
       'line-color': audioColor,
       'target-arrow-color': audioColor
+    }
+  },
+  {
+    selector: 'edge[type="latent"]',
+    style: {
+      'line-color': latentColor,
+      'target-arrow-color': latentColor
     }
   },
   {
