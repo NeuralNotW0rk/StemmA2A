@@ -3,7 +3,7 @@
   import NodeSelectorList, { type NodeListItem } from '../NodeSelectorList.svelte'
   import type { NodeData } from '../../utils/forms'
   import { BATCHING_CONFIG } from '../../utils/app-config'
-  import type { NodeFilter, ErrorInfo } from '../../utils/types'
+  import type { ErrorInfo } from '../../utils/types'
 
   let {
     initiatorNode = $initiatorNodeStore,

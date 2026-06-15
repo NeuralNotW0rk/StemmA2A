@@ -14,7 +14,7 @@ const modelColor = gradientColor3
 const externalColor = gradientColor2
 const latticeColor = gradientColor4
 const latentColor = gradientColor5
-const favoriteColor = 'rgb(149, 0, 22)'
+const favoriteColor = 'rgb(0, 255, 255)'
 const validColor = '#4CAF50'
 
 

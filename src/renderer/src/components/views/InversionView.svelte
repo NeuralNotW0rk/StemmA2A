@@ -89,7 +89,11 @@
           }
 
           if (hasField('seconds_total')) {
-            newFormData.seconds_total = initContext.seconds_total ?? (nodeDuration !== undefined ? Number(nodeDuration.toFixed(2)) : newFormData.seconds_total)
+            newFormData.seconds_total =
+              initContext.seconds_total ??
+              (nodeDuration !== undefined
+                ? Number(nodeDuration.toFixed(2))
+                : newFormData.seconds_total)
           }
         }
 
