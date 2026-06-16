@@ -24,8 +24,8 @@ interface API {
   openFile: (options?: { title?: string; filters?: { name: string; extensions: string[] }[] }) => Promise<string | null>
   importModel: (data: any) => Promise<any>
   exportAudio: (names: string[], exportDir?: string) => Promise<any>
-  generate: (data: any) => Promise<any>
-  invert: (data: any) => Promise<any>
+  getOperations: () => Promise<any>
+  executeOperation: (data: any) => Promise<any>
   removeElement: (elementId: string, keepChildren?: boolean) => Promise<any>
   removeElements: (elementIds: string[], keepChildren?: boolean) => Promise<any>
   logMessage: (message: string) => Promise<any>

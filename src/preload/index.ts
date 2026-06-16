@@ -30,8 +30,8 @@ const api = {
   exportAudio: (names: string[], exportDir?: string): Promise<any> =>
     ipcRenderer.invoke('exportAudio', names, exportDir),
   registerLattice: (data: unknown) => ipcRenderer.invoke('registerLattice', data),
-  generate: (data: unknown) => ipcRenderer.invoke('generate', data),
-  invert: (data: unknown) => ipcRenderer.invoke('invert', data),
+  getOperations: (): Promise<any> => ipcRenderer.invoke('getOperations'),
+  executeOperation: (data: unknown): Promise<any> => ipcRenderer.invoke('executeOperation', data),
   removeElement: (elementId: string, keepChildren?: boolean): Promise<any> =>
     ipcRenderer.invoke('removeElement', elementId, keepChildren),
   removeElements: (elementIds: string[], keepChildren?: boolean): Promise<any> =>

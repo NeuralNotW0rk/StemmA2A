@@ -54,6 +54,29 @@ class LocalEngine(Engine):
         except Exception as e:
             print(f"Error initializing CLAPEncoder: {e}")
         
+    async def get_supported_operations(self) -> list[dict]:
+        """
+        Returns the top-level async operations explicitly supported by the engine.
+        The full dynamic forms will be resolved via the adapter once a model is linked.
+        """
+        return [
+            {
+                "name": "generate",
+                "description": "Generate audio from a generative model",
+                "form_config": [
+                    {"name": "model", "type": "node", "label": "Model", "required": True}
+                ]
+            },
+            {
+                "name": "invert",
+                "description": "Invert audio to a latent representation",
+                "form_config": [
+                    {"name": "model", "type": "node", "label": "Model", "required": True},
+                    {"name": "source_audio", "type": "node", "label": "Source Audio", "required": True}
+                ]
+            }
+        ]
+
     async def register_model(self, adapter_name: str, **kwargs) -> GraphElement:
         """
         Registers a model by creating a temporary adapter and using it to 
@@ -216,12 +239,10 @@ class LocalEngine(Engine):
         """
         job_id = kwargs.pop('job_id', str(uuid.uuid4()))
         
-        # For 'generate', we want the worker to call the core logic
-        op_to_run = operation_id
-        if operation_id == 'generate':
-            op_to_run = '_generate_logic'
-        elif operation_id == 'invert':
-            op_to_run = '_invert_logic'
+        # Dynamically map the requested operation to its protected logic method
+        op_to_run = f"_{operation_id}_logic"
+        if not hasattr(self, op_to_run):
+            raise ValueError(f"Operation '{operation_id}' is not supported by the LocalEngine.")
 
         self.job_queue.put((job_id, op_to_run, kwargs))
         self.job_statuses[job_id] = {"status": "pending"}

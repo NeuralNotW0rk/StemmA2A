@@ -259,41 +259,25 @@ app.whenReady().then(async () => {
     return await response.json()
   })
 
-  ipcMain.handle('generate', async (_event, generateData) => {
-    try {
-      const response = await fetchWithAuth(`${BACKEND_URL}/generate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(generateData)
-      })
-      if (!response.ok) {
-        const errorBody = await response.text()
-        let parsedError = `Failed to generate. Status: ${response.status}. Error: ${errorBody}`
-        try {
-          const parsed = JSON.parse(errorBody)
-          if (parsed.error) {
-            parsedError = parsed.error + (parsed.traceback ? `\n\nTraceback:\n${parsed.traceback}` : '')
-          }
-        } catch (_) {}
-        throw new Error(parsedError)
-      }
-      return await response.json()
-    } catch (error) {
-      console.error('Generation Error:', error)
-      throw error
+  ipcMain.handle('getOperations', async () => {
+    const response = await fetchWithAuth(`${BACKEND_URL}/operations`)
+    if (!response.ok) {
+      const errorBody = await response.text()
+      throw new Error(`Failed to get operations. Status: ${response.status}. Error: ${errorBody}`)
     }
+    return await response.json()
   })
 
-  ipcMain.handle('invert', async (_event, invertData) => {
+  ipcMain.handle('executeOperation', async (_event, operationData) => {
     try {
-      const response = await fetchWithAuth(`${BACKEND_URL}/invert`, {
+      const response = await fetchWithAuth(`${BACKEND_URL}/execute_operation`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(invertData)
+        body: JSON.stringify(operationData)
       })
       if (!response.ok) {
         const errorBody = await response.text()
-        let parsedError = `Failed to invert. Status: ${response.status}. Error: ${errorBody}`
+        let parsedError = `Failed to execute operation. Status: ${response.status}. Error: ${errorBody}`
         try {
           const parsed = JSON.parse(errorBody)
           if (parsed.error) {
@@ -304,7 +288,7 @@ app.whenReady().then(async () => {
       }
       return await response.json()
     } catch (error) {
-      console.error('Inversion Error:', error)
+      console.error('Execution Error:', error)
       throw error
     }
   })

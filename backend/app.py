@@ -33,9 +33,10 @@ from engine.engine_provider import EngineProvider
 from engine.encoders.clap_encoder import CLAPEncoder
 from utils.audio import load_audio
 from utils.form import create_dynamic_model
-from utils.uid import XXH3_64
+from utils.uid import XXH3_64, path_from_uid
 from utils.semantic_interrogation import SemanticInterrogator
 
+from operations.registry import SyncRegistry
 from diffracture import Actant
 from diffracture.topology.lattice import Lattice as DiffractureLattice
 
@@ -89,6 +90,7 @@ SIMILARITY_GROUPS = {
 param_graph: ParameterGraph = None
 execution_url = os.environ.get("ENGINE_URL")
 uid_generator = XXH3_64()
+sync_registry = SyncRegistry()
 # EngineProvider is now initialized after a project is loaded
 engine_provider: EngineProvider = None
 
@@ -483,221 +485,6 @@ async def get_adapter_config(adapter_name):
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
-@app.route("/generate", methods=["POST"])
-async def generate():
-    """
-    Handles the full audio generation lifecycle: validation, queuing,
-    polling, and final artifact processing.
-    """
-    if param_graph is None or engine_provider is None:
-        return jsonify({"error": "No project loaded"}), 400
-    
-    try:
-        json_data = request.get_json()
-        print(f"app.py: Received /generate payload: {json_data}")
-        model_id = json_data.get("model_id")
-        job_id = json_data.get("job_id")
-        
-        if not job_id:
-            return jsonify({"error": "'job_id' is required."}), 400
-        if not model_id:
-            return jsonify({"error": "'model_id' is required."}), 400
-
-        model_element = param_graph.get_element(model_id)
-        if not isinstance(model_element, Model):
-            return jsonify({"error": f"Node '{model_id}' is not a valid model."}), 400
-        
-        engine = engine_provider.get_engine()
-        form_config = await engine.get_adapter_config(model_element.adapter)
-        form_config = form_config.get("generate")
-        if not form_config:
-            return jsonify({"error": f"Adapter '{model_element.adapter}' has no 'generate' configuration"}), 404
-
-        DynamicArgsModel = create_dynamic_model(form_config)
-        validated_params = DynamicArgsModel.model_validate(json_data)
-        dumped_params = validated_params.model_dump()
-        
-        node_engine_args = {}
-        for field in form_config:
-            if field.get("type") == "node":
-                field_name = field.get("name")
-                node_id = dumped_params.pop(field_name, None)
-                if node_id:
-                    element = param_graph.get_element(node_id)
-                    if element:
-                        node_engine_args[f"{field_name}_element"] = element
-
-        lattice_strengths = []
-        lattices = json_data.get("lattices")
-        if lattices:
-            lattice_elements = []
-            for l_conf in lattices:
-                l_id = l_conf.get("id")
-                l_element = param_graph.get_element(l_id)
-                if not isinstance(l_element, Lattice):
-                    return jsonify({"error": f"Node '{l_id}' is not a valid lattice."}), 400
-                lattice_elements.append(l_element)
-                lattice_strengths.append(l_conf.get("strength", 1.0))
-            node_engine_args["lattice_elements"] = lattice_elements
-
-        resolved_elements = []
-        for val in node_engine_args.values():
-            if isinstance(val, list):
-                resolved_elements.extend(val)
-            else:
-                resolved_elements.append(val)
-
-        # Cache external audio files used in this step, and resolve to cache if missing
-        for arg_name, element in node_engine_args.items():
-            if isinstance(element, list):
-                for el in element:
-                    if not isinstance(el, (Audio, Model, Lattice, Latent)):
-                        return jsonify({"error": f"Node '{el.id}' is not a valid artifact."}), 400
-            else:
-                if isinstance(element, Audio):
-                    cache_used_audio(element.id)
-                    valid_path = resolve_audio_path(element.id)
-                    if valid_path and str(valid_path) != element.file.path:
-                        element.file = replace(element.file, path=str(valid_path))
-                        node_engine_args[arg_name] = element
-                
-                if not isinstance(element, (Audio, Model, Lattice, Latent)):
-                    field_name = arg_name.removesuffix("_element")
-                    return jsonify({"error": f"Node '{element.id}' for field '{field_name}' is not a valid artifact."}), 400
-
-        engine_args = {"model_element": model_element, **node_engine_args}
-        if lattices:
-            engine_args["lattice_strengths"] = lattice_strengths
-        
-        # If lattices are used, the model is implied, so we omit the direct edge
-        if "lattice_elements" in node_engine_args and node_engine_args["lattice_elements"]:
-            linked_elements = [*resolved_elements]
-        else:
-            linked_elements = [model_element, *resolved_elements]
-        
-        # --- Batching Logic ---
-        batch_id = json_data.get("batch_id")
-        if batch_id:
-            with graph_lock:
-                if not param_graph.G.has_node(batch_id):
-                    # Create the batch element if it's the first time we see this ID
-                    batch_element = Batch(id=batch_id, member_type="audio")
-                    param_graph.add_element(batch_element)
-                    print(f"Created new batch element {batch_id}")
-
-        # --- Execute, Poll, and Process ---
-        print(f"Submitting generation job {job_id} to engine...")
-        returned_job_id = await engine.execute("generate", job_id=job_id, **engine_args, **dumped_params)
-        
-        if returned_job_id != job_id:
-             print(f"Warning: Engine returned different job_id {returned_job_id} than requested {job_id}")
-             job_id = returned_job_id
-             
-        print(f"app.py: Engine returned job_id: {job_id}")
-        
-        # Store job context to process the artifact later when the frontend polls /job_status
-        v_params = validated_params.model_dump()
-        if lattices:
-            v_params["lattices"] = lattices
-            
-        active_jobs[job_id] = {
-            "batch_id": batch_id,
-            "linked_elements": linked_elements,
-            "validated_params": v_params
-        }
-
-        return jsonify({
-            "message": "Job started successfully.",
-            "job_id": job_id,
-            "status": "pending"
-        }), 202
-
-    except (ValidationError, ValueError) as e:
-        print(f"Invalid request: {e}")
-        traceback.print_exc()
-        return jsonify({"error": "Invalid request", "details": str(e)}), 400
-    except Exception as e:
-        print(f"Generation failed: {e}")
-        traceback.print_exc()
-        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
-
-@app.route("/invert", methods=["POST"])
-async def invert():
-    """
-    Handles the full audio inversion lifecycle: validation, queuing, and artifact processing.
-    """
-    if param_graph is None or engine_provider is None:
-        return jsonify({"error": "No project loaded"}), 400
-    
-    try:
-        json_data = request.get_json()
-        print(f"app.py: Received /invert payload: {json_data}")
-        model_id = json_data.get("model_id")
-        job_id = json_data.get("job_id")
-        
-        if not job_id:
-            return jsonify({"error": "'job_id' is required."}), 400
-        if not model_id:
-            return jsonify({"error": "'model_id' is required."}), 400
-
-        model_element = param_graph.get_element(model_id)
-        if not isinstance(model_element, Model):
-            return jsonify({"error": f"Node '{model_id}' is not a valid model."}), 400
-        
-        engine = engine_provider.get_engine()
-        form_config = await engine.get_adapter_config(model_element.adapter)
-        form_config = form_config.get("invert", [])
-        if not form_config:
-            return jsonify({"error": f"Adapter '{model_element.adapter}' has no 'invert' configuration"}), 404
-
-        DynamicArgsModel = create_dynamic_model(form_config)
-        validated_params = DynamicArgsModel.model_validate(json_data)
-        dumped_params = validated_params.model_dump()
-        
-        node_engine_args = {}
-        for field in form_config:
-            if field.get("type") == "node":
-                field_name = field.get("name")
-                node_id = dumped_params.pop(field_name, None)
-                if node_id:
-                    element = param_graph.get_element(node_id)
-                    if element:
-                        node_engine_args[f"{field_name}_element"] = element
-
-        # Explicitly wire up the source audio element
-        source_audio_id = json_data.get("source_audio_id")
-        if source_audio_id:
-            source_audio_element = param_graph.get_element(source_audio_id)
-            if not isinstance(source_audio_element, Audio):
-                return jsonify({"error": f"Node '{source_audio_id}' is not a valid audio artifact."}), 400
-            node_engine_args["source_audio_element"] = source_audio_element
-            
-            cache_used_audio(source_audio_element.id)
-            valid_path = resolve_audio_path(source_audio_element.id)
-            if valid_path and str(valid_path) != source_audio_element.file.path:
-                source_audio_element.file = replace(source_audio_element.file, path=str(valid_path))
-
-        engine_args = {"model_element": model_element, **node_engine_args}
-        
-        # --- Execute ---
-        print(f"Submitting inversion job {job_id} to engine...")
-        returned_job_id = await engine.execute("invert", job_id=job_id, **engine_args, **dumped_params)
-        
-        if returned_job_id != job_id:
-             job_id = returned_job_id
-             
-        active_jobs[job_id] = {
-            "linked_elements": [model_element, source_audio_element] if source_audio_id else [model_element],
-            "validated_params": validated_params.model_dump()
-        }
-
-        return jsonify({"message": "Job started successfully.", "job_id": job_id, "status": "pending"}), 202
-
-    except Exception as e:
-        print(f"Inversion failed: {e}")
-        traceback.print_exc()
-        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
-
 @app.route("/job_status/<job_id>", methods=["GET"])
 async def get_job_status(job_id):
     """Gets the status of a generation job and handles final artifact processing."""
@@ -805,6 +592,299 @@ async def cancel_job(job_id):
         print(f"Failed to cancel job: {e}")
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
+
+@app.route("/sync_operations", methods=["GET"])
+def get_sync_operations():
+    """Returns a list of available Synchronous operations and their configurations."""
+    try:
+        operations = [op.to_dict() for op in sync_registry.get_all()]
+        return jsonify({"operations": operations, "success": True}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/execute_operation", methods=["POST"])
+async def execute_operation():
+    """
+    Unified Operation Dispatcher Endpoint.
+    Routes operations to either the synchronous registry or the async Engine.
+    """
+    if param_graph is None:
+        return jsonify({"error": "No project loaded"}), 400
+        
+    try:
+        payload = request.get_json()
+        
+        # Map legacy 'type' payloads for backward compatibility, preferring 'execution_mode'
+        legacy_type = payload.get("type")
+        mode = payload.get("execution_mode", "sync")
+        if legacy_type == "dsp": mode = "sync"
+        elif legacy_type == "ai": mode = "async"
+        
+        if mode == "sync":
+            return _dispatch_sync_operation(payload)
+        elif mode == "async":
+            return await _dispatch_async_operation(payload)
+        else:
+            return jsonify({"error": f"Unknown execution mode: {mode}"}), 400
+            
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+def _dispatch_sync_operation(data):
+    try:
+        operation = data.get("operation")
+        params = data.get("params", {})
+        
+        if not operation:
+            return jsonify({"error": "'operation' is required"}), 400
+            
+        op_instance = sync_registry.get(operation)
+        DynamicArgsModel = create_dynamic_model(op_instance.get_form_config())
+        
+        # Support fallback where frontend still sends params at top level
+        validation_target = params if params else data
+        validated_params = DynamicArgsModel.model_validate(validation_target).model_dump()
+        
+        # 1. Dynamically resolve all requested node links from the graph
+        node_args = {}
+        source_elements = []
+        for field in op_instance.get_form_config():
+            if field.get("type") == "node":
+                field_name = field.get("name")
+                node_id = validated_params.pop(field_name, None)
+                if node_id:
+                    element = param_graph.get_element(node_id)
+                    if element:
+                        node_args[f"{field_name}_element"] = element
+                        source_elements.append(element)
+                        
+        # Resolving and caching missing local audio
+        for arg_name, element in node_args.items():
+            if isinstance(element, Audio):
+                cache_used_audio(element.id)
+                valid_path = resolve_audio_path(element.id)
+                if valid_path and str(valid_path) != element.file.path:
+                    element.file = replace(element.file, path=str(valid_path))
+                    node_args[arg_name] = element
+        
+        # 2. Execute the agnostic operation pipeline
+        process_results = op_instance.execute(
+            device=device_accelerator, 
+            sample_rate=APP_SAMPLE_RATE, 
+            **node_args, 
+            **validated_params
+        )
+        
+        is_batch = len(process_results) > 1
+        output_dir = param_graph.root / "process"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        final_artifacts = []
+        
+        # 3. Agnostic artifact data saving based strictly on returned element Types
+        for artifact_blueprint, raw_data in process_results:
+            local_path = data_cache_root / path_from_uid(artifact_blueprint.id)
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            if isinstance(artifact_blueprint, Audio):
+                buffer = io.BytesIO()
+                torchaudio.save(buffer, raw_data.cpu(), artifact_blueprint.sample_rate, format="wav")
+                local_path.write_bytes(buffer.getvalue())
+            elif isinstance(artifact_blueprint, Latent):
+                torch.save(raw_data.cpu(), local_path)
+            
+            artifact_blueprint.file = replace(artifact_blueprint.file, path=str(local_path))
+            final_artifacts.append(save_artifact_asset(artifact_blueprint, output_dir, asset_name="file"))
+
+        # 4. Integrate into the graph
+        collection_dict = None
+        with graph_lock:
+            for artifact in final_artifacts:
+                param_graph.add_element(artifact)
+                for source_el in source_elements:
+                    param_graph.link(source_el, artifact, relation='source')
+                
+            if is_batch:
+                member_ids = [a.id for a in final_artifacts]
+                batch_id = uid_generator.from_uids(member_ids)
+                batch = Batch(id=batch_id, member_ids=member_ids, member_type=final_artifacts[0].type)
+                param_graph.add_element(batch)
+                
+                for m_id in member_ids:
+                    param_graph.update_element(m_id, {"parent": batch_id})
+                    
+                update_batch_labels(batch_id)
+                collection_dict = param_graph.get_element(batch_id).to_dict()
+
+            param_graph.save()
+            
+        trigger_embedding_update(background=True)
+        
+        response_data = {
+            "message": f"Operation '{operation}' completed successfully.",
+            "status": "completed"
+        }
+        
+        if is_batch:
+            response_data["artifacts"] = [a.to_dict() for a in final_artifacts]
+            if collection_dict:
+                response_data["collection"] = collection_dict
+        else:
+            response_data["artifact"] = final_artifacts[0].to_dict()
+            
+        return jsonify(response_data), 200
+        
+    except (ValidationError, ValueError) as e:
+        return jsonify({"error": "Invalid request", "details": str(e)}), 400
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+async def _dispatch_async_operation(data):
+    """Routes an AI operation to the async Engine."""
+    if engine_provider is None:
+        return jsonify({"error": "Engine provider not initialized"}), 400
+        
+    try:
+        model_id = data.get("model_id")
+        job_id = data.get("job_id")
+        operation = data.get("operation")
+        params = data.get("params", {})
+        
+        if not job_id:
+            return jsonify({"error": "'job_id' is required."}), 400
+        if not model_id:
+            return jsonify({"error": "'model_id' is required."}), 400
+        if not operation:
+            return jsonify({"error": "'operation' is required."}), 400
+
+        model_element = param_graph.get_element(model_id)
+        if not isinstance(model_element, Model):
+            return jsonify({"error": f"Node '{model_id}' is not a valid model."}), 400
+        
+        engine = engine_provider.get_engine()
+        form_config = await engine.get_adapter_config(model_element.adapter)
+        
+        form_config = form_config.get(operation, [])
+        if not form_config:
+            return jsonify({"error": f"Adapter '{model_element.adapter}' has no '{operation}' configuration"}), 404
+
+        DynamicArgsModel = create_dynamic_model(form_config)
+        # Support fallback where frontend still sends params at top level
+        validation_target = params if params else data
+        validated_params = DynamicArgsModel.model_validate(validation_target)
+        dumped_params = validated_params.model_dump()
+        
+        node_engine_args = {}
+        for field in form_config:
+            if field.get("type") == "node":
+                field_name = field.get("name")
+                node_id = dumped_params.pop(field_name, None)
+                if node_id:
+                    element = param_graph.get_element(node_id)
+                    if element:
+                        node_engine_args[f"{field_name}_element"] = element
+
+        # --- Special Case Handlers (Lattices & Inversion Sources) ---
+        lattice_strengths = []
+        lattices = data.get("lattices") or params.get("lattices")
+        if lattices:
+            lattice_elements = []
+            for l_conf in lattices:
+                l_id = l_conf.get("id")
+                l_element = param_graph.get_element(l_id)
+                if not isinstance(l_element, Lattice):
+                    return jsonify({"error": f"Node '{l_id}' is not a valid lattice."}), 400
+                lattice_elements.append(l_element)
+                lattice_strengths.append(l_conf.get("strength", 1.0))
+            node_engine_args["lattice_elements"] = lattice_elements
+
+        source_audio_id = data.get("source_audio_id") or params.get("source_audio_id")
+        if source_audio_id:
+            source_audio_element = param_graph.get_element(source_audio_id)
+            if not isinstance(source_audio_element, Audio):
+                return jsonify({"error": f"Node '{source_audio_id}' is not a valid audio artifact."}), 400
+            node_engine_args["source_audio_element"] = source_audio_element
+
+        # Resolve element list for edge creation
+        resolved_elements = []
+        for val in node_engine_args.values():
+            if isinstance(val, list):
+                resolved_elements.extend(val)
+            else:
+                resolved_elements.append(val)
+
+        # Cache external audio files used in this step, and resolve to cache if missing
+        for arg_name, element in node_engine_args.items():
+            if isinstance(element, list):
+                for el in element:
+                    if not isinstance(el, (Audio, Model, Lattice, Latent)):
+                        return jsonify({"error": f"Node '{el.id}' is not a valid artifact."}), 400
+            else:
+                if isinstance(element, Audio):
+                    cache_used_audio(element.id)
+                    valid_path = resolve_audio_path(element.id)
+                    if valid_path and str(valid_path) != element.file.path:
+                        element.file = replace(element.file, path=str(valid_path))
+                        node_engine_args[arg_name] = element
+                
+                if not isinstance(element, (Audio, Model, Lattice, Latent)):
+                    field_name = arg_name.removesuffix("_element")
+                    return jsonify({"error": f"Node '{element.id}' for field '{field_name}' is not a valid artifact."}), 400
+
+        engine_args = {"model_element": model_element, **node_engine_args}
+        if lattices:
+            engine_args["lattice_strengths"] = lattice_strengths
+        
+        # If lattices are used, the model is implied, so we omit the direct edge
+        if "lattice_elements" in node_engine_args and node_engine_args["lattice_elements"]:
+            linked_elements = [*resolved_elements]
+        else:
+            linked_elements = [model_element, *resolved_elements]
+        
+        # --- Batching Logic ---
+        batch_id = data.get("batch_id")
+        if batch_id:
+            with graph_lock:
+                if not param_graph.G.has_node(batch_id):
+                    batch_element = Batch(id=batch_id, member_type="audio" if operation != "invert" else "latent")
+                    param_graph.add_element(batch_element)
+                    print(f"Created new batch element {batch_id}")
+
+        # --- Execute ---
+        print(f"Submitting {operation} job {job_id} to engine...")
+        returned_job_id = await engine.execute(operation, job_id=job_id, **engine_args, **dumped_params)
+        
+        if returned_job_id != job_id:
+             job_id = returned_job_id
+             
+        # Store job context to process the artifact later when the frontend polls /job_status
+        v_params = validated_params.model_dump()
+        if lattices:
+            v_params["lattices"] = lattices
+            
+        active_jobs[job_id] = {
+            "batch_id": batch_id,
+            "linked_elements": linked_elements,
+            "validated_params": v_params,
+            "operation": operation
+        }
+
+        return jsonify({
+            "message": "Job started successfully.",
+            "job_id": job_id,
+            "status": "pending"
+        }), 202
+
+    except (ValidationError, ValueError) as e:
+        print(f"Invalid request: {e}")
+        traceback.print_exc()
+        return jsonify({"error": "Invalid request", "details": str(e)}), 400
+    except Exception as e:
+        print(f"AI Operation failed: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
 # --------------------
 #  External Sources

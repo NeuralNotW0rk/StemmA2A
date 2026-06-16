@@ -25,6 +25,11 @@ class Engine(ABC):
         return adapter_instance.get_form_config()
 
     @abstractmethod
+    async def get_supported_operations(self) -> list[dict]:
+        """Returns a list of async operations supported by this engine."""
+        pass
+
+    @abstractmethod
     async def execute(self, operation_id: str, **kwargs) -> str:
         """Queues an operation and returns a job ID."""
         pass
