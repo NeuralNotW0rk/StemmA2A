@@ -1,6 +1,5 @@
 import json
 import struct
-import math
 from pathlib import Path
 
 import torch
@@ -177,25 +176,18 @@ class StableAudioAdapter(ModelAdapter):
             "seed": kwargs.get("seed", 0)
         }
 
-        # 1. Map traditional initial audio if provided to set up the library's internal canvas
+        # Handle traditional initial audio if provided
         init_audio_element = kwargs.get("init_audio_element")
         if init_audio_element:
-            # noise_level represents the denoising strength (0.0 to 1.0 percentage)
-            noise_percentage = float(kwargs.get("noise_level", 0.7))
-            
-            # Reconstruct schedule indexes to calculate the correct library entry sigma
-            sigmas = get_sigmas_karras(steps, sigma_min, sigma_max, device=self.device)
-            step_index = max(0, min(steps, int((1.0 - noise_percentage) * steps)))
-            actual_sigma = sigmas[step_index].item()
+            noise_level = kwargs.get("noise_level", 0.7)
             
             audio_path = Path(init_audio_element.file.path)
             if audio_path and audio_path.exists():
                 from utils.audio import load_audio
                 init_audio_tensor = load_audio(self.device, audio_path, sample_rate)
                 
-                # Pass directly to args so generate_diffusion_cond encodes and pre-scales natively
                 args["init_audio"] = (sample_rate, init_audio_tensor)
-                args["init_noise_level"] = actual_sigma 
+                args["init_noise_level"] = noise_level
 
         # Generate stereo audio
         with torch.no_grad():
@@ -214,19 +206,32 @@ class StableAudioAdapter(ModelAdapter):
                 inner_kwargs = dict(inner_kwargs)
                 
                 if init_latent_tensor is not None and inversion_meta is not None:
-                    # Maintain clean unit-variance coordinates at the front gate
+                    # 1. FORCE the initial noise argument to be a direct clone of your inverted latent
+                    # In sample_k, noise is the second positional argument (index 1)
                     custom_coords = init_latent_tensor.clone()
                     
+                    # Ensure batch sizes match up smoothly
                     target_shape = inner_args[1].shape if len(inner_args) > 1 else inner_kwargs.get("noise").shape
                     if custom_coords.shape[0] == 1 and target_shape[0] > 1:
                         custom_coords = custom_coords.repeat(target_shape[0], 1, 1)
                     
-                    # Extract sampler_fn hooks cleanly from library parameters
-                    sampler_fn = inner_kwargs.get("sampler_fn")
+                    # Overwrite the random seed noise immediately at the entrance of the wrapper
+                    if len(inner_args) > 1:
+                        inner_args[1] = custom_coords
+                    else:
+                        inner_kwargs["noise"] = custom_coords
+
+                    # 2. Extract and patch the sampler_fn to use our sliced sigmas timeline
+                    sampler_fn = None
                     sampler_arg_index = None
-                    if sampler_fn is None and len(inner_args) > 4:
-                        sampler_fn = inner_args[4]
-                        sampler_arg_index = 4
+                    
+                    if "sampler_fn" in inner_kwargs:
+                        sampler_fn = inner_kwargs["sampler_fn"]
+                    else:
+                        if len(inner_args) > 4:
+                            sampler_fn = inner_args[4]
+                            sampler_arg_index = 4
+                    
                     if sampler_fn is None:
                         for idx, arg in enumerate(inner_args):
                             if callable(arg) and not hasattr(arg, "forward") and arg.__name__ != "patched_sample_k":
@@ -235,34 +240,25 @@ class StableAudioAdapter(ModelAdapter):
                                 break
 
                     if sampler_fn is not None:
-                        # Re-verify the active sigmas matrix grid passed down from the environment
+                        # Re-create the exact global timeline grid
+                        global_sigmas = get_sigmas_karras(steps + 1, sigma_min, sigma_max, device=self.device)
+                        stop_index = inversion_meta["stop_step_index"]
+                        
+                        # Flip schedule to run downstream from max noise to clean audio floor
+                        downstream_sigmas = global_sigmas[:-1].flip(0)
+                        
+                        # Symmetrical boundary-safe timeline slice
+                        start_index = steps - stop_index
+                        generation_sigmas = downstream_sigmas[start_index:]
+                        
+                        # Append mandatory terminal 0.0 value
+                        generation_sigmas = torch.cat([generation_sigmas, global_sigmas[-1:]])
+
+                        # Build the clean proxy interceptor using the unified tensor coordinates
                         def custom_sampler_wrapper(model_wrap, x, sigmas_arg, *s_args, **s_kwargs):
-                            custom_coords_local = custom_coords.clone()
-                            if custom_coords_local.shape[0] == 1 and x.shape[0] > 1:
-                                custom_coords_local = custom_coords_local.repeat(x.shape[0], 1, 1)
-                            
-                            # CRITICAL FIX: Ensure device alignment before math operations
-                            custom_coords_local = custom_coords_local.to(x.device)
-                            
-                            # CRITICAL SYNC POINT: Extract the exact starting sigma scale token 
-                            # mandated by the active generation entry point
-                            target_sigma = sigmas_arg[0].item()
-                            
-                            # Manually scale the unit-variance inverted latent to match the entry magnitude
-                            custom_coords_local = custom_coords_local * target_sigma
-                            
-                            # Execute Conditional Multi-Modal SDE Blending
-                            if "init_audio" in args:
-                                # x is already encoded and correctly scaled up to target_sigma by the native library
-                                alpha = float(kwargs.get("hybrid_blend_alpha", 0.5))
-                                
-                                # Variance-preserving coordinate calculation
-                                x = (x * math.sqrt(1.0 - alpha)) + (custom_coords_local * math.sqrt(alpha))
-                            else:
-                                # Fallback to pure reconstruction mode seamlessly
-                                x = custom_coords_local
-                            
-                            return sampler_fn(model_wrap, x, sigmas_arg, *s_args, **s_kwargs)
+                            # Pass through x, which has now been safely overridden with your custom_coords 
+                            # at step 1, ensuring its internal variance profiles line up with generation_sigmas
+                            return sampler_fn(model_wrap, x, generation_sigmas, *s_args, **s_kwargs)
 
                         if "sampler_fn" in inner_kwargs or sampler_arg_index is None:
                             inner_kwargs["sampler_fn"] = custom_sampler_wrapper
