@@ -6,6 +6,8 @@
   import cytoscape, { type EventObject, type Singular } from 'cytoscape'
   import fcose from 'cytoscape-fcose'
   import cxtmenu from 'cytoscape-cxtmenu'
+  import popper from 'cytoscape-popper'
+  import { createPopper } from '@popperjs/core'
   import graphStyle from './Style'
   import layoutConfig from './Layout'
   import { cyInstanceStore, selectionStore } from '../../utils/stores'
@@ -40,6 +42,7 @@
       newBatchId: string | null,
       newMembers: string[]
     ) => void | Promise<void>
+    onselectOperation?: (op: any, initiatorNode: any) => void
   }
 
   let {
@@ -63,12 +66,138 @@
     onexpandPath,
     ontoggleFavorite,
     onupdateElement,
-    onchangeBatchMembership
+    onchangeBatchMembership,
+    onselectOperation
   }: Props = $props()
 
   let graphContainer: HTMLElement | undefined = $state()
   let cy: cytoscape.Core | null = null
   let isInitialized = $state(false)
+
+  // --- In-place Audio Operations Popover State ---
+  let operationsMenuOpen = $state(false)
+  let targetNode: any = $state(null)
+  let operations: any[] = $state([])
+  let searchQuery = $state('')
+  let selectedIndex = $state(0)
+  let menuElement: HTMLElement | null = $state(null)
+  let searchInput: HTMLInputElement | null = $state(null)
+  let loadingOperations = $state(false)
+  let operationsError: string | null = $state(null)
+
+  let filteredOperations = $derived.by(() => {
+    if (!searchQuery) return operations
+    const q = searchQuery.toLowerCase()
+    return operations.filter(
+      (op) =>
+        op.name.toLowerCase().includes(q) ||
+        (op.description && op.description.toLowerCase().includes(q))
+    )
+  })
+
+  async function openOperationsMenu(node: any): Promise<void> {
+    targetNode = node
+    operationsMenuOpen = true
+    searchQuery = ''
+    selectedIndex = 0
+    loadingOperations = true
+    operationsError = null
+
+    try {
+      const response = await window.api.getOperations()
+      if (response && response.success && Array.isArray(response.operations)) {
+        operations = response.operations
+      } else {
+        throw new Error('Invalid operations response format')
+      }
+    } catch (err: any) {
+      console.error('Failed to get operations:', err)
+      operationsError = err.message || String(err)
+    } finally {
+      loadingOperations = false
+      setTimeout(() => {
+        if (searchInput) searchInput.focus()
+      }, 50)
+    }
+  }
+
+  function handleKeyDown(e: KeyboardEvent): void {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      if (filteredOperations.length > 0) {
+        selectedIndex = (selectedIndex + 1) % filteredOperations.length
+      }
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      if (filteredOperations.length > 0) {
+        selectedIndex = (selectedIndex - 1 + filteredOperations.length) % filteredOperations.length
+      }
+    } else if (e.key === 'Enter') {
+      e.preventDefault()
+      if (filteredOperations[selectedIndex]) {
+        selectOp(filteredOperations[selectedIndex])
+      }
+    } else if (e.key === 'Escape') {
+      e.preventDefault()
+      closeOperationsMenu()
+    }
+  }
+
+  function selectOp(op: any): void {
+    const nodeData = targetNode ? targetNode.data() : null
+    closeOperationsMenu()
+    if (onselectOperation && nodeData) {
+      onselectOperation(op, nodeData)
+    }
+  }
+
+  function closeOperationsMenu(): void {
+    operationsMenuOpen = false
+    targetNode = null
+  }
+
+  function handleClickOutside(e: MouseEvent): void {
+    if (operationsMenuOpen && menuElement && !menuElement.contains(e.target as Node)) {
+      closeOperationsMenu()
+    }
+  }
+
+  let popperInstance: any = null
+
+  $effect(() => {
+    if (operationsMenuOpen && menuElement && targetNode && cy) {
+      const ref = targetNode.popperRef()
+      popperInstance = createPopper(ref, menuElement, {
+        placement: 'right-start',
+        strategy: 'fixed',
+        modifiers: [
+          {
+            name: 'offset',
+            options: {
+              offset: [0, 10]
+            }
+          }
+        ]
+      })
+
+      const update = () => {
+        if (popperInstance) popperInstance.update()
+      }
+
+      targetNode.on('position', update)
+      cy.on('pan zoom resize', update)
+
+      return () => {
+        if (targetNode) targetNode.off('position', update)
+        if (cy) cy.off('pan zoom resize', update)
+        if (popperInstance) {
+          popperInstance.destroy()
+          popperInstance = null
+        }
+      }
+    }
+    return
+  })
 
   let isSelecting = $state(false)
   let selectionFilter: Record<string, any> | null = $state(null)
@@ -133,7 +262,9 @@
   }
 
   function isBatchCompatible(batch: cytoscape.NodeSingular, node: cytoscape.NodeSingular): boolean {
-    const filter: Record<string, any> = batch.data('member_type') ? { type: batch.data('member_type') } : {}
+    const filter: Record<string, any> = batch.data('member_type')
+      ? { type: batch.data('member_type') }
+      : {}
 
     // Extract the structural dependencies from the batch's existing members to match BatchingView's logic
     const memberIds = batch.data('member_ids') || []
@@ -163,7 +294,9 @@
           cy.elements().addClass('dimmed')
 
           // 2. Identify valid candidates based on the filter
-          const highlightedNodes = cy.nodes().filter((node) => matchesFilter(node, selectionFilter!))
+          const highlightedNodes = cy
+            .nodes()
+            .filter((node) => matchesFilter(node, selectionFilter!))
           const ancestorNodes = highlightedNodes.ancestors()
 
           // 3. Un-dim and highlight valid candidates, and keep their structural ancestors visible
@@ -216,6 +349,7 @@
   function initializeGraph(): void {
     cytoscape.use(fcose)
     cytoscape.use(cxtmenu)
+    cytoscape.use(popper(createPopper))
 
     cy = cytoscape({
       container: graphContainer,
@@ -249,7 +383,7 @@
         select: () => {
           const selectedEles = cy!.$(':selected')
           if (selectedEles.length > 1 && selectedEles.contains(ele)) {
-            onElementRemove?.(selectedEles.map(e => e.data()))
+            onElementRemove?.(selectedEles.map((e) => e.data()))
           } else {
             onElementRemove?.(ele.data())
           }
@@ -324,10 +458,15 @@
           select: () => onstartBatching?.(ele.data())
         })
       }
-      
+
       specificCommands.push({
         content: 'Export',
         select: () => onexport?.({ names: [ele.data('name')] })
+      })
+
+      specificCommands.push({
+        content: 'Operations...',
+        select: () => openOperationsMenu(ele)
       })
 
       // Inherits from nodeCommands
@@ -360,7 +499,9 @@
         content: 'Export Batch',
         select: () => {
           const memberIds = ele.data('member_ids') || []
-          const names = memberIds.map((id: string) => cy!.getElementById(id).data('name')).filter(Boolean)
+          const names = memberIds
+            .map((id: string) => cy!.getElementById(id).data('name'))
+            .filter(Boolean)
           if (names.length > 0) onexport?.({ names })
         }
       },
@@ -473,18 +614,18 @@
 
         ghostNode.style({
           'background-color': node.style('background-color'),
-          'shape': node.style('shape'),
-          'width': node.style('width'),
-          'height': node.style('height'),
-          'label': node.style('label'),
-          'opacity': 0.5,
+          shape: node.style('shape'),
+          width: node.style('width'),
+          height: node.style('height'),
+          label: node.style('label'),
+          opacity: 0.5,
           'border-width': node.style('border-width'),
           'border-color': node.style('border-color'),
           'text-valign': node.style('text-valign'),
           'text-halign': node.style('text-halign'),
-          'color': node.style('color'),
+          color: node.style('color'),
           'z-index': 9999,
-          'events': 'no' // Do not capture events on the ghost node
+          events: 'no' // Do not capture events on the ghost node
         })
 
         cy!.nodes('[type="batch"]').forEach((batch) => {
@@ -555,7 +696,10 @@
 
         if (currentParentId !== targetBatchId) {
           const oldMembers = currentParentId
-            ? cy!.getElementById(currentParentId).data('member_ids')?.filter((id: string) => id !== sourceNodeId) || []
+            ? cy!
+                .getElementById(currentParentId)
+                .data('member_ids')
+                ?.filter((id: string) => id !== sourceNodeId) || []
             : []
           const newMembers = targetBatchId
             ? [...(cy!.getElementById(targetBatchId).data('member_ids') || []), sourceNodeId]
@@ -573,7 +717,7 @@
             const elementsList = Array.isArray(graphData.elements)
               ? graphData.elements
               : [...(graphData.elements.nodes || []), ...(graphData.elements.edges || [])]
-            
+
             const rawNode = elementsList.find((e: any) => e.data.id === sourceNodeId)
             if (rawNode) {
               if (targetBatchId) {
@@ -590,7 +734,13 @@
           // 5. Persist
           await extractAndSavePositions()
           if (onchangeBatchMembership) {
-            await onchangeBatchMembership(sourceNodeId, currentParentId, oldMembers, targetBatchId, newMembers)
+            await onchangeBatchMembership(
+              sourceNodeId,
+              currentParentId,
+              oldMembers,
+              targetBatchId,
+              newMembers
+            )
           }
         } else {
           sourceNode.position({ ...nodePos })
@@ -767,7 +917,7 @@
           const target = targetNode?.data.parent || edgeData.target
 
           // We explicitly DO NOT proxy the source to its parent batch.
-          // This ensures that when a single sample is used as init_audio, 
+          // This ensures that when a single sample is used as init_audio,
           // the edge visually originates from that specific sample, not the whole batch.
           const source = edgeData.source
 
@@ -855,6 +1005,7 @@
 </script>
 
 <svelte:window
+  onmousedown={handleClickOutside}
   onkeydown={(e) => {
     if (e.key === 'Control' || e.key === 'Meta') {
       cy?.boxSelectionEnabled(false)
@@ -863,9 +1014,7 @@
     if (e.key === 'Delete' || e.key === 'Backspace') {
       const target = e.target as HTMLElement
       const isInput =
-        target.tagName === 'INPUT' ||
-        target.tagName === 'TEXTAREA' ||
-        target.isContentEditable
+        target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable
       if (!isInput) {
         const selectedEles = cy?.$(':selected')
         if (selectedEles && selectedEles.length > 0) {
@@ -888,6 +1037,58 @@
 
 <div class="graph-wrapper" class:selecting={isSelecting}>
   <div bind:this={graphContainer} class="graph-container"></div>
+
+  {#if operationsMenuOpen}
+    <div bind:this={menuElement} class="operations-command-palette">
+      <div class="search-header">
+        <svg class="search-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+        </svg>
+        <input
+          bind:this={searchInput}
+          type="text"
+          bind:value={searchQuery}
+          onkeydown={handleKeyDown}
+          placeholder="Search audio operations..."
+        />
+      </div>
+      
+      <div class="palette-content">
+        {#if loadingOperations}
+          <div class="status-message">
+            <div class="spinner" style="margin-bottom: 0.5rem;"></div>
+            Loading operations...
+          </div>
+        {:else if operationsError}
+          <div class="status-message error">{operationsError}</div>
+        {:else if filteredOperations.length === 0}
+          <div class="status-message">No operations found</div>
+        {:else}
+          <ul class="operations-list">
+            {#each filteredOperations as op, index}
+              <li class="operation-item" class:active={index === selectedIndex}>
+                <button
+                  type="button"
+                  onclick={() => selectOp(op)}
+                  onmouseenter={() => (selectedIndex = index)}
+                >
+                  <div class="op-title-row">
+                    <span class="op-name">{op.name.toUpperCase()}</span>
+                    <span class="op-badge" class:async={op.execution_mode === 'async'}>
+                      {op.execution_mode}
+                    </span>
+                  </div>
+                  {#if op.description}
+                    <div class="op-desc">{op.description}</div>
+                  {/if}
+                </button>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      </div>
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -915,5 +1116,136 @@
 
   .graph-wrapper.selecting .graph-container {
     cursor: crosshair;
+  }
+
+  /* --- Command Palette Custom Styles --- */
+  .operations-command-palette {
+    position: fixed;
+    width: 280px;
+    background: var(--color-background-glass-2, rgba(20, 20, 25, 0.85));
+    backdrop-filter: blur(12px);
+    border: 1px solid var(--color-overlay-border-primary, rgba(255, 255, 255, 0.15));
+    border-radius: 8px;
+    box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.4);
+    z-index: 10000;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    max-height: 320px;
+    font-family: inherit;
+  }
+
+  .search-header {
+    display: flex;
+    align-items: center;
+    padding: 0.75rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(255, 255, 255, 0.03);
+    gap: 0.5rem;
+  }
+
+  .search-icon {
+    color: var(--color-text-muted, #888);
+    opacity: 0.7;
+    flex-shrink: 0;
+  }
+
+  .search-header input {
+    background: none;
+    border: none;
+    outline: none;
+    color: var(--color-overlay-text, #fff);
+    font-size: 0.9rem;
+    width: 100%;
+    padding: 0;
+    margin: 0;
+  }
+
+  .palette-content {
+    overflow-y: auto;
+    flex-grow: 1;
+  }
+
+  .status-message {
+    padding: 1.5rem 1rem;
+    text-align: center;
+    color: var(--color-text-muted, #888);
+    font-size: 0.85rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  
+  .status-message.error {
+    color: var(--color-error, #ef4444);
+  }
+
+  .operations-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+
+  .operation-item {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+  }
+
+  .operation-item:last-child {
+    border-bottom: none;
+  }
+
+  .operation-item button {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: none;
+    border: none;
+    border-radius: 0;
+    padding: 0.75rem 1rem;
+    color: var(--color-overlay-text, #fff);
+    cursor: pointer;
+    transition: background 0.15s;
+    min-height: auto;
+  }
+
+  .operation-item.active button {
+    background: var(--color-primary-t-30, rgba(235, 94, 40, 0.2));
+  }
+
+  .op-title-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.25rem;
+  }
+
+  .op-name {
+    font-weight: 600;
+    font-size: 0.85rem;
+    letter-spacing: 0.05em;
+  }
+
+  .op-badge {
+    font-size: 0.65rem;
+    padding: 0.1rem 0.4rem;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--color-text-muted, #aaa);
+    text-transform: uppercase;
+  }
+
+  .op-badge.async {
+    background: rgba(59, 130, 246, 0.2);
+    color: #93c5fd;
+    border: 1px solid rgba(59, 130, 246, 0.3);
+  }
+
+  .op-desc {
+    font-size: 0.75rem;
+    color: var(--color-text-muted, #888);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 </style>

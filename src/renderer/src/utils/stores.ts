@@ -128,3 +128,5 @@ function createFormStateStore() {
 }
 
 export const formStateStore = createFormStateStore()
+
+export const selectedOperation = writable<any>(null)

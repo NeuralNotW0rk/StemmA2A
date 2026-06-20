@@ -24,10 +24,28 @@ class Engine(ABC):
 
         return adapter_instance.get_form_config()
 
-    @abstractmethod
     async def get_supported_operations(self) -> list[dict]:
-        """Returns a list of async operations supported by this engine."""
-        pass
+        """
+        Returns the top-level async operations explicitly supported by the engine.
+        The full dynamic forms will be resolved via the adapter once a model is linked.
+        """
+        return [
+            {
+                "name": "generate",
+                "description": "Generate audio from a generative model",
+                "form_config": [
+                    {"name": "model", "type": "node", "label": "Model", "required": True}
+                ]
+            },
+            {
+                "name": "invert",
+                "description": "Invert audio to a latent representation",
+                "form_config": [
+                    {"name": "model", "type": "node", "label": "Model", "required": True},
+                    {"name": "source_audio", "type": "node", "label": "Source Audio", "required": True}
+                ]
+            }
+        ]
 
     @abstractmethod
     async def execute(self, operation_id: str, **kwargs) -> str:

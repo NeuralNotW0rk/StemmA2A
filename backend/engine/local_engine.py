@@ -53,29 +53,6 @@ class LocalEngine(Engine):
             print("CLAPEncoder not found, skipping embedding functionality.")
         except Exception as e:
             print(f"Error initializing CLAPEncoder: {e}")
-        
-    async def get_supported_operations(self) -> list[dict]:
-        """
-        Returns the top-level async operations explicitly supported by the engine.
-        The full dynamic forms will be resolved via the adapter once a model is linked.
-        """
-        return [
-            {
-                "name": "generate",
-                "description": "Generate audio from a generative model",
-                "form_config": [
-                    {"name": "model", "type": "node", "label": "Model", "required": True}
-                ]
-            },
-            {
-                "name": "invert",
-                "description": "Invert audio to a latent representation",
-                "form_config": [
-                    {"name": "model", "type": "node", "label": "Model", "required": True},
-                    {"name": "source_audio", "type": "node", "label": "Source Audio", "required": True}
-                ]
-            }
-        ]
 
     async def register_model(self, adapter_name: str, **kwargs) -> GraphElement:
         """

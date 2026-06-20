@@ -19,7 +19,7 @@ class GainOperation(SyncOperation):
 
     def get_form_config(self) -> list:
         return [
-            {"name": "source_audio", "type": "node", "label": "Source Audio", "required": True},
+            {"name": "source_audio", "type": "node", "label": "Source Audio", "filter": {"type": "audio"}, "required": True},
             {
                 "name": "gain_db",
                 "type": "float",
@@ -62,7 +62,7 @@ class NormalizeOperation(SyncOperation):
 
     def get_form_config(self) -> list:
         return [
-            {"name": "source_audio", "type": "node", "label": "Source Audio", "required": True},
+            {"name": "source_audio", "type": "node", "label": "Source Audio", "filter": {"type": "audio"}, "required": True},
             {"name": "target_peak", "type": "float", "label": "Target Peak", "defaultValue": 1.0, "required": True}
         ]
 
@@ -100,7 +100,7 @@ class SliceOperation(SyncOperation):
 
     def get_form_config(self) -> list:
         return [
-            {"name": "source_audio", "type": "node", "label": "Source Audio", "required": True},
+            {"name": "source_audio", "type": "node", "label": "Source Audio", "filter": {"type": "audio"}, "required": True},
             {"name": "chunk_duration", "type": "float", "label": "Chunk Duration (s)", "defaultValue": 1.0, "required": True}
         ]
 
@@ -144,7 +144,7 @@ class LibrosaOnsetSliceOperation(SyncOperation):
 
     def get_form_config(self) -> list:
         return [
-            {"name": "source_audio", "type": "node", "label": "Source Audio", "required": True},
+            {"name": "source_audio", "type": "node", "label": "Source Audio", "filter": {"type": "audio"}, "required": True},
             {"name": "backtrack", "type": "boolean", "label": "Backtrack to Local Minima", "defaultValue": True, "required": False}
         ]
 

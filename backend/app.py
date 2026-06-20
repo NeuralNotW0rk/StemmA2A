@@ -602,6 +602,32 @@ def get_sync_operations():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route("/operations", methods=["GET"])
+async def get_all_operations():
+    """Returns a unified list of both Synchronous and Asynchronous operations."""
+    try:
+        operations = []
+        for op in sync_registry.get_all():
+            op_dict = op.to_dict()
+            op_dict["execution_mode"] = "sync"
+            operations.append(op_dict)
+            
+        if engine_provider is not None:
+            engine = engine_provider.get_engine()
+            if engine is not None:
+                async_ops = await engine.get_supported_operations()
+                for op in async_ops:
+                    op_dict = dict(op)
+                    op_dict["execution_mode"] = "async"
+                    operations.append(op_dict)
+                    
+        return jsonify({"operations": operations, "success": True}), 200
+    except Exception as e:
+        print(f"Error getting operations: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
 @app.route("/execute_operation", methods=["POST"])
 async def execute_operation():
     """

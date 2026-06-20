@@ -15,7 +15,6 @@ DEFAULT_SR = 48000
 class ParameterGraph:
     def __init__(self, data_path, backend=None) -> None:
         self.root = Path(data_path)
-        self.export_target = EXPORT_DIR
         self.backend = backend
         self.G = nx.DiGraph()
         self.project_name = None
@@ -29,7 +28,6 @@ class ParameterGraph:
             with open(data_path, 'r') as df:
                 data = json.load(df)
                 self.project_name = data['project_name']
-                self.export_target = Path(data['export_target'])
                 self.G = nx.cytoscape.cytoscape_graph(data['graph'])
                 
                 # Clean up legacy edge nodes that were added as nodes
@@ -49,7 +47,6 @@ class ParameterGraph:
         with open(data_path, 'w') as df:
             data = {
                 'project_name': self.project_name,
-                'export_target': str(self.export_target),
                 'graph': nx.cytoscape.cytoscape_data(self.G, ident='id'),
             }
             df.write(json.dumps(data, indent=4))
