@@ -18,6 +18,7 @@
     viewMode?: 'batch' | 'cluster'
     showSpringEdges?: boolean
     showDetailedLabels?: boolean
+    operations?: any[]
     onaudioSelect?: (data: any) => void
     onexport?: (data: { names: string[] }) => void
     onimportLattice?: (data: any) => void
@@ -44,6 +45,7 @@
     graphData = null,
     showSpringEdges = false,
     showDetailedLabels = true,
+    operations: operationsProp = [],
     onaudioSelect,
     onimportLattice,
     onrescanSource,
@@ -69,6 +71,13 @@
   let targetNode: any = $state(null)
   let operations: any[] = $state([])
   let searchQuery = $state('')
+
+  $effect(() => {
+    if (operationsProp && operationsProp.length > 0) {
+      operations = operationsProp
+    }
+  })
+
   let selectedIndex = $state(0)
   let menuElement: HTMLElement | null = $state(null)
   let searchInput: HTMLInputElement | null = $state(null)

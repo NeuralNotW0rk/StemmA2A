@@ -448,6 +448,7 @@
 
   async function refreshGraphData(): Promise<void> {
     try {
+      await loadOperations()
       graphData = await window.api.getGraphData(viewMode)
       console.log(`Graph data refreshed for view mode ${viewMode}`)
     } catch (error) {
@@ -672,6 +673,7 @@
     {graphData}
     {showSpringEdges}
     {viewMode}
+    operations={allOperations}
     onaudioSelect={handleAudioSelect}
     onimportLattice={handleImportLattice}
     onnodeSelect={handleElementSelect}
