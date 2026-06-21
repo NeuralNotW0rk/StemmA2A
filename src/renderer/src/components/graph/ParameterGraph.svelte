@@ -424,6 +424,36 @@
         })
     }
 
+    const getReplicateCommand = (ele: Singular): Command | null => {
+      const context = ele.data().context
+      if (!context) return null
+
+      let targetOpName = context.operation
+      if (!targetOpName) {
+        // Fallback for legacy elements
+        const type = ele.data('type')
+        if (type === 'audio') {
+          targetOpName = 'generate'
+        } else if (type === 'latent') {
+          targetOpName = 'invert'
+        }
+      }
+
+      if (!targetOpName) return null
+
+      const targetOp = operations?.find((op) => op.name === targetOpName)
+      if (!targetOp) return null
+
+      return {
+        content: 'Replicate',
+        select: () => {
+          if (onselectOperation) {
+            onselectOperation(targetOp, ele.data(), true)
+          }
+        }
+      }
+    }
+
     const elementCommands = (ele: Singular): Command[] => [
       {
         content: 'Remove',
@@ -457,10 +487,15 @@
       ...nodeCommands(ele)
     ]
 
-    const latentNodeCommands = (ele: Singular): Command[] => [
-      ...getPinnedOperations(ele),
-      ...nodeCommands(ele)
-    ]
+    const latentNodeCommands = (ele: Singular): Command[] => {
+      const specificCommands: Command[] = []
+      const replicateCmd = getReplicateCommand(ele)
+      if (replicateCmd) {
+        specificCommands.push(replicateCmd)
+      }
+      specificCommands.push(...getPinnedOperations(ele))
+      return [...specificCommands, ...nodeCommands(ele)]
+    }
 
     const audioNodeCommands = (ele: Singular): Command[] => {
       const specificCommands: Command[] = [
@@ -473,16 +508,10 @@
           }
         }
       ]
-      if (ele.data().context) {
-        specificCommands.push({
-          content: 'Replicate',
-          select: () => {
-            const generateOp = operations.find((op) => op.name === 'generate')
-            if (generateOp && onselectOperation) {
-              onselectOperation(generateOp, ele.data(), true)
-            }
-          }
-        })
+      
+      const replicateCmd = getReplicateCommand(ele)
+      if (replicateCmd) {
+        specificCommands.push(replicateCmd)
       }
       
       // Inject pinned dynamic operations (e.g. Audio to Audio, Invert)

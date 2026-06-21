@@ -10,14 +10,34 @@ from utils.uid import UIDGenerator, XXH3_64
 
 def operation(name: str, is_standard: bool = True, description: str = "", initiator_types: list = None, context_overrides: dict = None):
     """Decorator to mark and register an adapter method as a supported operation."""
+    import functools
+    from dataclasses import replace
+    from param_graph.elements.base_elements import Artifact
+
     def decorator(func):
-        func._is_operation = True
-        func._op_name = name
-        func._op_is_standard = is_standard
-        func._op_description = description
-        func._op_initiator_types = initiator_types or []
-        func._op_context_overrides = context_overrides or {}
-        return func
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            res = func(*args, **kwargs)
+            if isinstance(res, tuple) and len(res) > 0:
+                artifact = res[0]
+                if isinstance(artifact, Artifact):
+                    new_context = dict(artifact.context) if artifact.context is not None else {}
+                    new_context["operation"] = name
+                    new_artifact = replace(artifact, context=new_context)
+                    res = (new_artifact,) + res[1:]
+            elif isinstance(res, Artifact):
+                new_context = dict(res.context) if res.context is not None else {}
+                new_context["operation"] = name
+                res = replace(res, context=new_context)
+            return res
+
+        wrapper._is_operation = True
+        wrapper._op_name = name
+        wrapper._op_is_standard = is_standard
+        wrapper._op_description = description
+        wrapper._op_initiator_types = initiator_types or []
+        wrapper._op_context_overrides = context_overrides or {}
+        return wrapper
     return decorator
 
 class ModelAdapter(ABC):
