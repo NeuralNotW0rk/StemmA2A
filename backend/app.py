@@ -31,7 +31,7 @@ from param_graph.elements.local_path import LocalPath
 from param_graph.utils import save_artifact_asset, resolve_element
 from engine.engine_provider import EngineProvider
 from engine.encoders.clap_encoder import CLAPEncoder
-from utils.audio import load_audio
+from utils.audio import load_audio, save_audio_to_buffer, save_audio
 from utils.form import create_dynamic_model
 from utils.uid import XXH3_64, path_from_uid
 from utils.semantic_interrogation import SemanticInterrogator
@@ -714,9 +714,7 @@ def _dispatch_sync_operation(data):
             local_path.parent.mkdir(parents=True, exist_ok=True)
             
             if isinstance(artifact_blueprint, Audio):
-                buffer = io.BytesIO()
-                torchaudio.save(buffer, raw_data.cpu(), artifact_blueprint.sample_rate, format="wav")
-                local_path.write_bytes(buffer.getvalue())
+                save_audio(raw_data.cpu(), local_path, artifact_blueprint.sample_rate, format="wav")
             elif isinstance(artifact_blueprint, Latent):
                 torch.save(raw_data.cpu(), local_path)
             
@@ -1498,9 +1496,7 @@ def serve_audio_data(audio_id):
         audio_tensor = load_audio(device_accelerator, str(audio_path), APP_SAMPLE_RATE)
         
         # Save the tensor to an in-memory buffer
-        buffer = io.BytesIO()
-        torchaudio.save(buffer, audio_tensor, APP_SAMPLE_RATE, format="wav")
-        buffer.seek(0)
+        buffer = save_audio_to_buffer(audio_tensor, APP_SAMPLE_RATE, format="wav")
         
         return send_file(buffer, mimetype="audio/wav")
         

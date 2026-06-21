@@ -16,6 +16,7 @@ from param_graph.elements.base_elements import GraphElement
 from .engine import Engine
 from .model_cache import ModelCache
 from utils.uid import path_from_uid
+from utils.audio import save_audio
 
 from diffracture import Actant
 from diffracture.topology.lattice import Lattice as DiffractureLattice
@@ -103,12 +104,7 @@ class LocalEngine(Engine):
         local_path = self.data_root / path_from_uid(artifact.id)
         local_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Save to an in-memory buffer to avoid issues with filenames in soundfile
-        buffer = io.BytesIO()
-        torchaudio.save(buffer, tensor, sample_rate, format="wav")
-
-        # Write the buffer's content to the final destination file
-        local_path.write_bytes(buffer.getvalue())
+        save_audio(tensor, local_path, sample_rate, format="wav")
 
         # Update the artifact with the persistent path
         new_file_asset = replace(artifact.file, path=str(local_path))
