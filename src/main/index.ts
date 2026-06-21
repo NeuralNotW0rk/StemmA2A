@@ -202,6 +202,23 @@ app.whenReady().then(async () => {
     }
   })
 
+  ipcMain.handle('dialog:selectSavePath', async (_event, defaultName?: string) => {
+    const { canceled, filePath } = await dialog.showSaveDialog({
+      title: 'Export Audio File',
+      defaultPath: defaultName || 'export.wav',
+      buttonLabel: 'Export',
+      filters: [
+        { name: 'Audio Files', extensions: ['wav', 'mp3', 'ogg'] },
+        { name: 'All Files', extensions: ['*'] }
+      ]
+    })
+    if (canceled) {
+      return null
+    } else {
+      return filePath
+    }
+  })
+
   ipcMain.handle('dialog:openFile', async (_event, options) => {
     const { canceled, filePaths } = await dialog.showOpenDialog({
       title: options?.title || 'Open File',

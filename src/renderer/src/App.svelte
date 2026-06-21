@@ -371,34 +371,19 @@
     console.log(`Element selected: ${(selectedElementData?.name as string) || 'Unknown'}`)
   }
 
-  function handleModelSelect(modelData: any): void {
-    selectOperationByName('generate', modelData)
-  }
-
   function handleImportLattice(modelData: any): void {
     initiatorNodeStore.set(modelData)
     actionPanelView = 'import-lattice'
   }
 
-  function handleLatticeSelectForGeneration(latticeData: any): void {
-    selectOperationByName('generate', latticeData)
-  }
-
-  function handleLatentSelectForGeneration(latentData: any): void {
-    selectOperationByName('generate', latentData)
-  }
-
-  function handleAudioNodeSelectForGeneration(audioData: any, useContext?: boolean): void {
-    selectOperationByName('generate', audioData, useContext)
-  }
-
-  function handleAudioNodeSelectForInversion(audioData: any): void {
-    selectOperationByName('invert', audioData)
-  }
-
-  function handleSelectOperation(op: any, initiatorNode: any): void {
+  function handleSelectOperation(op: any, initiatorNode: any, useContext = false): void {
     initiatorNodeStore.set(initiatorNode)
     selectedOperation.set(op)
+    if (useContext) {
+      contextStore.set(initiatorNode.context || null)
+    } else {
+      contextStore.set(null)
+    }
     actionPanelView = 'operation'
   }
 
@@ -414,7 +399,12 @@
 
   async function handleExport(data: { names: string[] }): Promise<void> {
     try {
-      const customPath = await window.api.selectDirectory()
+      let customPath: string | null = null
+      if (data.names.length === 1) {
+        customPath = await window.api.selectSavePath(`${data.names[0]}.wav`)
+      } else {
+        customPath = await window.api.selectDirectory()
+      }
       if (!customPath) return // User cancelled
 
       const response = await window.api.exportAudio(data.names, customPath)
@@ -480,9 +470,19 @@
       return ($initiatorNodeStore?.type as string) === 'batch' ? 'Update Batch' : 'Create Batch'
     }
     if (actionPanelView === 'operation') {
-      return $selectedOperation?.name
-        ? `Operation: ${$selectedOperation.name.toUpperCase()}`
-        : 'Operation'
+      if ($selectedOperation) {
+        const initiatorType = $initiatorNodeStore?.type
+        let displayName = $selectedOperation.name
+        if (
+          initiatorType &&
+          $selectedOperation.context_overrides &&
+          $selectedOperation.context_overrides[initiatorType]
+        ) {
+          displayName = $selectedOperation.context_overrides[initiatorType].name || $selectedOperation.name
+        }
+        return `Operation: ${displayName.toUpperCase()}`
+      }
+      return 'Operation'
     }
     return 'Action'
   }
@@ -673,12 +673,7 @@
     {showSpringEdges}
     {viewMode}
     onaudioSelect={handleAudioSelect}
-    onmodelSelect={handleModelSelect}
     onimportLattice={handleImportLattice}
-    onlatticeSelectForGeneration={handleLatticeSelectForGeneration}
-    onaudioNodeSelectForGeneration={handleAudioNodeSelectForGeneration}
-    onaudioNodeSelectForInversion={handleAudioNodeSelectForInversion}
-    onlatentSelectForGeneration={handleLatentSelectForGeneration}
     onnodeSelect={handleElementSelect}
     onexport={handleExport}
     onedgeSelect={handleElementSelect}

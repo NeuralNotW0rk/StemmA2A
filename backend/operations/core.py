@@ -3,11 +3,13 @@ import torchaudio.functional as F
 import numpy as np
 
 from .base import SyncOperation
+from .registry import register
 from param_graph.elements.artifacts.audio_element import Audio
 from param_graph.elements.base_elements import Asset
 from utils.audio import load_audio
 from utils.uid import XXH3_64
 
+@register
 class GainOperation(SyncOperation):
     @property
     def name(self) -> str:
@@ -16,6 +18,10 @@ class GainOperation(SyncOperation):
     @property
     def description(self) -> str:
         return "Applies a linear gain to the audio."
+
+    @property
+    def initiator_types(self) -> list:
+        return ["audio"]
 
     def get_form_config(self) -> list:
         return [
@@ -51,6 +57,7 @@ class GainOperation(SyncOperation):
         )
         return [(artifact, processed_tensor)]
 
+@register
 class NormalizeOperation(SyncOperation):
     @property
     def name(self) -> str:
@@ -59,6 +66,10 @@ class NormalizeOperation(SyncOperation):
     @property
     def description(self) -> str:
         return "Normalizes audio to a target peak level."
+
+    @property
+    def initiator_types(self) -> list:
+        return ["audio"]
 
     def get_form_config(self) -> list:
         return [
@@ -89,6 +100,7 @@ class NormalizeOperation(SyncOperation):
         )
         return [(artifact, processed_tensor)]
 
+@register
 class SliceOperation(SyncOperation):
     @property
     def name(self) -> str:
@@ -97,6 +109,10 @@ class SliceOperation(SyncOperation):
     @property
     def description(self) -> str:
         return "Slices audio into multiple chunks of a given duration."
+
+    @property
+    def initiator_types(self) -> list:
+        return ["audio"]
 
     def get_form_config(self) -> list:
         return [
@@ -133,6 +149,7 @@ class SliceOperation(SyncOperation):
                 
         return results
 
+@register
 class LibrosaOnsetSliceOperation(SyncOperation):
     @property
     def name(self) -> str:
@@ -141,6 +158,10 @@ class LibrosaOnsetSliceOperation(SyncOperation):
     @property
     def description(self) -> str:
         return "Slices audio into dynamic chunks based on transient onset detection."
+
+    @property
+    def initiator_types(self) -> list:
+        return ["audio"]
 
     def get_form_config(self) -> list:
         return [

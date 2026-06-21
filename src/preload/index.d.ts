@@ -8,6 +8,7 @@ interface API {
   openProject: () => Promise<string | null>
   newProject: () => Promise<string | null>
   selectDirectory: () => Promise<string | null>
+  selectSavePath: (defaultName?: string) => Promise<string | null>
   getRecentProjects: () => Promise<string[]>
   removeRecentProject: (projectPath: string) => Promise<void>
   addRecentProject: (projectPath: string) => Promise<void>

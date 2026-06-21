@@ -1560,15 +1560,54 @@ def export_audio():
     try:
         data = request.get_json()
         names = data.get('names', [])
-        export_name = data.get('export_name', 'export')
+        export_dir_str = data.get('export_dir')
         
         if not names:
             return jsonify({"error": "names list is required"}), 400
         
-        if len(names) == 1:
-            export_path = param_graph.export_single(names[0], export_name)
+        is_file_target = False
+        if export_dir_str:
+            export_path_obj = Path(export_dir_str)
+            if len(names) == 1 and export_path_obj.suffix:
+                export_dir = export_path_obj.parent
+                is_file_target = True
+            else:
+                export_dir = export_path_obj
         else:
-            export_path = param_graph.export_batch(names, export_name)
+            export_dir = Path(param_graph.root) / "export"
+        
+        export_dir.mkdir(parents=True, exist_ok=True)
+        
+        exported_paths = []
+        for name in names:
+            # Look up element by id or by name
+            element = None
+            if param_graph.G.has_node(name):
+                element = param_graph.get_element(name)
+            else:
+                for node_id, node_data in param_graph.G.nodes(data=True):
+                    if node_data.get('name') == name:
+                        element = param_graph.get_element(node_id)
+                        break
+            
+            if not element:
+                return jsonify({"error": f"Element '{name}' not found"}), 404
+            
+            audio_path = resolve_audio_path(element.id)
+            if not audio_path or not audio_path.exists():
+                return jsonify({"error": f"Audio file for element '{name}' not found"}), 404
+            
+            if is_file_target:
+                dest_path = export_path_obj
+            else:
+                dest_filename = f"{element.name}{audio_path.suffix}"
+                dest_path = export_dir / dest_filename
+            
+            shutil.copy2(audio_path, dest_path)
+            exported_paths.append(dest_path)
+        
+        # If we exported a single file, return that file's path. Otherwise return the export directory.
+        export_path = exported_paths[0] if len(exported_paths) == 1 else export_dir
         
         return jsonify({
             "message": "Export completed",

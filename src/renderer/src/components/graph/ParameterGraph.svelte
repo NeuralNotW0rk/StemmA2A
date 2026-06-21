@@ -18,16 +18,11 @@
     viewMode?: 'batch' | 'cluster'
     showSpringEdges?: boolean
     showDetailedLabels?: boolean
-    onmodelSelect?: (data: any) => void
     onaudioSelect?: (data: any) => void
-    onaudioNodeSelectForGeneration?: (data: any, useContext?: boolean) => void
-    onaudioNodeSelectForInversion?: (data: any) => void
     onexport?: (data: { names: string[] }) => void
     onimportLattice?: (data: any) => void
-    onlatticeSelectForGeneration?: (data: any) => void
     onrescanSource?: (name: string) => void
     onnodeSelect?: (data: any) => void
-    onlatentSelectForGeneration?: (data: any) => void
     onedgeSelect?: (data: any) => void
     onElementRemove?: (data: any) => void
     onstartBatching?: (data: any) => void
@@ -42,22 +37,17 @@
       newBatchId: string | null,
       newMembers: string[]
     ) => void | Promise<void>
-    onselectOperation?: (op: any, initiatorNode: any) => void
+    onselectOperation?: (op: any, initiatorNode: any, useContext?: boolean) => void
   }
 
   let {
     graphData = null,
     showSpringEdges = false,
     showDetailedLabels = true,
-    onmodelSelect,
     onaudioSelect,
-    onaudioNodeSelectForGeneration,
-    onaudioNodeSelectForInversion,
     onimportLattice,
-    onlatticeSelectForGeneration,
     onrescanSource,
     onexport,
-    onlatentSelectForGeneration,
     onnodeSelect,
     onedgeSelect,
     onElementRemove,
@@ -86,14 +76,44 @@
   let operationsError: string | null = $state(null)
 
   let filteredOperations = $derived.by(() => {
-    if (!searchQuery) return operations
+    const initiatorType = targetNode ? targetNode.data('type') : null
+    let ops = operations
+    if (initiatorType) {
+      ops = operations.filter((op) => {
+        return !op.initiator_types || op.initiator_types.length === 0 || op.initiator_types.includes(initiatorType)
+      })
+    }
+    if (!searchQuery) return ops
     const q = searchQuery.toLowerCase()
-    return operations.filter(
-      (op) =>
-        op.name.toLowerCase().includes(q) ||
-        (op.description && op.description.toLowerCase().includes(q))
-    )
+    return ops.filter((op) => {
+      const display = getOpDisplayProps(op, initiatorType)
+      return (
+        display.name.toLowerCase().includes(q) ||
+        (display.description && display.description.toLowerCase().includes(q))
+      )
+    })
   })
+
+  function getOpDisplayProps(op: any, initiatorType?: string) {
+    if (initiatorType && op.context_overrides && op.context_overrides[initiatorType]) {
+      const override = op.context_overrides[initiatorType]
+      return {
+        name: override.name || op.name,
+        description: override.description || op.description
+      }
+    }
+    return {
+      name: op.name,
+      description: op.description
+    }
+  }
+
+  function toTitleCase(str: string): string {
+    return str
+      .split(/[\s-_]+/)
+      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(' ')
+  }
 
   async function openOperationsMenu(node: any): Promise<void> {
     targetNode = node
@@ -346,10 +366,19 @@
     }
   })
 
-  function initializeGraph(): void {
+  async function initializeGraph(): Promise<void> {
     cytoscape.use(fcose)
     cytoscape.use(cxtmenu)
     cytoscape.use(popper(createPopper))
+
+    try {
+      const response = await window.api.getOperations()
+      if (response && response.success && Array.isArray(response.operations)) {
+        operations = response.operations
+      }
+    } catch (e) {
+      console.error('Failed to load operations for context menus:', e)
+    }
 
     cy = cytoscape({
       container: graphContainer,
@@ -377,6 +406,24 @@
 
     // --- Command Definitions (Inheritance-style) ---
 
+    const PINNED_OPERATIONS = new Set(['generate', 'invert'])
+
+    const getPinnedOperations = (ele: Singular): Command[] => {
+      if (!operations) return []
+      const type = ele.data('type')
+      return operations
+        .filter((op) => PINNED_OPERATIONS.has(op.name) && op.initiator_types && op.initiator_types.includes(type))
+        .map((op) => {
+          const display = getOpDisplayProps(op, type)
+          return {
+            content: toTitleCase(display.name),
+            select: () => {
+              onselectOperation?.(op, ele.data())
+            }
+          }
+        })
+    }
+
     const elementCommands = (ele: Singular): Command[] => [
       {
         content: 'Remove',
@@ -397,11 +444,7 @@
     ]
 
     const modelNodeCommands = (ele: Singular): Command[] => [
-      // Inherits from nodeCommands
-      {
-        content: 'Generate Audio',
-        select: () => onmodelSelect?.(ele.data())
-      },
+      ...getPinnedOperations(ele),
       {
         content: 'Import Lattice',
         select: () => onimportLattice?.(ele.data())
@@ -410,18 +453,12 @@
     ]
 
     const latticeNodeCommands = (ele: Singular): Command[] => [
-      {
-        content: 'Generate',
-        select: () => onlatticeSelectForGeneration?.(ele.data())
-      },
+      ...getPinnedOperations(ele),
       ...nodeCommands(ele)
     ]
 
     const latentNodeCommands = (ele: Singular): Command[] => [
-      {
-        content: 'Generate Audio',
-        select: () => onlatentSelectForGeneration?.(ele.data())
-      },
+      ...getPinnedOperations(ele),
       ...nodeCommands(ele)
     ]
 
@@ -439,17 +476,17 @@
       if (ele.data().context) {
         specificCommands.push({
           content: 'Replicate',
-          select: () => onaudioNodeSelectForGeneration?.(ele.data(), true)
+          select: () => {
+            const generateOp = operations.find((op) => op.name === 'generate')
+            if (generateOp && onselectOperation) {
+              onselectOperation(generateOp, ele.data(), true)
+            }
+          }
         })
       }
-      specificCommands.push({
-        content: 'Audio to Audio',
-        select: () => onaudioNodeSelectForGeneration?.(ele.data(), false)
-      })
-      specificCommands.push({
-        content: 'Invert',
-        select: () => onaudioNodeSelectForInversion?.(ele.data())
-      })
+      
+      // Inject pinned dynamic operations (e.g. Audio to Audio, Invert)
+      specificCommands.push(...getPinnedOperations(ele))
 
       // Only allow batch creation for independent artifacts
       if (!ele.data('parent')) {
@@ -1066,6 +1103,7 @@
         {:else}
           <ul class="operations-list">
             {#each filteredOperations as op, index}
+              {@const display = getOpDisplayProps(op, targetNode?.data('type'))}
               <li class="operation-item" class:active={index === selectedIndex}>
                 <button
                   type="button"
@@ -1073,13 +1111,13 @@
                   onmouseenter={() => (selectedIndex = index)}
                 >
                   <div class="op-title-row">
-                    <span class="op-name">{op.name.toUpperCase()}</span>
+                    <span class="op-name">{display.name.toUpperCase()}</span>
                     <span class="op-badge" class:async={op.execution_mode === 'async'}>
                       {op.execution_mode}
                     </span>
                   </div>
-                  {#if op.description}
-                    <div class="op-desc">{op.description}</div>
+                  {#if display.description}
+                    <div class="op-desc">{display.description}</div>
                   {/if}
                 </button>
               </li>

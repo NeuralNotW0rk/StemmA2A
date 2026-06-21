@@ -67,6 +67,17 @@ def health_check():
         "device": str(device_accelerator)
     })
 
+@app.route("/operations", methods=["GET"])
+async def get_operations():
+    """Gets the supported operations from the engine."""
+    try:
+        engine = engine_provider.get_engine()
+        ops = await engine.get_supported_operations()
+        return jsonify({"operations": ops, "success": True})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
 # --------------------
 #  Engine API
 # --------------------

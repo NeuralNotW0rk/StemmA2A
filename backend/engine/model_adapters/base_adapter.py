@@ -8,6 +8,18 @@ from param_graph.elements.base_elements import GraphElement
 from param_graph.elements.models.base_model_element import Model
 from utils.uid import UIDGenerator, XXH3_64
 
+def operation(name: str, is_standard: bool = True, description: str = "", initiator_types: list = None, context_overrides: dict = None):
+    """Decorator to mark and register an adapter method as a supported operation."""
+    def decorator(func):
+        func._is_operation = True
+        func._op_name = name
+        func._op_is_standard = is_standard
+        func._op_description = description
+        func._op_initiator_types = initiator_types or []
+        func._op_context_overrides = context_overrides or {}
+        return func
+    return decorator
+
 class ModelAdapter(ABC):
     def __init__(self, uid_generator: UIDGenerator = None) -> None:
         if uid_generator is None:

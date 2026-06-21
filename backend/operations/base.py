@@ -24,10 +24,22 @@ class SyncOperation(ABC):
     def get_form_config(self) -> list:
         """Returns UI form configuration for dynamic argument generation."""
         return []
+
+    @property
+    def initiator_types(self) -> list:
+        """Supported initiator node types. If empty, it's not restricted."""
+        return []
+
+    @property
+    def context_overrides(self) -> dict:
+        """Contextual naming/description overrides based on initiator type."""
+        return {}
         
     def to_dict(self):
         return {
             "name": self.name,
             "description": self.description,
-            "form_config": self.get_form_config()
+            "form_config": self.get_form_config(),
+            "initiator_types": self.initiator_types,
+            "context_overrides": self.context_overrides
         }

@@ -7,6 +7,8 @@ const api = {
   openProject: (): Promise<string | null> => ipcRenderer.invoke('dialog:openProject'),
   newProject: (): Promise<string | null> => ipcRenderer.invoke('dialog:newProject'),
   selectDirectory: (): Promise<string | null> => ipcRenderer.invoke('dialog:selectDirectory'),
+  selectSavePath: (defaultName?: string): Promise<string | null> =>
+    ipcRenderer.invoke('dialog:selectSavePath', defaultName),
   getRecentProjects: (): Promise<string[]> => ipcRenderer.invoke('getRecentProjects'),
   removeRecentProject: (projectPath: string): Promise<void> =>
     ipcRenderer.invoke('removeRecentProject', projectPath),

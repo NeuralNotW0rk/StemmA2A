@@ -12,7 +12,7 @@ from coolname import generate_slug
 from tqdm import tqdm
 from k_diffusion.sampling import get_sigmas_karras
 
-from .base_adapter import ModelAdapter
+from .base_adapter import ModelAdapter, operation
 from param_graph.elements.base_elements import Asset
 from param_graph.elements.artifacts.audio_element import Audio
 from param_graph.elements.artifacts.latent_element import Latent
@@ -93,6 +93,30 @@ class StableAudioAdapter(ModelAdapter):
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
+    @operation(
+        name="generate",
+        is_standard=True,
+        description="Generate audio from a generative model",
+        initiator_types=["model", "lattice", "latent", "audio"],
+        context_overrides={
+            "audio": {
+                "name": "audio-to-audio",
+                "description": "Perform audio-guided generation (audio-to-audio) using this node as initialization"
+            },
+            "lattice": {
+                "name": "generate from lattice",
+                "description": "Generate audio guided by the selected lattice structure"
+            },
+            "latent": {
+                "name": "generate from latent",
+                "description": "Generate audio guided by the selected latent structure"
+            },
+            "model": {
+                "name": "Generate Audio",
+                "description": "Generate audio from the selected generative model"
+            }
+        }
+    )
     def generate(self, **kwargs) -> tuple[Audio, torch.Tensor]:
         model = self.model.to(self.device)
         sample_rate = self.model_info.config["sample_rate"]
@@ -314,6 +338,12 @@ class StableAudioAdapter(ModelAdapter):
 
         return artifact, output
 
+    @operation(
+        name="invert",
+        is_standard=True,
+        description="Invert audio to a latent representation",
+        initiator_types=["audio"]
+    )
     def invert(self, **kwargs) -> tuple[Latent, torch.Tensor]:
         model = self.model.to(self.device)
         sample_rate = self.model_info.config["sample_rate"]

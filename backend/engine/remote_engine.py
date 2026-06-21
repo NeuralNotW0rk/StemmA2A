@@ -27,6 +27,22 @@ class RemoteEngine(Engine):
         model = adapter_instance.register_model(**kwargs)
         return model
 
+    async def get_supported_operations(self) -> list[dict]:
+        """Fetches supported operations from the remote engine."""
+        auth_headers = self._get_auth_headers()
+        timeout = aiohttp.ClientTimeout(total=self.timeout)
+
+        try:
+            async with aiohttp.ClientSession(headers=auth_headers, timeout=timeout) as session:
+                async with session.get(f"{self.remote_url}/operations") as response:
+                    response.raise_for_status()
+                    res = await response.json()
+                    return res.get("operations", [])
+        except Exception as e:
+            print(f"Failed to fetch supported operations from remote engine: {e}")
+            # Fallback to local default if remote call fails or is not available
+            return await super().get_supported_operations()
+
     def _get_auth_headers(self) -> dict:
         headers = {}
         if self.cf_client_id and self.cf_client_secret:
