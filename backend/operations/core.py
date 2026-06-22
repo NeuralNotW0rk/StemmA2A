@@ -143,7 +143,14 @@ class SliceOperation(SyncOperation):
                     file=Asset(path="", uid=content_uid, extension=".wav"),
                     sample_rate=sample_rate,
                     duration=float(chunk.shape[-1]) / sample_rate,
-                    context={"operation": self.name, "params": {"chunk_duration": chunk_duration}, "source_id": source_element.id}
+                    context={
+                        "operation": self.name,
+                        "params": {"chunk_duration": chunk_duration},
+                        "source_id": source_element.id,
+                        "index": len(results),
+                        "seconds_start": float(i) / sample_rate,
+                        "seconds_total": float(total_samples) / sample_rate,
+                    }
                 )
                 results.append((artifact, chunk))
                 
@@ -206,7 +213,14 @@ class LibrosaOnsetSliceOperation(SyncOperation):
                         file=Asset(path="", uid=content_uid, extension=".wav"),
                         sample_rate=sample_rate,
                         duration=float(chunk.shape[-1]) / sample_rate,
-                        context={"operation": self.name, "params": {"backtrack": backtrack}, "source_id": source_element.id}
+                        context={
+                            "operation": self.name,
+                            "params": {"backtrack": backtrack},
+                            "source_id": source_element.id,
+                            "index": len(results),
+                            "seconds_start": float(start) / sample_rate,
+                            "seconds_total": float(total_samples) / sample_rate,
+                        }
                     )
                     results.append((artifact, chunk))
                     

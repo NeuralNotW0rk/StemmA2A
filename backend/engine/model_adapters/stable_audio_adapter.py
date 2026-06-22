@@ -301,8 +301,9 @@ class StableAudioAdapter(ModelAdapter):
                 if is_euler:
                     k_samp.sample_heun = original_heun
 
-            # Trim silence
-            output = output[:,:,:int(seconds_total*sample_rate)]
+            # Trim silence to the remaining segment length
+            trim_duration = max(0.0, seconds_total - seconds_start)
+            output = output[:,:,:int(trim_duration*sample_rate)]
 
             # Rearrange audio batch to a single sequence
             print("Generation complete, rearranging...")
@@ -377,8 +378,9 @@ class StableAudioAdapter(ModelAdapter):
         else:
             raise FileNotFoundError(f"Audio path not found: {audio_path}")
 
-        # Crop/pad to exact length
-        target_length = int(seconds_total * sample_rate)
+        # Crop/pad to exact segment length (total track minus start offset)
+        trim_duration = max(0.0, seconds_total - seconds_start)
+        target_length = int(trim_duration * sample_rate)
         if source_audio_tensor.shape[-1] > target_length:
             source_audio_tensor = source_audio_tensor[:, :target_length]
         elif source_audio_tensor.shape[-1] < target_length:
