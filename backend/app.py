@@ -9,6 +9,10 @@ import logging
 import shutil
 from dataclasses import replace
 
+from dotenv import load_dotenv
+# Load .env file from the project root (parent directory)
+load_dotenv(Path(__file__).parent.parent / ".env")
+
 import threading
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
@@ -503,6 +507,7 @@ async def get_job_status(job_id):
 
     try:
         engine = engine_provider.get_engine()
+        
         status_info = await engine.get_job_status(job_id)
         status = status_info.get("status")
 
@@ -551,6 +556,7 @@ async def get_job_status(job_id):
                 "status": "completed",
                 "message": "Audio generated and registered successfully.",
                 "artifact": final_artifact.to_dict(),
+                "node_id": final_artifact.id,
                 "validated_params": job_context.get("validated_params")
             }), 200
 
@@ -584,6 +590,8 @@ async def cancel_job(job_id):
     try:
         engine = engine_provider.get_engine()
         await engine.cancel_job(job_id)
+        active_jobs.pop(job_id, None)
+            
         return jsonify({
             "message": f"Cancellation requested for job {job_id}.",
             "success": True
@@ -694,22 +702,22 @@ def _dispatch_sync_operation(data):
                     element.file = replace(element.file, path=str(valid_path))
                     node_args[arg_name] = element
         
-        # 2. Execute the agnostic operation pipeline
         process_results = op_instance.execute(
             device=device_accelerator, 
             sample_rate=APP_SAMPLE_RATE, 
             **node_args, 
             **validated_params
         )
-        
         is_batch = len(process_results) > 1
+        process_results_to_save = process_results
+            
         output_dir = param_graph.root / "process"
         output_dir.mkdir(parents=True, exist_ok=True)
         
         final_artifacts = []
         
         # 3. Agnostic artifact data saving based strictly on returned element Types
-        for artifact_blueprint, raw_data in process_results:
+        for artifact_blueprint, raw_data in process_results_to_save:
             local_path = data_cache_root / path_from_uid(artifact_blueprint.id)
             local_path.parent.mkdir(parents=True, exist_ok=True)
             
@@ -723,13 +731,32 @@ def _dispatch_sync_operation(data):
 
         # 4. Integrate into the graph
         collection_dict = None
+        req_batch_id = data.get("batch_id") or params.get("batch_id")
         with graph_lock:
             for artifact in final_artifacts:
                 param_graph.add_element(artifact)
+                
                 for source_el in source_elements:
                     param_graph.link(source_el, artifact, relation='source')
                 
-            if is_batch:
+            if req_batch_id:
+                if not param_graph.G.has_node(req_batch_id):
+                    # Create new batch element
+                    batch_node = Batch(id=req_batch_id, member_ids=[], member_type=final_artifacts[0].type)
+                    param_graph.add_element(batch_node)
+                    print(f"Created new batch element {req_batch_id} for sync operation")
+                
+                for artifact in final_artifacts:
+                    param_graph.update_element(artifact.id, {"parent": req_batch_id})
+                    batch_node_attrs = param_graph.G.nodes[req_batch_id]
+                    if 'member_ids' not in batch_node_attrs or not isinstance(batch_node_attrs['member_ids'], list):
+                        batch_node_attrs['member_ids'] = []
+                    if artifact.id not in batch_node_attrs['member_ids']:
+                        batch_node_attrs['member_ids'].append(artifact.id)
+                
+                update_batch_labels(req_batch_id)
+                collection_dict = param_graph.get_element(req_batch_id).to_dict()
+            elif is_batch:
                 member_ids = [a.id for a in final_artifacts]
                 batch_id = uid_generator.from_uids(member_ids)
                 batch = Batch(id=batch_id, member_ids=member_ids, member_type=final_artifacts[0].type)
@@ -750,12 +777,19 @@ def _dispatch_sync_operation(data):
             "status": "completed"
         }
         
-        if is_batch:
+        if req_batch_id:
+            response_data["artifact"] = final_artifacts[0].to_dict()
+            response_data["node_id"] = final_artifacts[0].id
+            if collection_dict:
+                response_data["collection"] = collection_dict
+        elif is_batch:
             response_data["artifacts"] = [a.to_dict() for a in final_artifacts]
             if collection_dict:
                 response_data["collection"] = collection_dict
+                response_data["node_id"] = collection_dict["id"]
         else:
             response_data["artifact"] = final_artifacts[0].to_dict()
+            response_data["node_id"] = final_artifacts[0].id
             
         return jsonify(response_data), 200
         

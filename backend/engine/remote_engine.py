@@ -1,4 +1,5 @@
 import aiohttp
+import asyncio
 import os
 import json
 from pathlib import Path
@@ -77,30 +78,33 @@ class RemoteEngine(Engine):
         auth_headers = self._get_auth_headers()
         timeout = aiohttp.ClientTimeout(total=self.timeout)
 
-        async with aiohttp.ClientSession(headers=auth_headers, timeout=timeout) as session:
-            while True:
-                async with session.post(f"{self.remote_url}/execute", data=json.dumps(payload),
-                                        headers={'Content-Type': 'application/json'}) as response:
-                    if response.status == 422:
-                        error_details = await response.json()
-                        missing_uids = error_details.get("missing_uids", [])
-                        if not missing_uids:
-                            response.raise_for_status()
+        try:
+            async with aiohttp.ClientSession(headers=auth_headers, timeout=timeout) as session:
+                while True:
+                    async with session.post(f"{self.remote_url}/execute", data=json.dumps(payload),
+                                             headers={'Content-Type': 'application/json'}) as response:
+                        if response.status == 422:
+                            error_details = await response.json()
+                            missing_uids = error_details.get("missing_uids", [])
+                            if not missing_uids:
+                                response.raise_for_status()
+                            
+                            can_retry = await self.upload_missing_assets(missing_uids, local_assets, session)
+                            if not can_retry:
+                                response.raise_for_status()
+                            continue
                         
-                        can_retry = await self.upload_missing_assets(missing_uids, local_assets, session)
-                        if not can_retry:
-                            response.raise_for_status()
-                        continue
-                    
-                    response.raise_for_status()
+                        response.raise_for_status()
 
-                    # The execute endpoint now returns a JSON with the job_id
-                    result_json = await response.json()
-                    job_id = result_json.get("job_id")
-                    if not job_id:
-                        raise Exception("Remote execute endpoint did not return a job_id.")
-                        
-                    return job_id
+                        # The execute endpoint now returns a JSON with the job_id
+                        result_json = await response.json()
+                        job_id = result_json.get("job_id")
+                        if not job_id:
+                            raise Exception("Remote execute endpoint did not return a job_id.")
+                            
+                        return job_id
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            raise Exception("Cannot reach engine service. Please verify that the remote server is running.") from e
 
     async def cancel_job(self, job_id: str) -> None:
         """Sends a cancellation request to the remote engine."""
@@ -125,49 +129,52 @@ class RemoteEngine(Engine):
         auth_headers = self._get_auth_headers()
         timeout = aiohttp.ClientTimeout(total=self.timeout)
 
-        async with aiohttp.ClientSession(headers=auth_headers, timeout=timeout) as session:
-            async with session.get(f"{self.remote_url}/job_status/{job_id}") as response:
-                response.raise_for_status()
+        try:
+            async with aiohttp.ClientSession(headers=auth_headers, timeout=timeout) as session:
+                async with session.get(f"{self.remote_url}/job_status/{job_id}") as response:
+                    response.raise_for_status()
 
-                status_info = await response.json()
+                    status_info = await response.json()
 
-                # If the job is complete and has a result, we need to download the file.
-                if status_info.get("status") == "completed" and "result" in status_info:
-                    result_dict = status_info["result"]
+                    # If the job is complete and has a result, we need to download the file.
+                    if status_info.get("status") == "completed" and "result" in status_info:
+                        result_dict = status_info["result"]
 
-                    # The result from the service IS the element dictionary.
-                    element_dict = result_dict
-                    if not element_dict or not isinstance(element_dict, dict) or "id" not in element_dict:
-                        return status_info  # Return as-is if there's no valid element
+                        # The result from the service IS the element dictionary.
+                        element_dict = result_dict
+                        if not element_dict or not isinstance(element_dict, dict) or "id" not in element_dict:
+                            return status_info  # Return as-is if there's no valid element
 
-                    result_element = resolve_element(element_dict)
+                        result_element = resolve_element(element_dict)
 
-                    async with session.get(f"{self.remote_url}/download_asset/{result_element.id}") as file_response:
-                        if file_response.status == 200:
-                            file_data = await file_response.read()
+                        async with session.get(f"{self.remote_url}/download_asset/{result_element.id}") as file_response:
+                            if file_response.status == 200:
+                                file_data = await file_response.read()
 
-                            # Save the file to a stable temporary location that won't be auto-deleted.
-                            tmp_root = Path(__file__).parent.parent / "tmp"
-                            tmp_root.mkdir(exist_ok=True)
+                                # Save the file to a stable temporary location that won't be auto-deleted.
+                                tmp_root = Path(__file__).parent.parent / "tmp"
+                                tmp_root.mkdir(exist_ok=True)
 
-                            # Construct the path from the UID to save locally.
-                            base_path = path_from_uid(result_element.id)
-                            local_path = tmp_root / base_path
+                                # Construct the path from the UID to save locally.
+                                base_path = path_from_uid(result_element.id)
+                                local_path = tmp_root / base_path
 
-                            local_path.parent.mkdir(parents=True, exist_ok=True)
-                            local_path.write_bytes(file_data)
+                                local_path.parent.mkdir(parents=True, exist_ok=True)
+                                local_path.write_bytes(file_data)
 
-                            # Anchor the element's path to the root of our stable temp directory.
-                            anchored_element = result_element.anchor(str(tmp_root), with_extension=False)
+                                # Anchor the element's path to the root of our stable temp directory.
+                                anchored_element = result_element.anchor(str(tmp_root), with_extension=False)
 
-                            # Replace the dict result with the anchored element's dict representation.
-                            status_info["result"] = anchored_element.to_dict()
-                        else:
-                            # If download fails, update status to reflect that
-                            status_info["status"] = "failed"
-                            status_info["error"] = f"Failed to download asset {result_element.id}"
+                                # Replace the dict result with the anchored element's dict representation.
+                                status_info["result"] = anchored_element.to_dict()
+                            else:
+                                # If download fails, update status to reflect that
+                                status_info["status"] = "failed"
+                                status_info["error"] = f"Failed to download asset {result_element.id}"
 
-                return status_info
+                    return status_info
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            raise Exception("Cannot reach engine service. Please verify that the remote server is running.") from e
 
     async def upload_missing_assets(self, missing_uids: list[str], local_assets: dict[str, str], session: aiohttp.ClientSession) -> bool:
         paths_to_upload = []

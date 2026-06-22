@@ -44,7 +44,17 @@ export interface AudioData {
   [key: string]: unknown
 }
 
-export type NodeData = ModelData | AudioData
+export interface BatchData {
+  id: string
+  name?: string
+  type: 'batch'
+  member_type: string
+  member_ids: string[]
+  alias?: string
+  [key: string]: unknown
+}
+
+export type NodeData = ModelData | AudioData | BatchData
 
 export function initializeFormData(
   fields: FormConfig,

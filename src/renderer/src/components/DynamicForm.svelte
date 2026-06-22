@@ -357,6 +357,13 @@
           label={field.label}
           filter={field.filter}
           bind:node={formData[field.name] as ModelData | AudioData}
+          onBatchToggle={(active) => {
+            if (active) {
+              batchFields.add(field.name)
+            } else {
+              batchFields.delete(field.name)
+            }
+          }}
           id={field.name}
         />
       {:else}

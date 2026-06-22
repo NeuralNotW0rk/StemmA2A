@@ -228,17 +228,18 @@
     return
   })
 
-  let isSelecting = $state(false)
-  let selectionFilter: Record<string, any> | null = $state(null)
-  let selectionBoundNodeId: string | null = $state(null)
-  selectionStore.subscribe((store) => {
-    isSelecting = store.isSelecting
-    selectionFilter = store.filter
-    selectionBoundNodeId = store.boundNodeId
-  })
+
 
   function matchesFilter(node: cytoscape.NodeSingular, filter: Record<string, any>): boolean {
     const data = node.data()
+
+    if (data.type === 'batch') {
+      const memberIds = data.member_ids || []
+      if (memberIds.length === 0) return false
+      const firstMember = node.cy().getElementById(memberIds[0])
+      if (!firstMember || firstMember.length === 0) return false
+      return matchesFilter(firstMember, filter)
+    }
     for (const [key, expectedValue] of Object.entries(filter)) {
       // Special evaluation: Exclude specified nodes
       if (key === '_exclude_node_ids') {
@@ -318,14 +319,16 @@
         // We do NOT remove 'bound' here. NodeSelectors naturally manage their own 'bound' class!
         cy.elements().removeClass('highlighted dimmed bound-active bound-other')
 
-        if (isSelecting && selectionFilter) {
+        if ($selectionStore.isSelecting) {
+          const filter = $selectionStore.filter || {}
+          console.log('[ParameterGraph] Selection active. Filter is:', JSON.stringify(filter))
           // 1. Dim everything by default
           cy.elements().addClass('dimmed')
 
           // 2. Identify valid candidates based on the filter
           const highlightedNodes = cy
             .nodes()
-            .filter((node) => matchesFilter(node, selectionFilter!))
+            .filter((node) => matchesFilter(node, filter))
           const ancestorNodes = highlightedNodes.ancestors()
 
           // 3. Un-dim and highlight valid candidates, and keep their structural ancestors visible
@@ -333,8 +336,8 @@
           ancestorNodes.removeClass('dimmed')
 
           // 4. Force the active bound node to show its indicator and un-dim it
-          if (selectionBoundNodeId) {
-            cy.getElementById(String(selectionBoundNodeId))
+          if ($selectionStore.boundNodeId) {
+            cy.getElementById(String($selectionStore.boundNodeId))
               .removeClass('highlighted dimmed')
               .addClass('bound-active')
           }
@@ -637,10 +640,10 @@
       const node = evt.target
       const nodeData = node.data()
 
-      if (isSelecting) {
+      if ($selectionStore.isSelecting) {
         console.log('[ParameterGraph] Node tapped during selection:', nodeData.id)
 
-        if (!selectionFilter || matchesFilter(node, selectionFilter)) {
+        if (!$selectionStore.filter || matchesFilter(node, $selectionStore.filter)) {
           console.log('[ParameterGraph] Valid node clicked. Resolving selection:', nodeData)
           // Pass a clean clone of the data to avoid Svelte 5 proxy / Cytoscape internal conflicts
           selectionStore.resolveSelection({ ...nodeData })
@@ -1110,7 +1113,7 @@
   }}
 />
 
-<div class="graph-wrapper" class:selecting={isSelecting}>
+<div class="graph-wrapper" class:selecting={$selectionStore.isSelecting}>
   <div bind:this={graphContainer} class="graph-container"></div>
 
   {#if operationsMenuOpen}

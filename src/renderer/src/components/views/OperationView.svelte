@@ -3,7 +3,7 @@
   import { tick, onDestroy, untrack } from 'svelte'
   import type { FormConfig, FormField, NodeData } from '../../utils/forms'
   import { initializeFormData } from '../../utils/forms'
-  import { initiatorNodeStore, selectedOperation, contextStore } from '../../utils/stores'
+  import { initiatorNodeStore, selectedOperation, contextStore, cyInstanceStore } from '../../utils/stores'
   import { startExecution } from '../../utils/execution'
   import DynamicForm from '../DynamicForm.svelte'
   import NodeSelectorList, { type NodeListItem } from '../NodeSelectorList.svelte'
@@ -124,16 +124,41 @@
   $effect(() => {
     const op = $selectedOperation
     const modelNode = formData.model
+    const cy = $cyInstanceStore
 
     untrack(() => {
       if (op && op.execution_mode === 'async' && modelNode) {
         const isObj = typeof modelNode === 'object' && modelNode !== null
-        const modelId = isObj
+        const rawModelId = isObj
           ? String((modelNode as Record<string, unknown>).id || '')
           : String(modelNode)
-        const adapter = isObj
+        
+        // Extract the first model ID if it is a comma-separated list
+        const modelId = rawModelId.split(',')[0].trim()
+
+        let adapter = isObj
           ? ((modelNode as Record<string, unknown>).adapter as string | null)
           : null
+        let modelType = isObj
+          ? ((modelNode as Record<string, unknown>).model_type as string | null)
+          : null
+
+        if (cy && modelId) {
+          const cyNode = cy.$id(modelId)
+          if (cyNode && cyNode.length > 0) {
+            if (!adapter) {
+              adapter = cyNode.data('adapter') as string | null
+            }
+            if (!modelType) {
+              modelType = cyNode.data('model_type') as string | null
+            }
+          }
+        }
+
+        // Expose model_type at the top level of formData for show_if visibility rules
+        if (modelType && formData.model_type !== modelType) {
+          formData.model_type = modelType
+        }
 
         if (adapter) {
           if (modelId !== lastLoadedModelId) {
@@ -143,6 +168,7 @@
         } else {
           adapterFields = []
           lastLoadedModelId = null
+          formData.model_type = null
         }
       } else {
         adapterFields = []
@@ -176,6 +202,7 @@
     } catch (e: unknown) {
       console.error('Failed to load adapter fields:', e)
       error = e instanceof Error ? e.message : String(e)
+      lastLoadedModelId = null
     } finally {
       isLoading = false
     }
@@ -241,15 +268,15 @@
       }
     }
 
-    // Add fallback properties for backend compatibility
-    if (basePayload.source_audio && !basePayload.source_audio_id) {
-      basePayload.source_audio_id = basePayload.source_audio
-    }
-    if (basePayload.model && !basePayload.model_id) {
-      basePayload.model_id = basePayload.model
-    }
-
     if (batchFields.size === 0) {
+      // Add fallback properties for backend compatibility
+      if (basePayload.source_audio && !basePayload.source_audio_id) {
+        basePayload.source_audio_id = basePayload.source_audio
+      }
+      if (basePayload.model && !basePayload.model_id) {
+        basePayload.model_id = basePayload.model
+      }
+
       // Single run
       runJob(jobName, basePayload, op.name, op.execution_mode)
       onClose()
@@ -283,6 +310,15 @@
         combination.forEach((value, index) => {
           batchPayload[paramNames[index]] = value
         })
+
+        // Add fallback properties for backend compatibility
+        if (batchPayload.source_audio && !batchPayload.source_audio_id) {
+          batchPayload.source_audio_id = batchPayload.source_audio
+        }
+        if (batchPayload.model && !batchPayload.model_id) {
+          batchPayload.model_id = batchPayload.model
+        }
+
         batchPayload.batch_id = batchId
 
         runJob(jobName, batchPayload, op.name, op.execution_mode)

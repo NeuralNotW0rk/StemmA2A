@@ -157,6 +157,12 @@ const defaultStyle: CssStyleDeclaration[] = [
     }
   },
   {
+    selector: 'node[type="batch"][member_type="latent"]',
+    style: {
+      'border-color': latentColor
+    }
+  },
+  {
     selector: 'node.compatible-drop-target',
     style: {
       'border-color': validColor,
@@ -279,10 +285,7 @@ const defaultStyle: CssStyleDeclaration[] = [
     style: {
       'border-color': 'yellow',
       'border-width': 4,
-      'border-style': 'solid',
-      'shadow-blur': 20,
-      'shadow-color': 'yellow',
-      'shadow-opacity': 0.8
+      'border-style': 'solid'
     }
   },
   {
@@ -290,10 +293,7 @@ const defaultStyle: CssStyleDeclaration[] = [
     style: {
       'border-color': validColor,
       'border-width': 4,
-      'border-style': 'solid',
-      'shadow-blur': 20,
-      'shadow-color': validColor,
-      'shadow-opacity': 0.8
+      'border-style': 'solid'
     }
   },
   {

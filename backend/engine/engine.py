@@ -50,12 +50,12 @@ class Engine(ABC):
                                 "initiator_types": set(initiator_types),
                                 "context_overrides": dict(context_overrides),
                                 "form_config": [
-                                    {"name": "model", "type": "node", "label": "Model", "required": True}
+                                    {"name": "model", "type": "node", "label": "Model", "filter": {"type": "model"}, "required": True}
                                 ]
                             }
                             if op_name == "invert":
                                 supported_ops[op_name]["form_config"].append(
-                                    {"name": "source_audio", "type": "node", "label": "Source Audio", "required": True}
+                                    {"name": "source_audio", "type": "node", "label": "Source Audio", "filter": {"type": "audio"}, "required": True}
                                 )
                         else:
                             supported_ops[op_name]["initiator_types"].update(initiator_types)
@@ -68,7 +68,7 @@ class Engine(ABC):
                             "initiator_types": list(initiator_types),
                             "context_overrides": dict(context_overrides),
                             "form_config": [
-                                {"name": "model", "type": "node", "label": "Model", "required": True}
+                                {"name": "model", "type": "node", "label": "Model", "filter": {"type": "model"}, "required": True}
                             ]
                         }
 
