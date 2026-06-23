@@ -3,7 +3,12 @@
   import { tick, onDestroy, untrack } from 'svelte'
   import type { FormConfig, FormField, NodeData } from '../../utils/forms'
   import { initializeFormData } from '../../utils/forms'
-  import { initiatorNodeStore, selectedOperation, contextStore, cyInstanceStore } from '../../utils/stores'
+  import {
+    initiatorNodeStore,
+    selectedOperation,
+    contextStore,
+    cyInstanceStore
+  } from '../../utils/stores'
   import { startExecution } from '../../utils/execution'
   import DynamicForm from '../DynamicForm.svelte'
   import NodeSelectorList, { type NodeListItem } from '../NodeSelectorList.svelte'
@@ -29,6 +34,20 @@
 
   // Lattices sub-selection state (for generation operation)
   let selectedLattices: NodeListItem[] = $state([])
+
+  let parentBatchId = $derived.by(() => {
+    const cy = $cyInstanceStore
+    const node = $initiatorNodeStore
+    if (cy && node && node.parent) {
+      const parentNode = cy.$id(node.parent)
+      if (parentNode && parentNode.length > 0 && parentNode.data('type') === 'batch') {
+        return node.parent
+      }
+    }
+    return null
+  })
+
+  let addToSameBatch = $state(true)
 
   onDestroy(() => {
     // Clear state on destroy
@@ -56,6 +75,7 @@
       adapterFields = []
       selectedLattices = []
       lastLoadedModelId = null
+      addToSameBatch = true
 
       const baseFieldsConfig = (op.form_config || []) as FormConfig
 
@@ -132,7 +152,7 @@
         const rawModelId = isObj
           ? String((modelNode as Record<string, unknown>).id || '')
           : String(modelNode)
-        
+
         // Extract the first model ID if it is a comma-separated list
         const modelId = rawModelId.split(',')[0].trim()
 
@@ -277,6 +297,10 @@
         basePayload.model_id = basePayload.model
       }
 
+      if (parentBatchId && addToSameBatch) {
+        basePayload.batch_id = parentBatchId
+      }
+
       // Single run
       runJob(jobName, basePayload, op.name, op.execution_mode)
       onClose()
@@ -303,7 +327,10 @@
 
       console.log(`Starting batch execution with ${combinations.length} combinations.`)
 
-      const batchId = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
+      const batchId =
+        parentBatchId && addToSameBatch
+          ? parentBatchId
+          : `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
 
       combinations.forEach((combination) => {
         const batchPayload: Record<string, unknown> = { ...staticParams }
@@ -388,7 +415,16 @@
         </div>
       {/if}
 
-      {#if !fieldsConfig || fieldsConfig.length === 0}
+      {#if parentBatchId}
+        <div class="options">
+          <label>
+            <input type="checkbox" bind:checked={addToSameBatch} disabled={isRunning} />
+            Add new artifact to the same batch
+          </label>
+        </div>
+      {/if}
+
+      {#if (!fieldsConfig || fieldsConfig.length === 0) && !parentBatchId}
         <p class="centered-text">No parameters needed for this operation.</p>
       {/if}
     {:else}
@@ -453,5 +489,23 @@
     border-top: 1px solid var(--color-border-glass-1);
     background-color: var(--color-background-glass-2);
     flex-shrink: 0;
+  }
+  .options {
+    margin-top: 1.5rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--color-border-glass-1);
+  }
+  .options label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    cursor: pointer;
+    font-size: 0.9rem;
+    color: var(--color-overlay-text);
+  }
+  .options input[type='checkbox'] {
+    cursor: pointer;
+    width: auto;
+    margin: 0;
   }
 </style>

@@ -13,9 +13,7 @@
   let keepChildren = $state(true)
 
   let elements = $derived(
-    Array.isArray($selectedForRemoval)
-      ? $selectedForRemoval
-      : [$selectedForRemoval].filter(Boolean)
+    Array.isArray($selectedForRemoval) ? $selectedForRemoval : [$selectedForRemoval].filter(Boolean)
   )
 
   async function remove(): Promise<void> {
@@ -23,7 +21,7 @@
 
     isRemoving = true
     try {
-      const ids = elements.map(el => el.id)
+      const ids = elements.map((el) => el.id)
       await window.api.removeElements(ids, keepChildren)
       onrefresh()
     } catch (e: unknown) {
@@ -40,14 +38,14 @@
   {#if elements.length > 0}
     <h2>Confirm Removal</h2>
     <p>
-      Are you sure you want to remove 
+      Are you sure you want to remove
       {#if elements.length > 1}
         these {elements.length} elements?
       {:else}
         the following element?
       {/if}
     </p>
-    
+
     {#if elements.length === 1}
       <div class="element-info">
         <strong>{elements[0].id}</strong>
@@ -55,11 +53,11 @@
       </div>
     {/if}
 
-    {#if elements.some(el => el.type === 'batch' || el.type === 'directory')}
+    {#if elements.some((el) => el.type === 'batch' || el.type === 'directory')}
       <div class="options">
         <label>
           <input type="checkbox" bind:checked={keepChildren} disabled={isRemoving} />
-          {#if elements.some(el => el.type === 'batch')}
+          {#if elements.some((el) => el.type === 'batch')}
             Keep child elements (disband batch)
           {:else}
             Keep contained files

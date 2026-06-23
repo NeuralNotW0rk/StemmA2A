@@ -6,5 +6,5 @@ from param_graph.registry import register
 @register('batch')
 @dataclass(kw_only=True)
 class Batch(Collection):
-    member_type: str
+    member_type: str | None = None
     type: str = 'batch'

@@ -1,11 +1,9 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte'
-  import type { ModelData, AudioData } from '../utils/forms'
+  import type { NodeData, BatchData } from '../utils/forms'
   import { selectionStore, cyInstanceStore } from '../utils/stores'
   import type { NodeSingular } from 'cytoscape'
   import NodeSelector from './NodeSelector.svelte'
-
-  type NodeData = ModelData | AudioData
 
   let {
     label,
@@ -71,7 +69,13 @@
 
   $effect(() => {
     // Auto-resolve node if it was passed as a string ID (e.g., from form initialization)
-    if (!isBatchMode && node && typeof node === 'string' && !node.includes(',') && $cyInstanceStore) {
+    if (
+      !isBatchMode &&
+      node &&
+      typeof node === 'string' &&
+      !node.includes(',') &&
+      $cyInstanceStore
+    ) {
       selectNodeById(node)
     }
   })
@@ -80,7 +84,9 @@
   const showBatchToggle = $derived(allowBatchToggle)
 
   let nextBatchItemId = 0
-  let batchItems = $state<{ id: number; node: NodeData | string | null; autoActivate?: boolean }[]>([])
+  let batchItems = $state<{ id: number; node: NodeData | string | null; autoActivate?: boolean }[]>(
+    []
+  )
 
   // Watch for changes in isBatchMode to sync node and batchItems
   $effect(() => {
@@ -89,8 +95,8 @@
         if (node) {
           let ids: string[] = []
           if (typeof node === 'object' && node !== null && 'id' in node) {
-            if (node.type === 'batch' && (node as any).member_ids && $cyInstanceStore) {
-              ids = (node as any).member_ids as string[]
+            if (node.type === 'batch' && (node as BatchData).member_ids && $cyInstanceStore) {
+              ids = (node as BatchData).member_ids
             } else {
               ids = [node.id]
             }
@@ -100,7 +106,10 @@
             if (cy && cy.$id(nodeStr).data('type') === 'batch') {
               ids = cy.$id(nodeStr).data('member_ids') || []
             } else {
-              ids = nodeStr.split(',').map(s => s.trim()).filter(Boolean)
+              ids = nodeStr
+                .split(',')
+                .map((s) => s.trim())
+                .filter(Boolean)
             }
           }
           batchItems = ids.map((id) => ({ id: nextBatchItemId++, node: id, autoActivate: false }))
@@ -117,13 +126,13 @@
   $effect(() => {
     if (isBatchMode && batchItems.length > 0) {
       const ids = batchItems
-        .map(item => {
+        .map((item) => {
           const n = item.node
           if (!n) return ''
           return typeof n === 'string' ? n : n.id
         })
         .filter(Boolean)
-      
+
       const newStringVal = ids.join(', ')
       if (node !== newStringVal) {
         node = newStringVal
@@ -150,21 +159,29 @@
       isSelecting = false
       if (selected) {
         const selectedNode = selected as NodeData
-        
+
         // If selecting a Batch/container node in single-selection mode, auto-toggle batch mode and unpack
-        if (!isBatchMode && allowBatchToggle && selectedNode.type === 'batch' && (selectedNode as any).member_ids && $cyInstanceStore) {
+        if (
+          !isBatchMode &&
+          allowBatchToggle &&
+          selectedNode.type === 'batch' &&
+          (selectedNode as BatchData).member_ids &&
+          $cyInstanceStore
+        ) {
           isBatchMode = true
           if (onBatchToggle) {
             onBatchToggle(true)
           }
-          
+
           const cy = $cyInstanceStore
-          const memberIds = (selectedNode as any).member_ids as string[]
-          const memberNodes = memberIds
-            .map(mId => cy.$id(mId).data() as NodeData)
-            .filter(Boolean)
-            
-          batchItems = memberNodes.map((member) => ({ id: nextBatchItemId++, node: member, autoActivate: false }))
+          const memberIds = (selectedNode as BatchData).member_ids
+          const memberNodes = memberIds.map((mId) => cy.$id(mId).data() as NodeData).filter(Boolean)
+
+          batchItems = memberNodes.map((member) => ({
+            id: nextBatchItemId++,
+            node: member,
+            autoActivate: false
+          }))
         } else {
           node = selectedNode
           if (onNodeSelect) onNodeSelect(selectedNode)
@@ -173,15 +190,15 @@
     })
   }
 
-  function toggleBatchMode() {
+  function toggleBatchMode(): void {
     isBatchMode = !isBatchMode
     if (onBatchToggle) {
       onBatchToggle(isBatchMode)
     }
-    
+
     if (!isBatchMode) {
       // Transitioning back to single selection: take the first non-empty node if available
-      const firstNonEmpty = batchItems.find(item => item.node !== null)
+      const firstNonEmpty = batchItems.find((item) => item.node !== null)
       node = firstNonEmpty ? firstNonEmpty.node : null
     }
   }
@@ -227,21 +244,23 @@
     }
   }
 
-  function handleChildNodeSelect(selectedNode: NodeData, index: number) {
-    if (selectedNode.type === 'batch' && (selectedNode as any).member_ids && $cyInstanceStore) {
+  function handleChildNodeSelect(selectedNode: NodeData, index: number): void {
+    if (
+      selectedNode.type === 'batch' &&
+      (selectedNode as BatchData).member_ids &&
+      $cyInstanceStore
+    ) {
       const cy = $cyInstanceStore
-      const memberIds = (selectedNode as any).member_ids as string[]
-      const memberNodes = memberIds
-        .map(mId => cy.$id(mId).data() as NodeData)
-        .filter(Boolean)
-      
+      const memberIds = (selectedNode as BatchData).member_ids
+      const memberNodes = memberIds.map((mId) => cy.$id(mId).data() as NodeData).filter(Boolean)
+
       if (memberNodes.length > 0) {
         // Clear the current slot so we don't bind to the batch node itself
         batchItems[index].node = null
 
         const existingIds = new Set(
           batchItems
-            .map(item => {
+            .map((item) => {
               const n = item.node
               if (!n) return ''
               return typeof n === 'string' ? n : n.id
@@ -269,14 +288,14 @@
   {#if label}
     <label for={id}>{label}</label>
   {/if}
-  
+
   {#if isBatchMode}
     <div class="batch-list-container">
       {#each batchItems as item, index (item.id)}
         <div class="batch-item-row">
           <div class="batch-item-selector">
             <NodeSelector
-              filter={filter}
+              {filter}
               bind:node={batchItems[index].node}
               allowBatchToggle={false}
               isNested={true}
@@ -291,7 +310,7 @@
             type="button"
             class="remove-item-btn"
             onclick={() => {
-              batchItems = batchItems.filter(i => i.id !== item.id)
+              batchItems = batchItems.filter((i) => i.id !== item.id)
               if (batchItems.length === 0) {
                 batchItems = [{ id: nextBatchItemId++, node: null, autoActivate: false }]
               }

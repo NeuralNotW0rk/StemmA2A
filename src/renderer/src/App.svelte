@@ -14,6 +14,7 @@
   import JobStatusView from './components/views/JobStatusView.svelte'
   import OperationView from './components/views/OperationView.svelte'
   import { onMount, onDestroy } from 'svelte'
+  import { SvelteSet } from 'svelte/reactivity'
   import {
     initiatorNodeStore,
     contextStore,
@@ -60,17 +61,27 @@
     $jobStore.some((job) => ['running', 'pending'].includes(job.status))
   )
 
+  let knownJobIds = new SvelteSet<string>()
+
   $effect(() => {
     const unsub = jobStore.subscribe((jobs) => {
-      // Find jobs that have just succeeded
-      const newlySucceeded = jobs.find((job) => job.status === 'success' && !job.result?.viewed)
+      let shouldRefresh = false
 
-      if (newlySucceeded) {
-        refreshGraphData()
-        // Mark as viewed to prevent re-triggering
-        if (newlySucceeded.result) {
-          newlySucceeded.result.viewed = true
+      for (const job of jobs) {
+        if (!knownJobIds.has(job.id)) {
+          knownJobIds.add(job.id)
+          shouldRefresh = true
         }
+        if (job.status === 'success' && !job.result?.viewed) {
+          shouldRefresh = true
+          if (job.result) {
+            job.result.viewed = true
+          }
+        }
+      }
+
+      if (shouldRefresh) {
+        refreshGraphData()
       }
     })
     return unsub
@@ -90,31 +101,6 @@
       }
     } catch (error) {
       console.error('Failed to pre-load operations:', error)
-    }
-  }
-
-  async function selectOperationByName(
-    name: string,
-    initiatorNode: any,
-    useContext = false
-  ): Promise<void> {
-    let op = allOperations.find((o) => o.name === name)
-    if (!op) {
-      await loadOperations()
-      op = allOperations.find((o) => o.name === name)
-    }
-
-    if (op) {
-      initiatorNodeStore.set(initiatorNode)
-      selectedOperation.set(op)
-      if (useContext) {
-        contextStore.set(initiatorNode.context || null)
-      } else {
-        contextStore.set(null)
-      }
-      actionPanelView = 'operation'
-    } else {
-      console.error(`Operation "${name}" not found in registered operations.`)
     }
   }
 
@@ -255,6 +241,7 @@
       const projectName = data.project_name || data.project_path?.split(/[/\\]/).pop()
       console.log(`Loading project: ${projectName}`)
       await window.api.loadProject(data)
+      await loadOperations()
       graphData = await window.api.getGraphData(viewMode)
       currentProject = projectName || null
       if (data.project_path) {
@@ -274,6 +261,7 @@
     const projectName = data.project_name || data.project_path?.split(/[/\\]/).pop()
     console.log(`Creating project: ${projectName} at ${data.project_path}`)
     await window.api.createProject(data) // Pass the whole data object
+    await loadOperations()
     graphData = await window.api.getGraphData(viewMode)
     currentProject = projectName || null
     if (data.project_path) {
@@ -468,7 +456,12 @@
       return 'Confirm Removal'
     }
     if (actionPanelView === 'batching') {
-      return ($initiatorNodeStore?.type as string) === 'batch' ? 'Update Batch' : 'Create Batch'
+      const initNode = $initiatorNodeStore
+      if (initNode?.type === 'batch') {
+        const memberIds = (initNode as any).member_ids || []
+        return memberIds.length === 0 ? 'Create Batch' : 'Update Batch'
+      }
+      return 'Create Batch'
     }
     if (actionPanelView === 'operation') {
       if ($selectedOperation) {
@@ -479,7 +472,8 @@
           $selectedOperation.context_overrides &&
           $selectedOperation.context_overrides[initiatorType]
         ) {
-          displayName = $selectedOperation.context_overrides[initiatorType].name || $selectedOperation.name
+          displayName =
+            $selectedOperation.context_overrides[initiatorType].name || $selectedOperation.name
         }
         return `Operation: ${displayName.toUpperCase()}`
       }
@@ -497,15 +491,6 @@
         title: 'Favorite Toggle Failed',
         message: error.message || String(error)
       }
-    }
-  }
-
-  async function handleUpdateElement(id: string, attributes: Record<string, any>): Promise<void> {
-    try {
-      await window.api.updateElement(id, attributes)
-    } catch (error: any) {
-      console.error('Error updating element:', error)
-      errorInInfoPanel = { title: 'Update Failed', message: error.message || String(error) }
     }
   }
 
@@ -684,10 +669,10 @@
     onsavePositions={handleSavePositions}
     onexpandPath={handleExpandPath}
     ontoggleFavorite={handleToggleFavorite}
-    onupdateElement={handleUpdateElement}
     {showDetailedLabels}
     onchangeBatchMembership={handleChangeBatchMembership}
     onselectOperation={handleSelectOperation}
+    onrefresh={refreshGraphData}
   />
   {#if audioSrc}
     <AudioPlayer src={audioSrc} title={audioTitle} onclose={() => (audioSrc = null)} />

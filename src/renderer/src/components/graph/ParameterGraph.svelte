@@ -14,7 +14,9 @@
   import { BATCHING_CONFIG } from '../../utils/app-config'
 
   interface Props {
-    graphData?: { elements: cytoscape.ElementDefinition[] } | null
+    graphData?: {
+      elements: cytoscape.ElementDefinition[] | cytoscape.ElementsDefinition
+    } | null
     viewMode?: 'batch' | 'cluster'
     showSpringEdges?: boolean
     showDetailedLabels?: boolean
@@ -30,7 +32,6 @@
     onsavePositions?: (positions: Record<string, { x: number; y: number }>) => void | Promise<void>
     onexpandPath?: (id: string) => void
     ontoggleFavorite?: (data: any, isFavorite: boolean) => void
-    onupdateElement?: (id: string, attributes: Record<string, any>) => void
     onchangeBatchMembership?: (
       nodeId: string,
       oldBatchId: string | null,
@@ -39,6 +40,7 @@
       newMembers: string[]
     ) => void | Promise<void>
     onselectOperation?: (op: any, initiatorNode: any, useContext?: boolean) => void
+    onrefresh?: () => void | Promise<void>
   }
 
   let {
@@ -57,9 +59,9 @@
     onsavePositions,
     onexpandPath,
     ontoggleFavorite,
-    onupdateElement,
     onchangeBatchMembership,
-    onselectOperation
+    onselectOperation,
+    onrefresh
   }: Props = $props()
 
   let graphContainer: HTMLElement | undefined = $state()
@@ -83,13 +85,18 @@
   let searchInput: HTMLInputElement | null = $state(null)
   let loadingOperations = $state(false)
   let operationsError: string | null = $state(null)
+  let lastCxtTapPosition = { x: 0, y: 0 }
 
   let filteredOperations = $derived.by(() => {
     const initiatorType = targetNode ? targetNode.data('type') : null
     let ops = operations
     if (initiatorType) {
       ops = operations.filter((op) => {
-        return !op.initiator_types || op.initiator_types.length === 0 || op.initiator_types.includes(initiatorType)
+        return (
+          !op.initiator_types ||
+          op.initiator_types.length === 0 ||
+          op.initiator_types.includes(initiatorType)
+        )
       })
     }
     if (!searchQuery) return ops
@@ -103,7 +110,10 @@
     })
   })
 
-  function getOpDisplayProps(op: any, initiatorType?: string) {
+  function getOpDisplayProps(
+    op: any,
+    initiatorType?: string
+  ): { name: string; description?: string } {
     if (initiatorType && op.context_overrides && op.context_overrides[initiatorType]) {
       const override = op.context_overrides[initiatorType]
       return {
@@ -209,7 +219,7 @@
         ]
       })
 
-      const update = () => {
+      const update = (): void => {
         if (popperInstance) popperInstance.update()
       }
 
@@ -225,10 +235,8 @@
         }
       }
     }
-    return
+    return undefined
   })
-
-
 
   function matchesFilter(node: cytoscape.NodeSingular, filter: Record<string, any>): boolean {
     const data = node.data()
@@ -326,9 +334,7 @@
           cy.elements().addClass('dimmed')
 
           // 2. Identify valid candidates based on the filter
-          const highlightedNodes = cy
-            .nodes()
-            .filter((node) => matchesFilter(node, filter))
+          const highlightedNodes = cy.nodes().filter((node) => matchesFilter(node, filter))
           const ancestorNodes = highlightedNodes.ancestors()
 
           // 3. Un-dim and highlight valid candidates, and keep their structural ancestors visible
@@ -424,7 +430,12 @@
       if (!operations) return []
       const type = ele.data('type')
       return operations
-        .filter((op) => PINNED_OPERATIONS.has(op.name) && op.initiator_types && op.initiator_types.includes(type))
+        .filter(
+          (op) =>
+            PINNED_OPERATIONS.has(op.name) &&
+            op.initiator_types &&
+            op.initiator_types.includes(type)
+        )
         .map((op) => {
           const display = getOpDisplayProps(op, type)
           return {
@@ -520,22 +531,14 @@
           }
         }
       ]
-      
+
       const replicateCmd = getReplicateCommand(ele)
       if (replicateCmd) {
         specificCommands.push(replicateCmd)
       }
-      
+
       // Inject pinned dynamic operations (e.g. Audio to Audio, Invert)
       specificCommands.push(...getPinnedOperations(ele))
-
-      // Only allow batch creation for independent artifacts
-      if (!ele.data('parent')) {
-        specificCommands.push({
-          content: 'Create Batch',
-          select: () => onstartBatching?.(ele.data())
-        })
-      }
 
       specificCommands.push({
         content: 'Export',
@@ -592,7 +595,24 @@
       selector: 'core',
       commands: [
         { content: 'Tidy', select: tidyView },
-        { content: 'Fit', select: fitView }
+        { content: 'Fit', select: fitView },
+        {
+          content: 'Create Batch',
+          select: async () => {
+            try {
+              const response = await window.api.batchElements([])
+              if (response && response.success) {
+                const newBatch = response.collection
+                await onsavePositions?.({
+                  [newBatch.id]: { x: lastCxtTapPosition.x, y: lastCxtTapPosition.y }
+                })
+                await onrefresh?.()
+              }
+            } catch (err: any) {
+              console.error('Failed to create empty batch:', err)
+            }
+          }
+        }
       ]
     })
 
@@ -628,6 +648,13 @@
 
   function setupEventListeners(): void {
     if (!cy) return
+
+    cy.on('cxttapstart', (evt: EventObject) => {
+      if (evt.position) {
+        lastCxtTapPosition = { ...evt.position }
+        console.log('[ParameterGraph] Position updated to:', lastCxtTapPosition)
+      }
+    })
 
     cy.on('tap', (evt: EventObject) => {
       if (evt.target === cy) {
@@ -675,20 +702,27 @@
       }
     })
 
-    let ghostNode: cytoscape.NodeCollection | null = null
-    let sourceNode: Singular | null = null
+    let ghostNode: cytoscape.NodeSingular | null = null
+    let sourceNode: cytoscape.NodeSingular | null = null
 
     cy.on('mousedown', 'node', (evt: EventObject) => {
       const node = evt.target
       const oe = evt.originalEvent as MouseEvent
+      const nodeType = node.data('type')
+      const parent = node.parent()
+      const parentType = parent && parent.length > 0 ? parent.data('type') : null
 
-      if (node.children().length === 0 && oe && (oe.ctrlKey || oe.metaKey)) {
-        sourceNode = node
+      // Block ghost-dragging for members of directory nodes, directories, and batches
+      const isGhostDraggable =
+        parentType !== 'directory' && nodeType !== 'directory' && nodeType !== 'batch'
+
+      if (node.children().length === 0 && isGhostDraggable && oe && (oe.ctrlKey || oe.metaKey)) {
+        sourceNode = node as unknown as cytoscape.NodeSingular
         ghostNode = cy!.add({
           group: 'nodes',
           data: { id: `ghost-node-${Date.now()}` },
           position: { ...node.position() }
-        })
+        }) as unknown as cytoscape.NodeSingular
 
         ghostNode.style({
           'background-color': node.style('background-color'),
@@ -708,7 +742,7 @@
 
         cy!.nodes('[type="batch"]').forEach((batch) => {
           if (batch.id() === sourceNode!.id()) return
-          if (isBatchCompatible(batch, sourceNode!)) {
+          if (isBatchCompatible(batch as unknown as cytoscape.NodeSingular, sourceNode!)) {
             batch.addClass('compatible-drop-target')
           }
         })
@@ -736,7 +770,7 @@
       }
     })
 
-    cy.on('mouseup', async (evt: EventObject) => {
+    cy.on('mouseup', async () => {
       if (ghostNode && sourceNode) {
         const nodePos = ghostNode.position()
         let targetBatchId: string | null = null
@@ -880,7 +914,7 @@
     })
   }
 
-  function applyLayout(randomize = false, fit = false): void {
+  function applyLayout(randomize = false, fit = false, useFixedConstraints = true): void {
     if (!cy) return
 
     // Save viewport state before layout to restore it if not fitting
@@ -889,11 +923,33 @@
 
     const elementsToLayout = cy.elements()
 
+    // Dynamically build fixed node constraints for all nodes that have positions
+    const fixedConstraints: { nodeId: string; position: { x: number; y: number } }[] = []
+    if (useFixedConstraints) {
+      cy.nodes().forEach((node) => {
+        const isChildless = node.children().length === 0
+        const pos = node.position()
+        if (
+          isChildless &&
+          typeof pos.x === 'number' &&
+          typeof pos.y === 'number' &&
+          !isNaN(pos.x) &&
+          !isNaN(pos.y)
+        ) {
+          fixedConstraints.push({
+            nodeId: node.id(),
+            position: { x: pos.x, y: pos.y }
+          })
+        }
+      })
+    }
+
     const layout = elementsToLayout.layout({
       ...layoutConfig,
       randomize,
       fit: false, // Prevent the layout algorithm from doing its own bounding box fitting
-      animate: true
+      animate: true,
+      fixedNodeConstraint: fixedConstraints.length > 0 ? fixedConstraints : undefined
     } as any)
     layout.on('layoutstop', () => {
       cy?.nodes().unlock()
@@ -1070,7 +1126,7 @@
   })
 
   export function tidyView(): void {
-    applyLayout(false, false)
+    applyLayout(false, false, false)
   }
 
   export function fitView(): void {
@@ -1119,7 +1175,18 @@
   {#if operationsMenuOpen}
     <div bind:this={menuElement} class="operations-command-palette">
       <div class="search-header">
-        <svg class="search-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <svg
+          class="search-icon"
+          xmlns="http://www.w3.org/2000/svg"
+          width="16"
+          height="16"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
           <circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line>
         </svg>
         <input
@@ -1130,7 +1197,7 @@
           placeholder="Search audio operations..."
         />
       </div>
-      
+
       <div class="palette-content">
         {#if loadingOperations}
           <div class="status-message">
@@ -1143,7 +1210,7 @@
           <div class="status-message">No operations found</div>
         {:else}
           <ul class="operations-list">
-            {#each filteredOperations as op, index}
+            {#each filteredOperations as op, index (op.name)}
               {@const display = getOpDisplayProps(op, targetNode?.data('type'))}
               <li class="operation-item" class:active={index === selectedIndex}>
                 <button
@@ -1255,7 +1322,7 @@
     align-items: center;
     gap: 0.5rem;
   }
-  
+
   .status-message.error {
     color: var(--color-error, #ef4444);
   }

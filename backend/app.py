@@ -275,22 +275,24 @@ def batch_elements():
         return jsonify({"error": "No project loaded"}), 400
 
     try:
-        data = request.get_json()
-        member_ids = data.get("member_ids")
-        if not member_ids:
-            return jsonify({"error": "member_ids is required"}), 400
+        data = request.get_json() or {}
+        member_ids = data.get("member_ids", [])
 
         # 1. Create a new collection element
-        batch_id = uid_generator.from_uids(member_ids)
+        if member_ids:
+            batch_id = uid_generator.from_uids(member_ids)
+            member_type = None
+            for member_id in member_ids:
+                member = param_graph.get_element(member_id)
+                if member_type is None:
+                    member_type = member.type
+                elif member_type != member.type:
+                    return jsonify({"error": "All members must be of the same type"}), 400
+        else:
+            import uuid
+            batch_id = uid_generator.from_string(str(uuid.uuid4()))
+            member_type = None
 
-        member_type = None
-        for member_id in member_ids:
-            member = param_graph.get_element(member_id)
-            if member_type is None:
-                member_type = member.type
-            elif member_type != member.type:
-                return jsonify({"error": "All members must be of the same type"}), 400
-    
         with graph_lock:
             batch = Batch(id=batch_id, member_ids=member_ids, member_type=member_type)
             param_graph.add_element(batch)
@@ -333,9 +335,7 @@ def update_batch_endpoint(batch_id=None):
         if not batch_id:
             return jsonify({"error": "batch_id is required"}), 400
             
-        new_member_ids = data.get("member_ids")
-        if not new_member_ids:
-            return jsonify({"error": "member_ids is required"}), 400
+        new_member_ids = data.get("member_ids", [])
 
         with graph_lock:
             if not param_graph.G.has_node(batch_id):
@@ -344,6 +344,15 @@ def update_batch_endpoint(batch_id=None):
             batch_node_attrs = param_graph.G.nodes[batch_id]
             if batch_node_attrs.get('type') != 'batch':
                 return jsonify({"error": f"Node {batch_id} is not a batch"}), 400
+
+            # Validate types of new members
+            member_type = None
+            for m_id in new_member_ids:
+                member = param_graph.get_element(m_id)
+                if member_type is None:
+                    member_type = member.type
+                elif member_type != member.type:
+                    return jsonify({"error": "All members must be of the same type"}), 400
 
             old_member_ids = batch_node_attrs.get('member_ids', [])
 
@@ -358,6 +367,7 @@ def update_batch_endpoint(batch_id=None):
 
             # Update batch properties
             batch_node_attrs['member_ids'] = new_member_ids
+            batch_node_attrs['member_type'] = member_type
             
             update_batch_labels(batch_id)
             param_graph.save()
@@ -744,6 +754,14 @@ def _dispatch_sync_operation(data):
                     # Create new batch element
                     batch_node = Batch(id=req_batch_id, member_ids=[], member_type=final_artifacts[0].type)
                     param_graph.add_element(batch_node)
+                    
+                    # Try to position it near one of the source elements
+                    for el in source_elements:
+                        if param_graph.G.has_node(el.id):
+                            el_pos = param_graph.G.nodes[el.id].get('position')
+                            if el_pos:
+                                param_graph.update_element(req_batch_id, {"position": {"x": el_pos["x"] + 80, "y": el_pos["y"] + 80}})
+                                break
                     print(f"Created new batch element {req_batch_id} for sync operation")
                 
                 for artifact in final_artifacts:
@@ -761,6 +779,14 @@ def _dispatch_sync_operation(data):
                 batch_id = uid_generator.from_uids(member_ids)
                 batch = Batch(id=batch_id, member_ids=member_ids, member_type=final_artifacts[0].type)
                 param_graph.add_element(batch)
+                
+                # Try to position it near one of the source elements
+                for el in source_elements:
+                    if param_graph.G.has_node(el.id):
+                        el_pos = param_graph.G.nodes[el.id].get('position')
+                        if el_pos:
+                            param_graph.update_element(batch_id, {"position": {"x": el_pos["x"] + 80, "y": el_pos["y"] + 80}})
+                            break
                 
                 for m_id in member_ids:
                     param_graph.update_element(m_id, {"parent": batch_id})
@@ -908,6 +934,16 @@ async def _dispatch_async_operation(data):
                 if not param_graph.G.has_node(batch_id):
                     batch_element = Batch(id=batch_id, member_type="audio" if operation != "invert" else "latent")
                     param_graph.add_element(batch_element)
+                    
+                    # Try to position it near one of the source/linked elements
+                    for el in linked_elements:
+                        if param_graph.G.has_node(el.id):
+                            el_pos = param_graph.G.nodes[el.id].get('position')
+                            if el_pos:
+                                param_graph.update_element(batch_id, {"position": {"x": el_pos["x"] + 80, "y": el_pos["y"] + 80}})
+                                break
+                    
+                    param_graph.save()
                     print(f"Created new batch element {batch_id}")
 
         # --- Execute ---
@@ -1215,7 +1251,7 @@ def update_batch_labels(batch_id: str):
     print(f"Member diffs: {member_diffs}")
 
     # Generate a label for the batch based on the shared prompt/context
-    member_type = batch_node_attrs.get('member_type', 'element')
+    member_type = batch_node_attrs.get('member_type') or 'element'
     batch_alias = shared_context.get('prompt', f"{member_type.capitalize()} Batch")
     if len(str(batch_alias)) > 30:
         batch_alias = str(batch_alias)[:27] + "..."
