@@ -1,5 +1,10 @@
 import type { CssStyleDeclaration, NodeSingular } from 'cytoscape'
 import { getCssVar } from '../../utils/css'
+import modelIcon from '../../assets/icons/model.svg'
+import latticeIcon from '../../assets/icons/lattice.svg'
+import audioIcon from '../../assets/icons/audio.svg'
+import latentIcon from '../../assets/icons/latent.svg'
+import pathIcon from '../../assets/icons/local_path.svg'
 
 const gradientColor1 = getCssVar('--graph-gradient-1')
 const gradientColor2 = getCssVar('--graph-gradient-2')
@@ -24,9 +29,10 @@ const defaultStyle: CssStyleDeclaration[] = [
     selector: 'node',
     style: {
       color: 'white',
-      'text-valign': 'center',
+      'text-valign': 'top',
       'text-halign': 'center',
-      'text-wrap': 'wrap'
+      'text-wrap': 'wrap',
+      'text-margin-y': -6
     }
   },
   {
@@ -46,6 +52,11 @@ const defaultStyle: CssStyleDeclaration[] = [
     style: {
       label: (node: NodeSingular) => node.data('name') || node.data('id'),
       'background-color': modelColor,
+      'background-image': modelIcon,
+      'background-fit': 'none',
+      'background-clip': 'node',
+      'background-width': '75%',
+      'background-height': '75%',
       width: 60,
       height: 60
     }
@@ -55,6 +66,11 @@ const defaultStyle: CssStyleDeclaration[] = [
     style: {
       label: (node: NodeSingular) => node.data('name') || node.data('id'),
       'background-color': latticeColor,
+      'background-image': latticeIcon,
+      'background-fit': 'none',
+      'background-clip': 'node',
+      'background-width': '75%',
+      'background-height': '75%',
       width: 50,
       height: 50
     }
@@ -71,6 +87,11 @@ const defaultStyle: CssStyleDeclaration[] = [
         return secondary ? secondary : (name || node.data('id'));
       },
       'background-color': audioColor,
+      'background-image': audioIcon,
+      'background-fit': 'none',
+      'background-clip': 'node',
+      'background-width': '75%',
+      'background-height': '75%',
       width: 30,
       height: 30
     }
@@ -108,7 +129,11 @@ const defaultStyle: CssStyleDeclaration[] = [
         return `${promptTxt}\nx${strength}`;
       },
       'background-color': latentColor,
-      shape: 'diamond',
+      'background-image': latentIcon,
+      'background-fit': 'none',
+      'background-clip': 'node',
+      'background-width': '75%',
+      'background-height': '75%',
       width: 30,
       height: 30
     }
@@ -127,6 +152,7 @@ const defaultStyle: CssStyleDeclaration[] = [
         return secondary ? secondary : (name || node.data('id'));
       },
       'text-valign': 'top',
+      'text-margin-y': 0,
       'background-color': batchColor,
       'background-opacity': 0.5,
       'border-width': 2,
@@ -184,6 +210,11 @@ const defaultStyle: CssStyleDeclaration[] = [
     style: {
       label: (node: NodeSingular) => node.data('name') || node.data('id'),
       'background-color': externalColor,
+      'background-image': pathIcon,
+      'background-fit': 'none',
+      'background-clip': 'node',
+      'background-width': '60%',
+      'background-height': '60%',
       width: 60,
       height: 60
     }
@@ -193,6 +224,7 @@ const defaultStyle: CssStyleDeclaration[] = [
     style: {
       label: 'data(path)',
       'text-valign': 'top',
+      'text-margin-y': 0,
       'background-color': batchColor,
       'background-opacity': 0.5,
       'border-color': externalColor,

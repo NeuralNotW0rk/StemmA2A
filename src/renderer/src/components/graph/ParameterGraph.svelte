@@ -20,6 +20,7 @@
     viewMode?: 'batch' | 'cluster'
     showSpringEdges?: boolean
     showDetailedLabels?: boolean
+    chronologicalConstraint?: boolean
     operations?: any[]
     onaudioSelect?: (data: any) => void
     onexport?: (data: { names: string[] }) => void
@@ -47,6 +48,7 @@
     graphData = null,
     showSpringEdges = false,
     showDetailedLabels = true,
+    chronologicalConstraint = false,
     operations: operationsProp = [],
     onaudioSelect,
     onimportLattice,
@@ -370,6 +372,19 @@
       } else {
         cy.edges('edge[type="spring"]').removeClass('visible')
       }
+    }
+  })
+
+  // Run layout when chronological constraint changes to show the immediate effect
+  let firstEffectRun = true
+  $effect(() => {
+    const _val = chronologicalConstraint
+    if (isInitialized && cy) {
+      if (firstEffectRun) {
+        firstEffectRun = false
+        return
+      }
+      tidyView()
     }
   })
 
@@ -914,6 +929,52 @@
     })
   }
 
+  function isGeneratedArtifact(node: cytoscape.NodeSingular): boolean {
+    const type = node.data('type')
+    if (type !== 'audio' && type !== 'latent') {
+      return false
+    }
+    const parentId = node.data('parent')
+    if (parentId) {
+      const parentNode = cy!.getElementById(parentId)
+      if (parentNode && parentNode.length > 0) {
+        const parentType = parentNode.data('type')
+        if (
+          parentType === 'local_path' ||
+          parentType === 'directory' ||
+          parentType === 'external'
+        ) {
+          return false
+        }
+      }
+    }
+    return true
+  }
+
+  function buildChronologicalConstraints(): { left: string; right: string; gap: number }[] {
+    if (!cy) return []
+    const leafNodes = cy.nodes().filter((node) => node.children().length === 0)
+    const sortedNodes = leafNodes
+      .toArray()
+      .filter((node) => node.data('created') !== undefined && isGeneratedArtifact(node))
+      .sort((a, b) => {
+        const timeA = a.data('created') || 0
+        const timeB = b.data('created') || 0
+        if (timeA !== timeB) return timeA - timeB
+        return a.id().localeCompare(b.id())
+      })
+
+    const constraints: { left: string; right: string; gap: number }[] = []
+    for (let i = 0; i < sortedNodes.length - 1; i++) {
+      constraints.push({
+        left: sortedNodes[i].id(),
+        right: sortedNodes[i + 1].id(),
+        gap: 80
+      })
+    }
+    return constraints
+  }
+
   function applyLayout(randomize = false, fit = false, useFixedConstraints = true): void {
     if (!cy) return
 
@@ -949,7 +1010,10 @@
       randomize,
       fit: false, // Prevent the layout algorithm from doing its own bounding box fitting
       animate: true,
-      fixedNodeConstraint: fixedConstraints.length > 0 ? fixedConstraints : undefined
+      fixedNodeConstraint: fixedConstraints.length > 0 ? fixedConstraints : undefined,
+      relativePlacementConstraint: chronologicalConstraint
+        ? buildChronologicalConstraints()
+        : undefined
     } as any)
     layout.on('layoutstop', () => {
       cy?.nodes().unlock()

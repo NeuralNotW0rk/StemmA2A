@@ -41,6 +41,7 @@
   let audioTitle: string | null = $state(null)
   let showSpringEdges = $state(false)
   let showDetailedLabelsToggle = $state(false)
+  let chronologicalConstraint = $state(false)
   let isPeekPressed = $state(false)
   let showDetailedLabels = $derived(showDetailedLabelsToggle || isPeekPressed)
   let selectedElementData: ElementData | null = $state(null)
@@ -543,6 +544,7 @@
     {viewMode}
     bind:showSpringEdges
     bind:showDetailedLabels={showDetailedLabelsToggle}
+    bind:chronologicalConstraint
   />
 
   {#if errorInInfoPanel}
@@ -670,6 +672,7 @@
     onexpandPath={handleExpandPath}
     ontoggleFavorite={handleToggleFavorite}
     {showDetailedLabels}
+    {chronologicalConstraint}
     onchangeBatchMembership={handleChangeBatchMembership}
     onselectOperation={handleSelectOperation}
     onrefresh={refreshGraphData}
