@@ -96,7 +96,7 @@
     showDetailedLabels = !showDetailedLabels
     showUtilitiesMenu = false
   }
-  
+
   function toggleChronological(): void {
     chronologicalConstraint = !chronologicalConstraint
     showUtilitiesMenu = false
@@ -310,7 +310,9 @@
             {showDetailedLabels ? 'Hide Detailed Labels' : 'Show Detailed Labels'}
           </button>
           <button class="dropdown-item" onclick={toggleChronological}>
-            {chronologicalConstraint ? 'Disable Chronological Layout' : 'Enable Chronological Layout'}
+            {chronologicalConstraint
+              ? 'Disable Chronological Layout'
+              : 'Enable Chronological Layout'}
           </button>
         </div>
       {/if}

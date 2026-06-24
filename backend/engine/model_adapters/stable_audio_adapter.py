@@ -97,15 +97,15 @@ class StableAudioAdapter(ModelAdapter):
         name="generate",
         is_standard=True,
         description="Generate audio from a generative model",
-        initiator_types=["model", "lattice", "latent", "audio"],
+        initiator_types=["model", "grating", "latent", "audio"],
         context_overrides={
             "audio": {
                 "name": "audio-to-audio",
                 "description": "Perform audio-guided generation (audio-to-audio) using this node as initialization"
             },
-            "lattice": {
-                "name": "generate from lattice",
-                "description": "Generate audio guided by the selected lattice structure"
+            "grating": {
+                "name": "generate from grating",
+                "description": "Generate audio guided by the selected grating structure"
             },
             "latent": {
                 "name": "generate from latent",

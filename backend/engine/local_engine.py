@@ -19,7 +19,7 @@ from utils.uid import path_from_uid
 from utils.audio import save_audio
 
 from diffracture import Actant
-from diffracture.topology.lattice import Lattice as DiffractureLattice
+from diffracture.topology.grating import Grating as DiffractureGrating
 
 class LocalEngine(Engine):
     def __init__(self, data_root: str = None):
@@ -74,28 +74,28 @@ class LocalEngine(Engine):
         adapter_class = self._get_adapter_class(model_element.adapter)
         adapter = self.model_cache.get(model_element, adapter_class)
 
-        # Engine-level Lattice intervention orchestration
-        lattice_elements = kwargs.get("lattice_elements", [])
-        lattice_strengths = kwargs.get("lattice_strengths", [])
-        if lattice_elements:
+        # Engine-level Grating intervention orchestration
+        grating_elements = kwargs.get("grating_elements", [])
+        grating_strengths = kwargs.get("grating_strengths", [])
+        if grating_elements:
             if not hasattr(adapter, 'model') or adapter.model is None:
-                raise RuntimeError(f"Adapter '{model_element.adapter}' does not expose a loaded 'model' for lattice injection.")
+                raise RuntimeError(f"Adapter '{model_element.adapter}' does not expose a loaded 'model' for grating injection.")
             
             if not hasattr(adapter, 'actant'):
                 adapter.actant = Actant(adapter.model)
                 
             model_device = next(adapter.model.parameters()).device
             
-            for i, lattice_element in enumerate(lattice_elements):
-                strength = lattice_strengths[i] if lattice_strengths and i < len(lattice_strengths) else 1.0
-                print(f"Engine: Applying Lattice '{lattice_element.id}' with strength {strength}...")
-                lattice = DiffractureLattice.load(lattice_element.file.path)
-                lattice.to(model_device)
-                adapter.actant.activate(lattice, injection_strategy="graft", strength=strength)
+            for i, grating_element in enumerate(grating_elements):
+                strength = grating_strengths[i] if grating_strengths and i < len(grating_strengths) else 1.0
+                print(f"Engine: Applying Grating '{grating_element.id}' with strength {strength}...")
+                grating = DiffractureGrating.load(grating_element.file.path)
+                grating.to(model_device)
+                adapter.actant.activate(grating, injection_strategy="graft", strength=strength)
 
         artifact, tensor = adapter.generate(**kwargs)
 
-        if lattice_elements:
+        if grating_elements:
             # Revert the model to its original state so it can remain safely in the cache
             adapter.actant.deactivate()
 

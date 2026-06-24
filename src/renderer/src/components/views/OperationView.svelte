@@ -32,8 +32,8 @@
   let error: string | null = $state(null)
   let lastLoadedModelId: string | null = $state(null)
 
-  // Lattices sub-selection state (for generation operation)
-  let selectedLattices: NodeListItem[] = $state([])
+  // Gratings sub-selection state (for generation operation)
+  let selectedGratings: NodeListItem[] = $state([])
 
   let parentBatchId = $derived.by(() => {
     const cy = $cyInstanceStore
@@ -73,7 +73,7 @@
       isLoading = true
       error = null
       adapterFields = []
-      selectedLattices = []
+      selectedGratings = []
       lastLoadedModelId = null
       addToSameBatch = true
 
@@ -115,8 +115,8 @@
             if (baseFieldsConfig.some((f) => f.name === 'init_latent')) {
               initialData.init_latent = $initiatorNodeStore
             }
-          } else if (type === 'lattice') {
-            selectedLattices = [
+          } else if (type === 'grating') {
+            selectedGratings = [
               { id: -1, node: $initiatorNodeStore as unknown as NodeData, strength: 1.0 }
             ]
           }
@@ -276,15 +276,15 @@
 
     const basePayload: Record<string, unknown> = { ...payload }
 
-    // Map Lattices if the operation supports them
+    // Map Gratings if the operation supports them
     if (op.name === 'generate') {
-      const validLattices = selectedLattices.filter((l) => l.node)
-      const lattices = validLattices.map((l) => ({
+      const validGratings = selectedGratings.filter((l) => l.node)
+      const gratings = validGratings.map((l) => ({
         id: typeof l.node === 'string' ? l.node : l.node?.id,
         strength: l.strength ?? 1.0
       }))
-      if (lattices.length > 0) {
-        basePayload.lattices = lattices
+      if (gratings.length > 0) {
+        basePayload.gratings = gratings
       }
     }
 
@@ -395,21 +395,21 @@
         />
       {/if}
 
-      <!-- Render optional lattices if operation is generate and model is set -->
+      <!-- Render optional gratings if operation is generate and model is set -->
       {#if $selectedOperation.name === 'generate' && formData.model}
         <div style="margin-top: 1.5rem;">
           <NodeSelectorList
-            title="Lattices (Optional)"
-            addButtonText="Add Lattice"
+            title="Gratings (Optional)"
+            addButtonText="Add Grating"
             filter={{
-              type: 'lattice',
+              type: 'grating',
               base_model_id:
                 typeof formData.model === 'object' && formData.model
                   ? String((formData.model as Record<string, unknown>).id || '')
                   : String(formData.model)
             }}
-            bind:items={selectedLattices}
-            idPrefix="lattice"
+            bind:items={selectedGratings}
+            idPrefix="grating"
             showStrengths={true}
           />
         </div>

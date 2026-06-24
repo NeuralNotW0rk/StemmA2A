@@ -24,7 +24,7 @@
     operations?: any[]
     onaudioSelect?: (data: any) => void
     onexport?: (data: { names: string[] }) => void
-    onimportLattice?: (data: any) => void
+    onimportGrating?: (data: any) => void
     onrescanSource?: (name: string) => void
     onnodeSelect?: (data: any) => void
     onedgeSelect?: (data: any) => void
@@ -51,7 +51,7 @@
     chronologicalConstraint = false,
     operations: operationsProp = [],
     onaudioSelect,
-    onimportLattice,
+    onimportGrating,
     onrescanSource,
     onexport,
     onnodeSelect,
@@ -378,7 +378,7 @@
   // Run layout when chronological constraint changes to show the immediate effect
   let firstEffectRun = true
   $effect(() => {
-    const _val = chronologicalConstraint
+    void chronologicalConstraint
     if (isInitialized && cy) {
       if (firstEffectRun) {
         firstEffectRun = false
@@ -514,13 +514,13 @@
     const modelNodeCommands = (ele: Singular): Command[] => [
       ...getPinnedOperations(ele),
       {
-        content: 'Import Lattice',
-        select: () => onimportLattice?.(ele.data())
+        content: 'Import Grating',
+        select: () => onimportGrating?.(ele.data())
       },
       ...nodeCommands(ele)
     ]
 
-    const latticeNodeCommands = (ele: Singular): Command[] => [
+    const gratingNodeCommands = (ele: Singular): Command[] => [
       ...getPinnedOperations(ele),
       ...nodeCommands(ele)
     ]
@@ -637,8 +637,8 @@
         switch (ele.data('type')) {
           case 'model':
             return modelNodeCommands(ele)
-          case 'lattice':
-            return latticeNodeCommands(ele)
+          case 'grating':
+            return gratingNodeCommands(ele)
           case 'audio':
             return audioNodeCommands(ele)
           case 'external':
@@ -954,8 +954,7 @@
   function buildChronologicalConstraints(): { left: string; right: string; gap: number }[] {
     if (!cy) return []
     const leafNodes = cy.nodes().filter((node) => node.children().length === 0)
-    const sortedNodes = leafNodes
-      .toArray()
+    const sortedNodes = (leafNodes.toArray() as cytoscape.NodeSingular[])
       .filter((node) => node.data('created') !== undefined && isGeneratedArtifact(node))
       .sort((a, b) => {
         const timeA = a.data('created') || 0

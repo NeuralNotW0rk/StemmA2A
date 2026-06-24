@@ -6,7 +6,7 @@
   import ContentPanel from './components/ContentPanel.svelte'
   import ElementInfoView from './components/views/ElementInfoView.svelte'
   import ErrorView from './components/views/ErrorView.svelte'
-  import ImportLatticeView from './components/views/ImportLatticeView.svelte'
+  import ImportGratingView from './components/views/ImportGratingView.svelte'
   import ImportModelView from './components/views/ImportModelView.svelte'
   import RemovalView from './components/views/RemovalView.svelte'
   import NewProjectView from './components/views/NewProjectView.svelte'
@@ -360,9 +360,9 @@
     console.log(`Element selected: ${(selectedElementData?.name as string) || 'Unknown'}`)
   }
 
-  function handleImportLattice(modelData: any): void {
+  function handleImportGrating(modelData: any): void {
     initiatorNodeStore.set(modelData)
-    actionPanelView = 'import-lattice'
+    actionPanelView = 'import-grating'
   }
 
   function handleSelectOperation(op: any, initiatorNode: any, useContext = false): void {
@@ -450,8 +450,8 @@
     if (actionPanelView === 'import-model') {
       return 'Import Model'
     }
-    if (actionPanelView === 'import-lattice') {
-      return 'Import Model'
+    if (actionPanelView === 'import-grating') {
+      return 'Import Grating'
     }
     if (actionPanelView === 'removal') {
       return 'Confirm Removal'
@@ -570,15 +570,15 @@
             errorInInfoPanel = error
           }}
         />
-      {:else if actionPanelView === 'import-lattice'}
-        <ImportLatticeView
+      {:else if actionPanelView === 'import-grating'}
+        <ImportGratingView
           onclose={closeActionPanel}
           onrefresh={() => {
             closeActionPanel()
             refreshGraphData()
           }}
           onError={(error) => {
-            console.error('Lattice import error:', error)
+            console.error('Grating import error:', error)
             closeActionPanel()
             errorInInfoPanel = error
           }}
@@ -662,7 +662,7 @@
     {viewMode}
     operations={allOperations}
     onaudioSelect={handleAudioSelect}
-    onimportLattice={handleImportLattice}
+    onimportGrating={handleImportGrating}
     onnodeSelect={handleElementSelect}
     onexport={handleExport}
     onedgeSelect={handleElementSelect}

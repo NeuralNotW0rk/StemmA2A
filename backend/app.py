@@ -26,7 +26,7 @@ from pydantic import ValidationError
 from param_graph.graph import ParameterGraph
 from param_graph.elements.models.base_model_element import Model
 from param_graph.elements.artifacts.audio_element import Audio
-from param_graph.elements.artifacts.lattice_element import Lattice
+from param_graph.elements.artifacts.grating_element import Grating
 from param_graph.elements.artifacts.latent_element import Latent
 from param_graph.elements.base_elements import Asset
 from param_graph.elements.collections.batch_element import Batch
@@ -42,7 +42,7 @@ from utils.semantic_interrogation import SemanticInterrogator
 
 from operations.registry import SyncRegistry
 from diffracture import Actant
-from diffracture.topology.lattice import Lattice as DiffractureLattice
+from diffracture.topology.grating import Grating as DiffractureGrating
 
 app = Flask(__name__)
 CORS(app)
@@ -426,15 +426,15 @@ async def import_model():
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
-@app.route("/register_lattice", methods=["POST"])
-def register_lattice():
-    """Register a new Lattice and bind it to a base model."""
+@app.route("/register_grating", methods=["POST"])
+def register_grating():
+    """Register a new Grating and bind it to a base model."""
     if param_graph is None:
         return jsonify({"error": "No project loaded"}), 400
     
     try:
         data = request.get_json()
-        lattice_name = data.get("name", "New Lattice")
+        grating_name = data.get("name", "New Grating")
         checkpoint_path = data.get("checkpoint_path")
         base_model_id = data.get("base_model_id")
 
@@ -443,46 +443,46 @@ def register_lattice():
 
         path_obj = Path(checkpoint_path)
         if not path_obj.is_file():
-            return jsonify({"error": f"Lattice path '{checkpoint_path}' does not exist or is not a file."}), 400
+            return jsonify({"error": f"Grating path '{checkpoint_path}' does not exist or is not a file."}), 400
 
         with graph_lock:
             base_model = param_graph.get_element(base_model_id)
             if not base_model:
                 return jsonify({"error": f"Base model '{base_model_id}' not found."}), 404
 
-            # Temporarily load the lattice to generate a hash from its modules
-            loaded_lattice = DiffractureLattice.load(str(path_obj.resolve()))
-            element_id = uid_generator.from_module(loaded_lattice)
+            # Temporarily load the grating to generate a hash from its modules
+            loaded_grating = DiffractureGrating.load(str(path_obj.resolve()))
+            element_id = uid_generator.from_module(loaded_grating)
 
-            prisms_config = [{
-                "address": prism.address,
-                "kernel_type": prism.kernel_type,
-                "metadata": prism.metadata
-            } for prism in loaded_lattice._nodes]
+            elements_config = [{
+                "address": element.address,
+                "kernel_type": element.kernel_type,
+                "metadata": element.metadata
+            } for element in loaded_grating._nodes]
 
             asset = Asset(path=str(path_obj.resolve()), uid=element_id, extension=path_obj.suffix.lower())
             
-            lattice_artifact = Lattice(
+            grating_artifact = Grating(
                 id=element_id,
-                name=lattice_name,
+                name=grating_name,
                 context={},
                 file=asset,
                 base_model_id=base_model_id,
-                prisms=prisms_config
+                elements=elements_config
             )
 
-            param_graph.add_element(lattice_artifact)
-            param_graph.link(base_model, lattice_artifact, relation='binds_to')
+            param_graph.add_element(grating_artifact)
+            param_graph.link(base_model, grating_artifact, relation='binds_to')
             param_graph.save()
         
         return jsonify({
-            "message": "Lattice registered successfully",
-            "lattice": lattice_artifact.to_dict(),
+            "message": "Grating registered successfully",
+            "grating": grating_artifact.to_dict(),
             "success": True
         })
         
     except Exception as e:
-        print(f"Failed to register lattice: {e}")
+        print(f"Failed to register grating: {e}")
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
@@ -870,19 +870,19 @@ async def _dispatch_async_operation(data):
                     if element:
                         node_engine_args[f"{field_name}_element"] = element
 
-        # --- Special Case Handlers (Lattices & Inversion Sources) ---
-        lattice_strengths = []
-        lattices = data.get("lattices") or params.get("lattices")
-        if lattices:
-            lattice_elements = []
-            for l_conf in lattices:
-                l_id = l_conf.get("id")
-                l_element = param_graph.get_element(l_id)
-                if not isinstance(l_element, Lattice):
-                    return jsonify({"error": f"Node '{l_id}' is not a valid lattice."}), 400
-                lattice_elements.append(l_element)
-                lattice_strengths.append(l_conf.get("strength", 1.0))
-            node_engine_args["lattice_elements"] = lattice_elements
+        # --- Special Case Handlers (Gratings & Inversion Sources) ---
+        grating_strengths = []
+        gratings = data.get("gratings") or params.get("gratings")
+        if gratings:
+            grating_elements = []
+            for g_conf in gratings:
+                g_id = g_conf.get("id")
+                g_element = param_graph.get_element(g_id)
+                if not isinstance(g_element, Grating):
+                    return jsonify({"error": f"Node '{g_id}' is not a valid grating."}), 400
+                grating_elements.append(g_element)
+                grating_strengths.append(g_conf.get("strength", 1.0))
+            node_engine_args["grating_elements"] = grating_elements
 
         source_audio_id = data.get("source_audio_id") or params.get("source_audio_id")
         if source_audio_id:
@@ -903,7 +903,7 @@ async def _dispatch_async_operation(data):
         for arg_name, element in node_engine_args.items():
             if isinstance(element, list):
                 for el in element:
-                    if not isinstance(el, (Audio, Model, Lattice, Latent)):
+                    if not isinstance(el, (Audio, Model, Grating, Latent)):
                         return jsonify({"error": f"Node '{el.id}' is not a valid artifact."}), 400
             else:
                 if isinstance(element, Audio):
@@ -913,16 +913,16 @@ async def _dispatch_async_operation(data):
                         element.file = replace(element.file, path=str(valid_path))
                         node_engine_args[arg_name] = element
                 
-                if not isinstance(element, (Audio, Model, Lattice, Latent)):
+                if not isinstance(element, (Audio, Model, Grating, Latent)):
                     field_name = arg_name.removesuffix("_element")
                     return jsonify({"error": f"Node '{element.id}' for field '{field_name}' is not a valid artifact."}), 400
 
         engine_args = {"model_element": model_element, **node_engine_args}
-        if lattices:
-            engine_args["lattice_strengths"] = lattice_strengths
+        if gratings:
+            engine_args["grating_strengths"] = grating_strengths
         
-        # If lattices are used, the model is implied, so we omit the direct edge
-        if "lattice_elements" in node_engine_args and node_engine_args["lattice_elements"]:
+        # If gratings are used, the model is implied, so we omit the direct edge
+        if "grating_elements" in node_engine_args and node_engine_args["grating_elements"]:
             linked_elements = [*resolved_elements]
         else:
             linked_elements = [model_element, *resolved_elements]
@@ -955,8 +955,8 @@ async def _dispatch_async_operation(data):
              
         # Store job context to process the artifact later when the frontend polls /job_status
         v_params = validated_params.model_dump()
-        if lattices:
-            v_params["lattices"] = lattices
+        if gratings:
+            v_params["gratings"] = gratings
             
         active_jobs[job_id] = {
             "batch_id": batch_id,
@@ -1512,11 +1512,11 @@ def repair_edges():
                     for key, value in element.context.items():
                         if key.endswith('_id') and isinstance(value, str):
                             potential_source_ids.append((value, 'source'))
-                        elif key == 'lattices' and isinstance(value, list):
-                            for lattice in value:
-                                l_id = lattice.get('id')
-                                if l_id:
-                                    potential_source_ids.append((l_id, 'source'))
+                        elif key == 'gratings' and isinstance(value, list):
+                            for grating_item in value:
+                                g_id = grating_item.get('id')
+                                if g_id:
+                                    potential_source_ids.append((g_id, 'source'))
                                     
                 for source_id, relation in potential_source_ids:
                     if param_graph.G.has_node(source_id):

@@ -1,4 +1,4 @@
-<!-- src/renderer/src/components/views/ImportLatticeView.svelte -->
+<!-- src/renderer/src/components/views/ImportGratingView.svelte -->
 <script lang="ts">
   import { initiatorNodeStore } from '../../utils/stores'
   import NodeSelector from '../NodeSelector.svelte'
@@ -21,7 +21,7 @@
 
   async function selectFile(): Promise<void> {
     const path = await window.api.openFile({
-      title: 'Select Lattice File',
+      title: 'Select Grating File',
       filters: [{ name: 'SafeTensors', extensions: ['safetensors'] }]
     })
     if (path) {
@@ -37,12 +37,12 @@
     }
   }
 
-  async function importLattice(): Promise<void> {
+  async function importGrating(): Promise<void> {
     if (!isFormValid || !baseModel) return
 
     inProgress = true
     try {
-      await window.api.registerLattice({
+      await window.api.registerGrating({
         name: name,
         checkpoint_path: checkpointPath,
         base_model_id: baseModel.id
@@ -50,7 +50,7 @@
       onclose()
       onrefresh()
     } catch (e) {
-      console.error('Failed to import lattice:', e)
+      console.error('Failed to import grating:', e)
       const message = e instanceof Error ? e.message : String(e)
       onError({ title: 'Import Failed', message })
     } finally {
@@ -68,7 +68,7 @@
       id="base-model-selector"
     />
     <label>
-      Lattice Name
+      Grating Name
       <input type="text" bind:value={name} placeholder="e.g., My LoRA" />
     </label>
     <label>
@@ -87,7 +87,7 @@
 
   <div class="panel-actions">
     <button onclick={onclose}>Cancel</button>
-    <button class="primary" onclick={importLattice} disabled={!isFormValid || inProgress}>
+    <button class="primary" onclick={importGrating} disabled={!isFormValid || inProgress}>
       {#if inProgress}
         <div class="spinner"></div>
       {:else}

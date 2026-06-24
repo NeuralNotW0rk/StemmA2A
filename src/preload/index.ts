@@ -31,7 +31,7 @@ const api = {
   importModel: (data: unknown) => ipcRenderer.invoke('importModel', data),
   exportAudio: (names: string[], exportDir?: string): Promise<any> =>
     ipcRenderer.invoke('exportAudio', names, exportDir),
-  registerLattice: (data: unknown) => ipcRenderer.invoke('registerLattice', data),
+  registerGrating: (data: unknown) => ipcRenderer.invoke('registerGrating', data),
   getOperations: (): Promise<any> => ipcRenderer.invoke('getOperations'),
   executeOperation: (data: unknown): Promise<any> => ipcRenderer.invoke('executeOperation', data),
   removeElement: (elementId: string, keepChildren?: boolean): Promise<any> =>

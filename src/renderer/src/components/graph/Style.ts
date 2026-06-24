@@ -1,7 +1,7 @@
 import type { CssStyleDeclaration, NodeSingular } from 'cytoscape'
 import { getCssVar } from '../../utils/css'
 import modelIcon from '../../assets/icons/model.svg'
-import latticeIcon from '../../assets/icons/lattice.svg'
+import gratingIcon from '../../assets/icons/grating.svg'
 import audioIcon from '../../assets/icons/audio.svg'
 import latentIcon from '../../assets/icons/latent.svg'
 import pathIcon from '../../assets/icons/local_path.svg'
@@ -17,7 +17,7 @@ const batchColor = getCssVar('--graph-batch')
 const selectedColor = getCssVar('--graph-selected')
 const modelColor = gradientColor3
 const externalColor = gradientColor2
-const latticeColor = gradientColor4
+const gratingColor = gradientColor4
 const latentColor = gradientColor5
 const favoriteColor = 'rgb(0, 255, 255)'
 const validColor = '#4CAF50'
@@ -62,11 +62,11 @@ const defaultStyle: CssStyleDeclaration[] = [
     }
   },
   {
-    selector: 'node[type="lattice"]',
+    selector: 'node[type="grating"]',
     style: {
       label: (node: NodeSingular) => node.data('name') || node.data('id'),
-      'background-color': latticeColor,
-      'background-image': latticeIcon,
+      'background-color': gratingColor,
+      'background-image': gratingIcon,
       'background-fit': 'none',
       'background-clip': 'node',
       'background-width': '75%',
@@ -268,10 +268,10 @@ const defaultStyle: CssStyleDeclaration[] = [
     }
   },
   {
-    selector: 'edge[type="lattice"]',
+    selector: 'edge[type="grating"]',
     style: {
-      'line-color': latticeColor,
-      'target-arrow-color': latticeColor
+      'line-color': gratingColor,
+      'target-arrow-color': gratingColor
     }
   },
   {
