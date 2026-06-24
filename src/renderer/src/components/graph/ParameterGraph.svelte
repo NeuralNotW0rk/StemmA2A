@@ -93,18 +93,22 @@
     const initiatorType = targetNode ? targetNode.data('type') : null
     let ops = operations
     if (initiatorType) {
-      ops = operations.filter((op) => {
-        return (
-          !op.initiator_types ||
-          op.initiator_types.length === 0 ||
-          op.initiator_types.includes(initiatorType)
-        )
-      })
+      const filterType = initiatorType === 'batch' ? targetNode.data('member_type') : initiatorType
+      if (filterType) {
+        ops = operations.filter((op) => {
+          return (
+            !op.initiator_types ||
+            op.initiator_types.length === 0 ||
+            op.initiator_types.includes(filterType)
+          )
+        })
+      }
     }
     if (!searchQuery) return ops
     const q = searchQuery.toLowerCase()
+    const displayType = targetNode ? (targetNode.data('type') === 'batch' ? targetNode.data('member_type') : targetNode.data('type')) : null
     return ops.filter((op) => {
-      const display = getOpDisplayProps(op, initiatorType)
+      const display = getOpDisplayProps(op, displayType)
       return (
         display.name.toLowerCase().includes(q) ||
         (display.description && display.description.toLowerCase().includes(q))
@@ -600,6 +604,10 @@
             .filter(Boolean)
           if (names.length > 0) onexport?.({ names })
         }
+      },
+      {
+        content: 'Operations...',
+        select: () => openOperationsMenu(ele)
       },
       ...nodeCommands(ele)
     ]

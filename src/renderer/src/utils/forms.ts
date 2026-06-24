@@ -79,10 +79,16 @@ export function initializeFormData(
       formData[field.name] === undefined &&
       initiatorNode &&
       field.type === 'node' &&
-      field.filter &&
-      field.filter.type === initiatorNode.type
+      field.filter
     ) {
-      formData[field.name] = initiatorNode
+      if (field.filter.type === initiatorNode.type) {
+        formData[field.name] = initiatorNode
+      } else if (
+        initiatorNode.type === 'batch' &&
+        field.filter.type === initiatorNode.member_type
+      ) {
+        formData[field.name] = initiatorNode
+      }
     }
     if (formData[field.name] === undefined && field.defaultValue !== undefined) {
       formData[field.name] = field.defaultValue

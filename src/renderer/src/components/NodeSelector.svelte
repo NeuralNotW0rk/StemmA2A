@@ -141,11 +141,22 @@
   })
 
   $effect(() => {
-    // Auto-enable batch mode if node is a comma-separated list of IDs
-    if (allowBatchToggle && node && typeof node === 'string' && node.includes(',')) {
-      isBatchMode = true
-      if (onBatchToggle) {
-        onBatchToggle(true)
+    // Auto-enable batch mode if node is a comma-separated list of IDs, a batch object, or a batch ID
+    if (allowBatchToggle && node) {
+      if (typeof node === 'string') {
+        if (node.includes(',')) {
+          isBatchMode = true
+          if (onBatchToggle) onBatchToggle(true)
+        } else {
+          const cy = $cyInstanceStore
+          if (cy && cy.$id(node).data('type') === 'batch') {
+            isBatchMode = true
+            if (onBatchToggle) onBatchToggle(true)
+          }
+        }
+      } else if (typeof node === 'object' && node !== null && 'type' in node && node.type === 'batch') {
+        isBatchMode = true
+        if (onBatchToggle) onBatchToggle(true)
       }
     }
   })
@@ -282,6 +293,10 @@
       }
     }
   }
+
+  function clearSelection(): void {
+    node = null
+  }
 </script>
 
 <div class="form-field" class:nested={isNested}>
@@ -345,15 +360,27 @@
     </div>
   {:else}
     <div class="model-selector-wrapper">
-      <input
-        {id}
-        type="text"
-        readonly
-        value={resolvedNode ? resolvedNode.alias || resolvedNode.name : 'None selected'}
-        onclick={focusNode}
-        class:has-node={!!resolvedNode}
-        placeholder="Select a node..."
-      />
+      <div class="input-container">
+        <input
+          {id}
+          type="text"
+          readonly
+          value={resolvedNode ? resolvedNode.alias || resolvedNode.name : 'None selected'}
+          onclick={focusNode}
+          class:has-node={!!resolvedNode}
+          placeholder="Select a node..."
+        />
+        {#if resolvedNode}
+          <button
+            type="button"
+            class="clear-icon-btn"
+            onclick={clearSelection}
+            title="Clear selection"
+          >
+            ✕
+          </button>
+        {/if}
+      </div>
       <button type="button" onclick={selectNodeFromGraph}> Select </button>
       {#if showBatchToggle}
         <button
@@ -386,9 +413,17 @@
     align-items: center;
     gap: 0.5rem;
   }
-  .model-selector-wrapper input {
+  .input-container {
+    position: relative;
     flex-grow: 1;
+    display: flex;
+    align-items: center;
+    min-width: 0;
+  }
+  .input-container input {
+    width: 100%;
     padding: 0.5rem;
+    padding-right: 2rem;
     border-radius: 0.375rem;
     border: 1px solid var(--color-border-glass-1);
     background-color: var(--color-background-glass-2);
@@ -396,17 +431,46 @@
     min-width: 0;
     cursor: default;
   }
-  .model-selector-wrapper input.has-node {
+  .input-container input.has-node {
     cursor: pointer;
     border-color: var(--color-primary-faded, #666);
   }
-  .model-selector-wrapper input.has-node:hover {
+  .input-container input.has-node:hover {
     border-color: var(--color-primary, #999);
   }
-  .model-selector-wrapper button {
+  .model-selector-wrapper > button:not(.action-btn) {
     flex-shrink: 0;
     padding: 0.5rem 1rem;
     cursor: pointer;
+  }
+  .clear-icon-btn {
+    position: absolute;
+    right: 0.5rem;
+    background: none;
+    border: none;
+    color: var(--color-text-muted, #aaa);
+    cursor: pointer;
+    font-size: 11px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    min-width: 18px;
+    min-height: 18px;
+    max-width: 18px;
+    max-height: 18px;
+    aspect-ratio: 1;
+    flex: 0 0 18px;
+    border-radius: 50%;
+    padding: 0;
+    box-sizing: border-box;
+    line-height: 1;
+    transition: all 0.2s ease;
+  }
+  .clear-icon-btn:hover {
+    background-color: rgba(239, 68, 68, 0.15);
+    color: var(--color-error, #ef4444);
   }
   .action-btn {
     background: none;

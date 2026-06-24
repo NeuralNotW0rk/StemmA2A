@@ -955,6 +955,8 @@ async def _dispatch_async_operation(data):
              
         # Store job context to process the artifact later when the frontend polls /job_status
         v_params = validated_params.model_dump()
+        v_params["model_id"] = model_id
+        v_params["operation"] = operation
         if gratings:
             v_params["gratings"] = gratings
             

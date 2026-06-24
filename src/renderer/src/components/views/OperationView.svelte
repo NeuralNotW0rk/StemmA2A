@@ -47,6 +47,7 @@
     return null
   })
 
+  let isReplicated = $derived(!!$contextStore)
   let addToSameBatch = $state(true)
 
   onDestroy(() => {
@@ -82,7 +83,7 @@
       const { formData: initialData } = initializeFormData(
         baseFieldsConfig,
         $contextStore,
-        $initiatorNodeStore
+        isReplicated ? null : $initiatorNodeStore
       )
 
       // Pre-population for node fields
@@ -102,20 +103,33 @@
           initialData.model = modelId
         }
 
-        if ($initiatorNodeStore) {
+        if (isReplicated && $contextStore?.gratings && $cyInstanceStore) {
+          const contextGratings = $contextStore.gratings as Array<{ id: string; strength: number }>
+          selectedGratings = contextGratings.map((g, index) => {
+            const node = $cyInstanceStore.$id(g.id).data()
+            return {
+              id: index,
+              node: node || g.id,
+              strength: g.strength
+            }
+          })
+        }
+
+        if ($initiatorNodeStore && !isReplicated) {
           const type = $initiatorNodeStore.type
-          if (type === 'audio') {
+          const effectiveType = type === 'batch' ? $initiatorNodeStore.member_type : type
+          if (effectiveType === 'audio') {
             if (baseFieldsConfig.some((f) => f.name === 'init_audio')) {
               initialData.init_audio = $initiatorNodeStore
             }
             if (baseFieldsConfig.some((f) => f.name === 'source_audio')) {
               initialData.source_audio = $initiatorNodeStore
             }
-          } else if (type === 'latent') {
+          } else if (effectiveType === 'latent') {
             if (baseFieldsConfig.some((f) => f.name === 'init_latent')) {
               initialData.init_latent = $initiatorNodeStore
             }
-          } else if (type === 'grating') {
+          } else if (effectiveType === 'grating') {
             selectedGratings = [
               { id: -1, node: $initiatorNodeStore as unknown as NodeData, strength: 1.0 }
             ]
@@ -123,10 +137,16 @@
         }
       } else {
         // Synchronous operations fallback
-        for (const field of baseFieldsConfig) {
-          if (field.type === 'node') {
-            if (field.name === 'source_audio' && $initiatorNodeStore?.type === 'audio') {
-              initialData[field.name] = $initiatorNodeStore
+        if (!isReplicated) {
+          for (const field of baseFieldsConfig) {
+            if (field.type === 'node') {
+              const isAudioInitiator =
+                $initiatorNodeStore?.type === 'audio' ||
+                ($initiatorNodeStore?.type === 'batch' &&
+                  $initiatorNodeStore?.member_type === 'audio')
+              if (field.name === 'source_audio' && isAudioInitiator) {
+                initialData[field.name] = $initiatorNodeStore
+              }
             }
           }
         }
@@ -211,7 +231,7 @@
         const { formData: adapterData } = initializeFormData(
           opFields as FormConfig,
           $contextStore,
-          $initiatorNodeStore
+          isReplicated ? null : $initiatorNodeStore
         )
 
         // Merge fields while keeping existing formData keys intact
@@ -297,7 +317,7 @@
         basePayload.model_id = basePayload.model
       }
 
-      if (parentBatchId && addToSameBatch) {
+      if (parentBatchId && isReplicated && addToSameBatch) {
         basePayload.batch_id = parentBatchId
       }
 
@@ -328,7 +348,7 @@
       console.log(`Starting batch execution with ${combinations.length} combinations.`)
 
       const batchId =
-        parentBatchId && addToSameBatch
+        parentBatchId && isReplicated && addToSameBatch
           ? parentBatchId
           : `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
 
@@ -415,7 +435,7 @@
         </div>
       {/if}
 
-      {#if parentBatchId}
+      {#if parentBatchId && isReplicated}
         <div class="options">
           <label>
             <input type="checkbox" bind:checked={addToSameBatch} disabled={isRunning} />
@@ -424,7 +444,7 @@
         </div>
       {/if}
 
-      {#if (!fieldsConfig || fieldsConfig.length === 0) && !parentBatchId}
+      {#if (!fieldsConfig || fieldsConfig.length === 0) && !(parentBatchId && isReplicated)}
         <p class="centered-text">No parameters needed for this operation.</p>
       {/if}
     {:else}

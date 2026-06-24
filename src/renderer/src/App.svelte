@@ -466,7 +466,18 @@
     }
     if (actionPanelView === 'operation') {
       if ($selectedOperation) {
-        const initiatorType = $initiatorNodeStore?.type
+        let initiatorType = $initiatorNodeStore?.type
+        if ($contextStore) {
+          if ($contextStore.init_audio || $contextStore.source_audio || $contextStore.source_audio_id) {
+            initiatorType = 'audio'
+          } else if ($contextStore.init_latent) {
+            initiatorType = 'latent'
+          } else if ($contextStore.gratings && $contextStore.gratings.length > 0) {
+            initiatorType = 'grating'
+          } else {
+            initiatorType = 'model'
+          }
+        }
         let displayName = $selectedOperation.name
         if (
           initiatorType &&
