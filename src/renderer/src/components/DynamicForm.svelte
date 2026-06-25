@@ -105,6 +105,13 @@
       formData[fieldName] = path
     }
   }
+
+  async function selectFieldDirectory(fieldName: string): Promise<void> {
+    const path = await window.api.selectDirectory()
+    if (path) {
+      formData[fieldName] = path
+    }
+  }
   const visibleFields = $derived(
     config.filter((field: FormField) => {
       if (!field.show_if) {
@@ -290,6 +297,12 @@
         <div class="path-input">
           <input type="text" bind:value={formData[field.name]} placeholder={field.placeholder} />
           <button onclick={() => selectFieldFile(field.name, field.filters)}>Browse</button>
+        </div>
+      {:else if field.type === 'directory'}
+        <label for={field.name}>{field.label}</label>
+        <div class="path-input">
+          <input type="text" bind:value={formData[field.name]} placeholder={field.placeholder} />
+          <button onclick={() => selectFieldDirectory(field.name)}>Browse</button>
         </div>
       {:else if field.type === 'select'}
         <label for={field.name}>{field.label}</label>

@@ -194,6 +194,13 @@
             "placeholder": "Select a config file",
             "required": true,
             "filters": [{ "name": "JSON Files", "extensions": ["json"] }]
+        },
+        {
+            "name": "encoder_path",
+            "label": "Text Encoder Folder (Optional)",
+            "type": "directory",
+            "placeholder": "Select local directory containing text encoder files (tokenizer, configs, etc.)",
+            "required": false
         }
     ]
 }

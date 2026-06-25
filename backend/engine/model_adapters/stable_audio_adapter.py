@@ -1,6 +1,22 @@
 import json
 import struct
+import copy
+import os
+import xxhash
 from pathlib import Path
+
+def _hash_directory(directory_path: Path) -> str:
+    h = xxhash.xxh3_64()
+    # Find all files recursively and sort them to be deterministic
+    for file_path in sorted(directory_path.glob("**/*")):
+        if file_path.is_file():
+            # Update hash with relative path to ensure structure is identical
+            h.update(str(file_path.relative_to(directory_path)).encode("utf-8"))
+            # Update hash with file content in chunks
+            with open(file_path, "rb") as f:
+                while chunk := f.read(8192):
+                    h.update(chunk)
+    return f"{h.hexdigest()}.xxh3_64"
 
 import torch
 import torchaudio
@@ -47,24 +63,37 @@ class StableAudioAdapter(ModelAdapter):
     def register_model(self, **kwargs) -> StableAudioModel:
         config_path = kwargs.get("config_path")
         checkpoint_path = kwargs.get("checkpoint_path")
+        encoder_path = kwargs.get("encoder_path")
 
         # Load the config
         with open(config_path, 'r') as cf:
             config_json = cf.read()
             config = json.loads(config_json)
 
-        # Create a temporary model object to generate a UID from
-        model = create_model_from_config(config)
-        model.load_state_dict(load_ckpt_state_dict(checkpoint_path))
+        # Load the state dict and generate the checkpoint ID directly from it
+        state_dict = load_ckpt_state_dict(checkpoint_path)
+        checkpoint_uid = self.uid_generator.from_state_dict(state_dict)
 
-        model_id = self.uid_generator.from_module(model)
+        encoder_asset = None
+        if encoder_path:
+            encoder_dir = Path(encoder_path)
+            if encoder_dir.is_dir():
+                encoder_uid = _hash_directory(encoder_dir)
+                encoder_asset = Asset(path=str(encoder_dir).replace("\\", "/"), uid=encoder_uid)
+                # Combine checkpoint UID and encoder UID to form the overall Model ID
+                model_id = self.uid_generator.from_uids([checkpoint_uid, encoder_uid])
+            else:
+                model_id = checkpoint_uid
+        else:
+            model_id = checkpoint_uid
 
         return StableAudioModel(
             id=model_id,
             name=kwargs.get("name"),
-            checkpoint=Asset(path=checkpoint_path, uid=model_id),
+            checkpoint=Asset(path=checkpoint_path, uid=checkpoint_uid),
             config=config,
             model_type=kwargs.get("model_type"),
+            encoder=encoder_asset,
             context={}
         )
         
@@ -78,13 +107,50 @@ class StableAudioAdapter(ModelAdapter):
             del self.model
             self.model = None
 
-        # Load the new model
-        self.model = create_model_from_config(info.config)
-        self.model.load_state_dict(load_ckpt_state_dict(info.checkpoint.path))
-        self.model_info = info
+        # Load the state dict
+        state_dict = load_ckpt_state_dict(info.checkpoint.path)
 
-        if verify and self.uid_generator.from_module(self.model) != info.id:
-            raise UIDMismatchError("Checkpoint UID mismatch")
+        if verify:
+            checkpoint_uid = self.uid_generator.from_state_dict(state_dict)
+            encoder_asset = getattr(info, "encoder", None)
+            if encoder_asset:
+                expected_id = self.uid_generator.from_uids([checkpoint_uid, encoder_asset.uid])
+            else:
+                expected_id = checkpoint_uid
+            if expected_id != info.id:
+                raise UIDMismatchError("Combined Model UID mismatch")
+
+        # Load the new model
+        # Override conditioner paths if local encoder path is supplied and exists
+        config = copy.deepcopy(info.config)
+        encoder_asset = getattr(info, "encoder", None)
+        if encoder_asset and encoder_asset.path:
+            actual_path = encoder_asset.path
+            # If the path points to an archive file (uploaded via sync), extract it first
+            if os.path.isfile(actual_path):
+                extracted_dir = Path(actual_path + "_extracted")
+                if not extracted_dir.exists():
+                    import zipfile
+                    print(f"Extracting encoder archive {actual_path} to {extracted_dir}...")
+                    extracted_dir.mkdir(parents=True, exist_ok=True)
+                    with zipfile.ZipFile(actual_path, 'r') as zip_ref:
+                        zip_ref.extractall(extracted_dir)
+                actual_path = str(extracted_dir)
+
+            if os.path.exists(actual_path):
+                clean_encoder_path = str(Path(actual_path)).replace("\\", "/")
+                conditioning = config.get("model", {}).get("conditioning", {})
+                for cond_config in conditioning.get("configs", []):
+                    cond_type = cond_config.get("type")
+                    if cond_type in ["t5", "t5gemma", "clap", "clap_audio"]:
+                        cond_inner_config = cond_config.setdefault("config", {})
+                        cond_inner_config["model_path"] = clean_encoder_path
+                        cond_inner_config.pop("repo_id", None)
+                        cond_inner_config.pop("subfolder", None)
+
+        self.model = create_model_from_config(config)
+        self.model.load_state_dict(state_dict)
+        self.model_info = info
 
     def cleanup(self):
         if self.model:

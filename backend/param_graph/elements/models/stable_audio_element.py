@@ -9,4 +9,5 @@ class StableAudioModel(Model):
     checkpoint: Asset
     config: dict
     model_type: str
+    encoder: Asset | None = None
     adapter: str = 'stable_audio_tools'

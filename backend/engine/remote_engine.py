@@ -187,20 +187,44 @@ class RemoteEngine(Engine):
 
         chunk_size = 10 * 1024 * 1024  # 10 MB
         for asset_uid, asset_path in paths_to_upload:
-            file_size = os.path.getsize(asset_path)
+            temp_zip_path = None
+            if os.path.isdir(asset_path):
+                print(f"Archiving directory {asset_path} for upload...")
+                import tempfile
+                import shutil
+                # Create a temporary zip archive path
+                temp_fd, temp_zip_path = tempfile.mkstemp(suffix=".zip")
+                os.close(temp_fd)
+                # shutil.make_archive appends .zip, so strip it from the base name
+                base_name = temp_zip_path[:-4] if temp_zip_path.endswith(".zip") else temp_zip_path
+                shutil.make_archive(base_name, 'zip', asset_path)
+                if not temp_zip_path.endswith(".zip"):
+                    temp_zip_path += ".zip"
+                upload_path = temp_zip_path
+            else:
+                upload_path = asset_path
+
+            file_size = os.path.getsize(upload_path)
             total_chunks = max(1, (file_size + chunk_size - 1) // chunk_size)
             
-            with open(asset_path, 'rb') as f:
-                for i in range(total_chunks):
-                    chunk_data = f.read(chunk_size)
-                    data = aiohttp.FormData()
-                    data.add_field('uid', asset_uid)
-                    data.add_field('chunk_index', str(i))
-                    data.add_field('total_chunks', str(total_chunks))
-                    data.add_field('total_size', str(file_size))
-                    data.add_field('file', chunk_data, filename=asset_uid, content_type='application/octet-stream')
+            try:
+                with open(upload_path, 'rb') as f:
+                    for i in range(total_chunks):
+                        chunk_data = f.read(chunk_size)
+                        data = aiohttp.FormData()
+                        data.add_field('uid', asset_uid)
+                        data.add_field('chunk_index', str(i))
+                        data.add_field('total_chunks', str(total_chunks))
+                        data.add_field('total_size', str(file_size))
+                        data.add_field('file', chunk_data, filename=asset_uid, content_type='application/octet-stream')
 
-                    async with session.post(f"{self.remote_url}/upload", data=data) as response:
-                        response.raise_for_status()
+                        async with session.post(f"{self.remote_url}/upload", data=data) as response:
+                            response.raise_for_status()
+            finally:
+                if temp_zip_path and os.path.exists(temp_zip_path):
+                    try:
+                        os.remove(temp_zip_path)
+                    except Exception as e:
+                        print(f"Warning: failed to clean up temp zip file {temp_zip_path}: {e}")
         
         return True

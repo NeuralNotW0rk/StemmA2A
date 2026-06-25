@@ -10,6 +10,9 @@ soundfile
 librosa
 setuptools<60
 requests
+pydantic
+aiohttp
+scikit-learn
 
 # --------------------
 # Representation
@@ -22,4 +25,6 @@ coolname
 # Engine
 # --------------------
 torchcodec
+k-diffusion
+pytorch-lightning
 stable-audio-tools

@@ -8,7 +8,7 @@ export interface FormFieldOption {
 export interface FormField {
   name: string;
   label:string;
-  type: 'string' | 'number' | 'boolean' | 'textarea' | 'select' | 'file' | 'node';
+  type: 'string' | 'number' | 'boolean' | 'textarea' | 'select' | 'file' | 'directory' | 'node';
   defaultValue?: any;
   filter?: NodeFilter;
   options?: FormFieldOption[];
