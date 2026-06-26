@@ -1,5 +1,5 @@
 # 1. Start from NVIDIA's official CUDA developer image (standard Ubuntu 22.04 base)
-FROM nvidia/cuda:12.1.1-cudnn9-devel-ubuntu22.04
+FROM nvidia/cuda:12.1.1-devel-ubuntu22.04
 
 # 2. Set the working directory
 WORKDIR /app
