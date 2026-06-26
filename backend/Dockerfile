@@ -1,29 +1,35 @@
-# 1. Start from the official PyTorch 2.5.1 image (default Python 3.11)
-FROM pytorch/pytorch:2.5.1-cuda12.1-cudnn9-devel
+# 1. Start from NVIDIA's official CUDA developer image (standard Ubuntu 22.04 base)
+FROM nvidia/cuda:12.1.1-cudnn9-devel-ubuntu22.04
 
-# 2. Downgrade Python to 3.10 inside the conda environment and reinstall PyTorch for Python 3.10
-RUN conda install -y python=3.10 && \
-    pip install --no-cache-dir torch==2.5.1 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121 && \
-    conda clean -ay
-
-# 3. Set the working directory
+# 2. Set the working directory
 WORKDIR /app
 
-# 4. Install essential C++ build tools and OS-level dependencies
+# 3. Install Python 3.10, pip, and essential OS-level dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.10 \
+    python3.10-dev \
+    python3-pip \
     build-essential \
     libgl1 \
     libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-# 5. Install the rest of the requirements
+# 4. Set python3.10 as the default 'python' and 'pip' commands
+RUN ln -sf /usr/bin/python3.10 /usr/bin/python && \
+    ln -sf /usr/bin/pip3 /usr/bin/pip && \
+    pip install --no-cache-dir --upgrade pip wheel setuptools
+
+# 5. Install PyTorch 2.5.1 with CUDA 12.1 support
+RUN pip install --no-cache-dir torch==2.5.1 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+
+# 6. Install the rest of the requirements
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 6. Copy the code
+# 7. Copy the code
 COPY . .
 
-# 7. Set up the entrypoint script
+# 8. Set up the entrypoint script
 COPY entrypoint.sh /entrypoint.sh
 RUN sed -i 's/\r$//' /entrypoint.sh && chmod +x /entrypoint.sh
 ENTRYPOINT ["/entrypoint.sh"]
