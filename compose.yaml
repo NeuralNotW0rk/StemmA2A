@@ -17,6 +17,7 @@ services:
       PYTHONUNBUFFERED: 1
       RUNNING_IN_CONTAINER: "true"
       CONTAINER_DATA_PATH: ${CONTAINER_DATA_PATH}
+      TORCH_HOME: "/app/data/torch"
     networks:
       - app-net
 

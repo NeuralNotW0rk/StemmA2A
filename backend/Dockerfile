@@ -19,12 +19,14 @@ RUN ln -sf /usr/bin/python3.10 /usr/bin/python && \
     ln -sf /usr/bin/pip3 /usr/bin/pip && \
     pip install --no-cache-dir --upgrade pip wheel setuptools
 
-# 5. Install PyTorch 2.5.1 with CUDA 12.1 support
-RUN pip install --no-cache-dir torch==2.5.1 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+# 5. Install PyTorch 2.5.1 with CUDA 12.1 support (using BuildKit cache mount to avoid re-downloading)
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install torch==2.5.1 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 
 # 6. Install the rest of the requirements
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -r requirements.txt
 
 # 7. Copy the code
 COPY . .
