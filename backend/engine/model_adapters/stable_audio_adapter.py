@@ -351,9 +351,10 @@ class StableAudioAdapter(ModelAdapter):
         # Generate stereo audio
         with torch.no_grad():
             import stable_audio_tools.inference.generation as sat_gen
+            import stable_audio_tools.inference.sampling as sat_samp
             import k_diffusion.sampling as k_samp
             
-            original_sample_k = sat_gen.sample_k
+            original_sample_k = sat_samp.sample_k
             original_heun = k_samp.sample_heun
             
             if is_euler:
@@ -426,13 +427,13 @@ class StableAudioAdapter(ModelAdapter):
 
                 return original_sample_k(*inner_args, **inner_kwargs)
 
-            sat_gen.sample_k = patched_sample_k
+            sat_samp.sample_k = patched_sample_k
             
             try:
                 output = generate_diffusion_cond(model, **args)
             finally:
                 # Restore original hooks immediately after execution completes
-                sat_gen.sample_k = original_sample_k
+                sat_samp.sample_k = original_sample_k
                 if is_euler:
                     k_samp.sample_heun = original_heun
 
