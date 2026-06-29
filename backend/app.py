@@ -82,6 +82,15 @@ os.environ["HF_HOME"] = str(hf_cache_dir)
 os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
 os.environ["HF_HUB_DISABLE_SYMLINKS"] = "1"
 
+# Set Triton and PyTorch extensions cache directories to a persistent location within the data cache.
+triton_cache_dir = data_cache_root / "triton"
+triton_cache_dir.mkdir(parents=True, exist_ok=True)
+os.environ["TRITON_CACHE_DIR"] = str(triton_cache_dir)
+
+torch_ext_dir = data_cache_root / "torch_extensions"
+torch_ext_dir.mkdir(parents=True, exist_ok=True)
+os.environ["TORCH_EXTENSIONS_DIR"] = str(torch_ext_dir)
+
 # Global state
 device_type_accelerator = "cuda" if torch.cuda.is_available() else "cpu"
 device_accelerator = torch.device(device_type_accelerator)

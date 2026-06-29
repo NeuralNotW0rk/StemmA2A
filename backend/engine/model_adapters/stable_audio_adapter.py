@@ -52,6 +52,71 @@ def load_ckpt_state_dict(ckpt_path):
     return state_dict
 
 
+def _get_cache_file_path() -> Path:
+    is_container = os.environ.get("RUNNING_IN_CONTAINER") == "true"
+    if is_container:
+        data_path = os.environ.get("CONTAINER_DATA_PATH")
+    else:
+        data_path = os.environ.get("LOCAL_DATA_PATH")
+        
+    if data_path:
+        cache_dir = Path(data_path).expanduser()
+        try:
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            return cache_dir / "model_uid_cache.json"
+        except Exception:
+            pass
+            
+    for p in ["/app/data", "./data", "."]:
+        path = Path(p)
+        if path.exists() and os.access(path, os.W_OK):
+            return path / "model_uid_cache.json"
+            
+    return Path("model_uid_cache.json")
+
+def _get_cached_uid(file_path: str, uid_generator) -> str:
+    abs_path = os.path.abspath(file_path)
+    if not os.path.exists(abs_path):
+        raise FileNotFoundError(f"Checkpoint file not found: {abs_path}")
+        
+    stat = os.stat(abs_path)
+    file_size = stat.st_size
+    file_mtime = stat.st_mtime
+    
+    cache_file = _get_cache_file_path()
+    cache = {}
+    if cache_file.exists():
+        try:
+            with open(cache_file, "r") as f:
+                cache = json.load(f)
+        except Exception as e:
+            print(f"Error reading UID cache: {e}")
+            
+    entry = cache.get(abs_path)
+    if entry and entry.get("size") == file_size and entry.get("mtime") == file_mtime:
+        return entry.get("uid")
+        
+    # Cache miss: compute uid by loading state dict
+    print(f"Cache miss for {abs_path}. Computing state dict UID...")
+    state_dict = load_ckpt_state_dict(abs_path)
+    uid = uid_generator.from_state_dict(state_dict)
+    
+    # Save to cache
+    cache[abs_path] = {
+        "size": file_size,
+        "mtime": file_mtime,
+        "uid": uid
+    }
+    
+    try:
+        with open(cache_file, "w") as f:
+            json.dump(cache, f, indent=2)
+    except Exception as e:
+        print(f"Error writing UID cache: {e}")
+        
+    return uid
+
+
 class StableAudioAdapter(ModelAdapter):
     def __init__(self) -> None:
         super().__init__()
@@ -70,9 +135,8 @@ class StableAudioAdapter(ModelAdapter):
             config_json = cf.read()
             config = json.loads(config_json)
 
-        # Load the state dict and generate the checkpoint ID directly from it
-        state_dict = load_ckpt_state_dict(checkpoint_path)
-        checkpoint_uid = self.uid_generator.from_state_dict(state_dict)
+        # Generate the checkpoint ID using the persistent cache or by computing it
+        checkpoint_uid = _get_cached_uid(checkpoint_path, self.uid_generator)
 
         encoder_asset = None
         if encoder_path:
@@ -107,11 +171,8 @@ class StableAudioAdapter(ModelAdapter):
             del self.model
             self.model = None
 
-        # Load the state dict
-        state_dict = load_ckpt_state_dict(info.checkpoint.path)
-
         if verify:
-            checkpoint_uid = self.uid_generator.from_state_dict(state_dict)
+            checkpoint_uid = _get_cached_uid(info.checkpoint.path, self.uid_generator)
             encoder_asset = getattr(info, "encoder", None)
             if encoder_asset:
                 expected_id = self.uid_generator.from_uids([checkpoint_uid, encoder_asset.uid])
@@ -119,6 +180,9 @@ class StableAudioAdapter(ModelAdapter):
                 expected_id = checkpoint_uid
             if expected_id != info.id:
                 raise UIDMismatchError("Combined Model UID mismatch")
+
+        # Load the state dict
+        state_dict = load_ckpt_state_dict(info.checkpoint.path)
 
         # Load the new model
         # Override conditioner paths if local encoder path is supplied and exists

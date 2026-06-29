@@ -85,8 +85,10 @@ class XXH3_64(UIDGenerator):
         for key in sorted(state_dict.keys()):
             # .contiguous() is the 'secret sauce'—it ensures the memory layout 
             # matches the logical data, regardless of previous slices or transposes.
-            data = state_dict[key].detach().cpu().contiguous().numpy().tobytes()
-            h.update(data)
+            tensor = state_dict[key].detach().cpu()
+            if not tensor.is_contiguous():
+                tensor = tensor.contiguous()
+            h.update(memoryview(tensor.numpy()))
             
         return f"{h.hexdigest()}{self.DELIMITER}{self.get_method_name()}"
 

@@ -52,6 +52,16 @@ os.environ["HF_HOME"] = str(hf_cache_dir)
 os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
 os.environ["HF_HUB_DISABLE_SYMLINKS"] = "1"
 
+# Set Triton and PyTorch extensions cache directories to a persistent location within the data cache.
+# This prevents costly Triton/PyTorch kernel re-compilations every time the container is restarted.
+triton_cache_dir = data_cache_root / "triton"
+triton_cache_dir.mkdir(parents=True, exist_ok=True)
+os.environ["TRITON_CACHE_DIR"] = str(triton_cache_dir)
+
+torch_ext_dir = data_cache_root / "torch_extensions"
+torch_ext_dir.mkdir(parents=True, exist_ok=True)
+os.environ["TORCH_EXTENSIONS_DIR"] = str(torch_ext_dir)
+
 # Initialize the engine provider with the data cache path.
 engine_provider = EngineProvider(data_root=str(data_cache_root))
 
