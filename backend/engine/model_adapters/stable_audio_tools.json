@@ -13,7 +13,7 @@
             "type": "textarea",
             "defaultValue": "low fidelity",
             "placeholder": "Enter a negative prompt for the model...",
-            "show_if": {"model_type": "k_diffusion"}
+            "show_if": {"sampler_category": "k_diffusion"}
         },
         {
             "name": "steps",
@@ -44,6 +44,16 @@
             "placeholder": "Enter duration in seconds"
         },
         {
+            "name": "sampler_category",
+            "label": "Sampler Type",
+            "type": "select",
+            "defaultValue": "k_diffusion",
+            "options": [
+                { "label": "K-Diffusion", "value": "k_diffusion" },
+                { "label": "Rectified Flow", "value": "rectified_flow" }
+            ]
+        },
+        {
             "name": "k_sampler_type",
             "label": "K-Sampler",
             "type": "select",
@@ -57,7 +67,7 @@
                 { "label": "k-DPM Fast", "value": "k-dpm-fast" },
                 { "label": "k-DPM Adaptive", "value": "k-dpm-adaptive" }
             ],
-            "show_if": {"model_type": "k_diffusion"}
+            "show_if": {"sampler_category": "k_diffusion"}
         },
         {
             "name": "rf_sampler_type",
@@ -69,9 +79,8 @@
                 { "label": "RK4", "value": "rk4" },
                 { "label": "DPM++", "value": "dpmpp" },
                 { "label": "Ping-pong", "value": "pingpong" }
-
             ],
-            "show_if": {"model_type": "rectified_flow"}
+            "show_if": {"sampler_category": "rectified_flow"}
         },
         {
             "name": "sigma_min",
@@ -79,7 +88,7 @@
             "type": "float",
             "defaultValue": 0.3,
             "placeholder": "Enter sigma min",
-            "show_if": {"model_type": "k_diffusion"}
+            "show_if": {"sampler_category": "k_diffusion"}
         },
         {
             "name": "sigma_max",
@@ -87,7 +96,7 @@
             "type": "float",
             "defaultValue": 500,
             "placeholder": "Enter sigma max",
-            "show_if": {"model_type": "k_diffusion"}
+            "show_if": {"sampler_category": "k_diffusion"}
         },
         {
             "name": "seed",
@@ -165,16 +174,6 @@
             "type": "text",
             "placeholder": "Enter a name for the model",
             "required": true
-        },
-        {
-            "name": "model_type",
-            "label": "Model Type",
-            "type": "select",
-            "defaultValue": "k_diffusion",
-            "options": [
-                { "label": "K-Diffusion", "value": "k_diffusion" },
-                { "label": "Rectified Flow", "value": "rectified_flow" }
-            ]
         },
         {
             "name": "checkpoint_path",

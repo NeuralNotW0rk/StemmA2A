@@ -212,18 +212,23 @@ class StableAudioAdapter(ModelAdapter):
         print(f"Sample Rate: {sample_rate}")
         print(f"Sample Size: {sample_size}")
 
+        # Determine sampler category (explicit toggle or model metadata fallback)
+        sampler_category = kwargs.get("sampler_category")
+        if not sampler_category:
+            sampler_category = getattr(self.model_info, "model_type", None) or "k_diffusion"
+
         sampler_type = None
-        if self.model_info.model_type == "k_diffusion":
+        if sampler_category == "k_diffusion":
             sampler_type = kwargs.get("k_sampler_type")
             if not sampler_type:
-                raise ValueError("k_sampler_type is required for k_diffusion models.")
-        elif self.model_info.model_type == "rectified_flow":
+                raise ValueError("k_sampler_type is required for k_diffusion inference.")
+        elif sampler_category == "rectified_flow":
             sampler_type = kwargs.get("rf_sampler_type")
             if not sampler_type:
-                raise ValueError("rf_sampler_type is required for rectified_flow models.")
+                raise ValueError("rf_sampler_type is required for rectified_flow inference.")
         
         if not sampler_type:
-            raise ValueError(f"Unable to determine sampler type for model_type: {self.model_info.model_type}")
+            raise ValueError(f"Unable to determine sampler type for category: {sampler_category}")
             
         is_euler = sampler_type == "euler"
         if is_euler:

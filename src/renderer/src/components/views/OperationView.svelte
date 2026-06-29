@@ -198,6 +198,7 @@
         // Expose model_type at the top level of formData for show_if visibility rules
         if (modelType && formData.model_type !== modelType) {
           formData.model_type = modelType
+          formData.sampler_category = modelType
         }
 
         if (adapter) {
