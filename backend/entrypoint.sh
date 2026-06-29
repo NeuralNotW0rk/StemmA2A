@@ -8,5 +8,8 @@ if [ -d "/Diffracture" ] && { [ -f "/Diffracture/setup.py" ] || [ -f "/Diffractu
     pip install -e /Diffracture
 fi
 
+# Run CUDA and system diagnostics to check for common container bottleneck issues
+python diagnose_gpu.py
+
 # Execute the container's main command (CMD from Dockerfile or compose.yaml)
 exec "$@"
