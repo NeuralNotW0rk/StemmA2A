@@ -57,13 +57,35 @@ def resolve_element(attrs: Dict[str, Any]) -> Type[Any]:
             value = attrs[param_name]
             param_type = type_hints.get(param_name)
 
-            # If the parameter is typed as a class and the value is a dictionary,
+            # Determine target class, handling Union types (like Class | None)
+            target_class = None
+            if param_type is not None:
+                if inspect.isclass(param_type):
+                    target_class = param_type
+                else:
+                    # Check if it is a Union type
+                    from typing import get_origin, get_args, Union
+                    import sys
+                    try:
+                        from types import UnionType
+                    except ImportError:
+                        UnionType = None
+
+                    origin = get_origin(param_type)
+                    is_union = origin is Union or (UnionType is not None and origin is UnionType)
+                    if is_union:
+                        for arg in get_args(param_type):
+                            if inspect.isclass(arg) and arg is not type(None):
+                                target_class = arg
+                                break
+
+            # If we found a target class and the value is a dictionary,
             # we attempt to instantiate the class with the dictionary's values.
             # This handles nested objects like the 'Asset' dataclass.
-            if inspect.isclass(param_type) and isinstance(value, dict):
+            if target_class is not None and isinstance(value, dict):
                 try:
                     # This assumes the nested dict keys match the nested class's __init__ args
-                    constructor_attrs[param_name] = param_type(**value)
+                    constructor_attrs[param_name] = target_class(**value)
                 except TypeError:
                     # If instantiation fails, we pass the dictionary as is.
                     constructor_attrs[param_name] = value
