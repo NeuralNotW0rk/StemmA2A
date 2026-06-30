@@ -22,6 +22,10 @@ export interface FormField {
   };
   filters?: { name: string; extensions: string[] }[];
   show_if?: Record<string, any>;
+  conditionalDefaults?: {
+    show_if: Record<string, any>;
+    value: any;
+  }[];
 }
 
 export type FormConfig = FormField[];
@@ -90,8 +94,35 @@ export function initializeFormData(
         formData[field.name] = initiatorNode
       }
     }
-    if (formData[field.name] === undefined && field.defaultValue !== undefined) {
-      formData[field.name] = field.defaultValue
+    if (formData[field.name] === undefined) {
+      let val = field.defaultValue;
+      if (field.conditionalDefaults) {
+        const data = { ...context, ...formData };
+        for (const condDefault of field.conditionalDefaults) {
+          let conditionsMet = true;
+          for (const key in condDefault.show_if) {
+            const condition = condDefault.show_if[key];
+            if (condition === 'exists') {
+              if (!data[key]) {
+                conditionsMet = false;
+                break;
+              }
+            } else {
+              if (data[key] !== condition) {
+                conditionsMet = false;
+                break;
+              }
+            }
+          }
+          if (conditionsMet) {
+            val = condDefault.value;
+            break;
+          }
+        }
+      }
+      if (val !== undefined) {
+        formData[field.name] = val;
+      }
     }
   }
   return { formData }

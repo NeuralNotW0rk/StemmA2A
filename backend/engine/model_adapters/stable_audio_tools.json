@@ -20,6 +20,9 @@
             "label": "Steps",
             "type": "integer",
             "defaultValue": 50,
+            "conditionalDefaults": [
+                { "show_if": {"diffusion_objective": "rf_denoiser"}, "value": 8 }
+            ],
             "placeholder": "Enter number of steps"
         },
         {
@@ -27,6 +30,9 @@
             "label": "CFG Scale",
             "type": "float",
             "defaultValue": 7,
+            "conditionalDefaults": [
+                { "show_if": {"diffusion_objective": "rf_denoiser"}, "value": 1.0 }
+            ],
             "placeholder": "Enter CFG scale"
         },
         {
@@ -87,16 +93,20 @@
             "label": "Sigma Min",
             "type": "float",
             "defaultValue": 0.3,
-            "placeholder": "Enter sigma min",
-            "show_if": {"sampler_category": "k_diffusion"}
+            "conditionalDefaults": [
+                { "show_if": {"sampler_category": "rectified_flow"}, "value": 0.0 }
+            ],
+            "placeholder": "Enter sigma min"
         },
         {
             "name": "sigma_max",
             "label": "Sigma Max",
             "type": "float",
             "defaultValue": 500,
-            "placeholder": "Enter sigma max",
-            "show_if": {"sampler_category": "k_diffusion"}
+            "conditionalDefaults": [
+                { "show_if": {"sampler_category": "rectified_flow"}, "value": 1.0 }
+            ],
+            "placeholder": "Enter sigma max"
         },
         {
             "name": "seed",
@@ -105,6 +115,51 @@
             "defaultValue": 0,
             "placeholder": "Enter a seed",
             "randomizable": true
+        },
+        {
+            "name": "cfg_interval_min",
+            "label": "CFG Interval Min",
+            "type": "float",
+            "defaultValue": 0.0,
+            "placeholder": "Enter CFG interval min",
+            "show_if": {"sampler_category": "rectified_flow"}
+        },
+        {
+            "name": "cfg_interval_max",
+            "label": "CFG Interval Max",
+            "type": "float",
+            "defaultValue": 1.0,
+            "placeholder": "Enter CFG interval max",
+            "show_if": {"sampler_category": "rectified_flow"}
+        },
+        {
+            "name": "cfg_rescale",
+            "label": "CFG Rescale",
+            "type": "float",
+            "defaultValue": 0.0,
+            "placeholder": "Enter CFG rescale amount"
+        },
+        {
+            "name": "cfg_norm_threshold",
+            "label": "CFG Norm Threshold",
+            "type": "float",
+            "defaultValue": 0.0,
+            "placeholder": "Enter CFG norm threshold"
+        },
+        {
+            "name": "apg_scale",
+            "label": "APG Scale",
+            "type": "float",
+            "defaultValue": 1.0,
+            "placeholder": "1.0=full APG, 0.0=vanilla CFG",
+            "show_if": {"sampler_category": "rectified_flow"}
+        },
+        {
+            "name": "duration_padding_sec",
+            "label": "Duration Padding (sec)",
+            "type": "float",
+            "defaultValue": 6.0,
+            "placeholder": "Enter duration padding in seconds"
         },
         {
             "name": "init_audio",
@@ -165,6 +220,63 @@
             "type": "float",
             "defaultValue": 11,
             "placeholder": "Enter duration in seconds"
+        },
+        {
+            "name": "sampler_category",
+            "label": "Sampler Type",
+            "type": "select",
+            "defaultValue": "k_diffusion",
+            "options": [
+                { "label": "K-Diffusion", "value": "k_diffusion" },
+                { "label": "Rectified Flow", "value": "rectified_flow" }
+            ]
+        },
+        {
+            "name": "inversion_gamma",
+            "label": "Inversion Gamma",
+            "type": "float",
+            "defaultValue": 0.3,
+            "placeholder": "0.3 - 0.5 is good for reproduction",
+            "show_if": {"sampler_category": "rectified_flow"}
+        },
+        {
+            "name": "inversion_unconditional",
+            "label": "Inversion Unconditional",
+            "type": "boolean",
+            "defaultValue": true,
+            "show_if": {"sampler_category": "rectified_flow"}
+        },
+        {
+            "name": "inversion_cfg_scale",
+            "label": "Inversion CFG Scale",
+            "type": "float",
+            "defaultValue": 1.0,
+            "placeholder": "Usually 1.0",
+            "show_if": {"sampler_category": "rectified_flow"}
+        },
+        {
+            "name": "seed",
+            "label": "Seed",
+            "type": "integer",
+            "defaultValue": 0,
+            "placeholder": "Enter seed",
+            "randomizable": true
+        },
+        {
+            "name": "sigma_min",
+            "label": "Sigma Min",
+            "type": "float",
+            "defaultValue": 0.3,
+            "placeholder": "Enter sigma min",
+            "show_if": {"sampler_category": "k_diffusion"}
+        },
+        {
+            "name": "sigma_max",
+            "label": "Sigma Max",
+            "type": "float",
+            "defaultValue": 500.0,
+            "placeholder": "Enter sigma max",
+            "show_if": {"sampler_category": "k_diffusion"}
         }
     ],
     "import": [

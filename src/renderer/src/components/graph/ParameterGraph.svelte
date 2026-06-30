@@ -999,6 +999,7 @@
         const pos = node.position()
         if (
           isChildless &&
+          node.locked() &&
           typeof pos.x === 'number' &&
           typeof pos.y === 'number' &&
           !isNaN(pos.x) &&

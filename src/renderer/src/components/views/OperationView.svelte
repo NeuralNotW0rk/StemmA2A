@@ -179,8 +179,8 @@
         let adapter = isObj
           ? ((modelNode as Record<string, unknown>).adapter as string | null)
           : null
-        let modelType = isObj
-          ? ((modelNode as Record<string, unknown>).model_type as string | null)
+        let config = isObj
+          ? ((modelNode as Record<string, unknown>).config as Record<string, any> | null)
           : null
 
         if (cy && modelId) {
@@ -189,16 +189,30 @@
             if (!adapter) {
               adapter = cyNode.data('adapter') as string | null
             }
-            if (!modelType) {
-              modelType = cyNode.data('model_type') as string | null
+            if (!config) {
+              config = cyNode.data('config') as Record<string, any> | null
             }
           }
+        }
+
+        let modelType: string | null = null
+        let diffusionObjective: string = 'v'
+        if (config) {
+          const modelConfig = config.model || {}
+          const diffusionConfig = modelConfig.diffusion || {}
+          diffusionObjective = diffusionConfig.diffusion_objective || 'v'
+          modelType = ['rectified_flow', 'rf_denoiser'].includes(diffusionObjective)
+            ? 'rectified_flow'
+            : 'k_diffusion'
         }
 
         // Expose model_type at the top level of formData for show_if visibility rules
         if (modelType && formData.model_type !== modelType) {
           formData.model_type = modelType
           formData.sampler_category = modelType
+        }
+        if (diffusionObjective && formData.diffusion_objective !== diffusionObjective) {
+          formData.diffusion_objective = diffusionObjective
         }
 
         if (adapter) {

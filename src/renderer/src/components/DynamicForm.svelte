@@ -66,6 +66,69 @@
   })
 
   $effect(() => {
+    // Collect all condition target keys from config's conditionalDefaults
+    const targetKeys = new Set<string>()
+    for (const field of config) {
+      if (field.conditionalDefaults) {
+        for (const condDefault of field.conditionalDefaults) {
+          for (const key in condDefault.show_if) {
+            targetKeys.add(key)
+          }
+        }
+      }
+    }
+
+    // Touch condition keys to establish reactive dependencies
+    for (const key of targetKeys) {
+      const _dummy1 = formData[key]
+      const _dummy2 = contextData ? contextData[key] : null
+    }
+
+    const data = { ...contextData, ...formData }
+
+    untrack(() => {
+      for (const field of config) {
+        if (field.conditionalDefaults) {
+          let matchedDefaultValue: any = undefined
+          let conditionsMet = false
+
+          for (const condDefault of field.conditionalDefaults) {
+            let itemConditionsMet = true
+            for (const key in condDefault.show_if) {
+              const condition = condDefault.show_if[key]
+              if (condition === 'exists') {
+                if (!data[key]) {
+                  itemConditionsMet = false
+                  break
+                }
+              } else {
+                if (data[key] !== condition) {
+                  itemConditionsMet = false
+                  break
+                }
+              }
+            }
+            if (itemConditionsMet) {
+              matchedDefaultValue = condDefault.value
+              conditionsMet = true
+              break
+            }
+          }
+
+          if (conditionsMet && matchedDefaultValue !== undefined) {
+            const isVisible = visibleFields.includes(field)
+            if (!isVisible || formData[field.name] !== matchedDefaultValue) {
+              formData[field.name] = matchedDefaultValue
+            }
+          } else if (!conditionsMet && field.defaultValue !== undefined && formData[field.name] !== field.defaultValue) {
+            formData[field.name] = field.defaultValue
+          }
+        }
+      }
+    })
+  })
+
+  $effect(() => {
     isFormValid = visibleFields.every(
       (f) =>
         !f.validation?.required ||

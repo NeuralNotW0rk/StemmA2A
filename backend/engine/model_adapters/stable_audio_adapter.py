@@ -276,10 +276,15 @@ class StableAudioAdapter(ModelAdapter):
         print(f"Sample Rate: {sample_rate}")
         print(f"Sample Size: {sample_size}")
 
-        # Determine sampler category (explicit toggle or model metadata fallback)
+        # Determine sampler category (explicit toggle or model config fallback)
+        model_config = self.model_info.config.get("model", {})
+        diffusion_config = model_config.get("diffusion", {})
+        diffusion_objective = diffusion_config.get("diffusion_objective", "v")
+        is_rf_denoiser = diffusion_objective == "rf_denoiser"
+
         sampler_category = kwargs.get("sampler_category")
         if not sampler_category:
-            sampler_category = getattr(self.model_info, "model_type", None) or "k_diffusion"
+            sampler_category = "rectified_flow" if diffusion_objective in ["rectified_flow", "rf_denoiser"] else "k_diffusion"
 
         sampler_type = None
         if sampler_category == "k_diffusion":
@@ -294,9 +299,7 @@ class StableAudioAdapter(ModelAdapter):
         if not sampler_type:
             raise ValueError(f"Unable to determine sampler type for category: {sampler_category}")
             
-        is_euler = sampler_type == "euler"
-        if is_euler:
-            sampler_type = "k-heun"  # Bypass stable-audio-tools string validation
+
             
         # Extract metadata and tensor payload from initial latent if available
         init_latent_element = kwargs.get("init_latent_element")
@@ -310,9 +313,13 @@ class StableAudioAdapter(ModelAdapter):
                 inversion_meta = getattr(init_latent_element, "context", {}).get("inversion_metadata", None)
 
         # Establish execution steps and schedule boundaries
-        steps = kwargs.get("steps", 8)
-        sigma_min = kwargs.get("sigma_min", 0.3)
-        sigma_max = kwargs.get("sigma_max", 500.0)
+        for required_param in ["steps", "cfg_scale", "sigma_min", "sigma_max", "seed"]:
+            if required_param not in kwargs:
+                raise ValueError(f"Parameter '{required_param}' is required.")
+
+        steps = kwargs["steps"]
+        sigma_min = kwargs["sigma_min"]
+        sigma_max = kwargs["sigma_max"]
 
         # Synchronize parameters to the latent node if using an inverted blueprint
         if inversion_meta:
@@ -350,7 +357,7 @@ class StableAudioAdapter(ModelAdapter):
                     max_seconds = max(max_seconds, cond_dict["seconds_total"])
 
             if max_seconds > 0:
-                duration_padding_sec = 6.0
+                duration_padding_sec = kwargs.get("duration_padding_sec", 6.0)
                 target_audio_samples = int((max_seconds + duration_padding_sec) * getattr(model, "sample_rate", sample_rate))
 
                 if model.pretransform is not None:
@@ -400,7 +407,7 @@ class StableAudioAdapter(ModelAdapter):
         # Set up generation arguments
         args = {
             "steps": steps,
-            "cfg_scale": kwargs.get("cfg_scale", 1.0),
+            "cfg_scale": kwargs["cfg_scale"],
             "conditioning": conditioning,
             "negative_conditioning": negative_conditioning,
             "conditioning_tensors": conditioning_tensors,
@@ -411,7 +418,12 @@ class StableAudioAdapter(ModelAdapter):
             "sigma_max": sigma_max,
             "sampler_type": sampler_type,
             "device": self.device,
-            "seed": kwargs.get("seed", 0)
+            "seed": kwargs["seed"],
+            "apg_scale": kwargs.get("apg_scale", 1.0),
+            "cfg_interval": (kwargs.get("cfg_interval_min", 0.0), kwargs.get("cfg_interval_max", 1.0)),
+            "scale_phi": kwargs.get("cfg_rescale", 0.0),
+            "cfg_norm_threshold": kwargs.get("cfg_norm_threshold", 0.0),
+            "duration_padding_sec": kwargs.get("duration_padding_sec", 6.0),
         }
 
         # Handle traditional initial audio if provided
@@ -434,10 +446,6 @@ class StableAudioAdapter(ModelAdapter):
             import k_diffusion.sampling as k_samp
             
             original_sample_k = sat_samp.sample_k
-            original_heun = k_samp.sample_heun
-            
-            if is_euler:
-                k_samp.sample_heun = k_samp.sample_euler
                 
             # ALWAYS patch sample_k to conditionally inject latent noise if present
             def patched_sample_k(*inner_args, **inner_kwargs):
@@ -513,8 +521,6 @@ class StableAudioAdapter(ModelAdapter):
             finally:
                 # Restore original hooks immediately after execution completes
                 sat_samp.sample_k = original_sample_k
-                if is_euler:
-                    k_samp.sample_heun = original_heun
 
             # Trim silence to the remaining segment length
             trim_duration = max(0.0, seconds_total - seconds_start)
@@ -613,90 +619,162 @@ class StableAudioAdapter(ModelAdapter):
             if isinstance(init_latents, tuple):
                 init_latents = init_latents[0]
 
-        sigma_min = kwargs.get("sigma_min", 0.3)
-        sigma_max = kwargs.get("sigma_max", 500.0)
-        
-        # Capture the fully pre-conditioned denoiser from stable-audio-tools
-        captured_denoiser = []
-        captured_extra_args = []
-        
-        import stable_audio_tools.inference.generation as sat_gen
-        import k_diffusion.sampling as k_samp
-        
-        original_sample_heun = k_samp.sample_heun
-        
-        def capture_denoiser(denoiser, x, sigmas, *args, **kwargs_inner):
-            captured_denoiser.append(denoiser)
-            captured_extra_args.append(kwargs_inner.get('extra_args', {}))
-            raise InterruptedError("Captured denoiser")
-            
-        k_samp.sample_heun = capture_denoiser
-        
-        try:
-            sat_gen.generate_diffusion_cond(
-                model, 
-                steps=steps,
-                cfg_scale=1.0, # Pure inversion, no CFG
-                conditioning=conditioning,
-                sample_size=sample_size,
-                sigma_min=sigma_min,
-                sigma_max=sigma_max,
-                sampler_type="k-heun",
-                device=self.device
-            )
-        except InterruptedError:
-            pass
-        finally:
-            k_samp.sample_heun = original_sample_heun
-            
-        if not captured_denoiser:
-            raise RuntimeError("Failed to capture denoiser from generation pipeline.")
-            
-        denoiser = captured_denoiser[0]
-        extra_args = captured_extra_args[0]
+        is_rf = (self.model_info.config.get("model", {}).get("diffusion", {}).get("diffusion_objective") in ["rectified_flow", "rf_denoiser"])
+        sampler_category = kwargs.get("sampler_category", "rectified_flow" if is_rf else "k_diffusion")
 
-        # Build Continuous Sigmas Grid for Inversion (min to max)
-        sigmas = get_sigmas_karras(steps + 1, sigma_min, sigma_max, device=self.device)[:-1].flip(0)
-
-        stop_step = int(steps * inversion_strength)
-        
-        # Start at sigma_min by injecting the true noise floor
-        torch.manual_seed(kwargs.get("seed", 0))
-        current_latents = init_latents + torch.randn_like(init_latents) * sigma_min
-
-        # Euler ODE Inversion Step Loop with Heun Correction
-        for i in tqdm(range(stop_step), desc="Heun ODE Inversion"):
-            sigma_curr = sigmas[i]
-            sigma_next = sigmas[i + 1]
-            d_sigma = sigma_next - sigma_curr
+        if sampler_category == "rectified_flow":
+            import stable_audio_tools.inference.inversion as sat_inv
+            import copy
             
-            t_curr = torch.full((current_latents.shape[0],), sigma_curr.item(), device=self.device)
-            t_next = torch.full((current_latents.shape[0],), sigma_next.item(), device=self.device)
+            inversion_gamma = kwargs.get("inversion_gamma", 0.3)
+            inversion_unconditional = kwargs.get("inversion_unconditional", True)
+            inversion_cfg_scale = kwargs.get("inversion_cfg_scale", 1.0)
+            
+            inversion_params = {
+                "inversion_steps": steps,
+                "inversion_gamma": inversion_gamma,
+                "inversion_unconditional": inversion_unconditional,
+                "inversion_sigma_max": 1.0,
+                "inversion_cfg_scale": inversion_cfg_scale,
+            }
             
             with torch.no_grad():
-                # 1. Calculate velocity at current position (Standard Euler Step)
-                denoised_curr = denoiser(current_latents, t_curr, **extra_args)
-                v_curr = (current_latents - denoised_curr) / sigma_curr
+                # Modify the conditioning for inversion
+                inversion_conditioning = copy.deepcopy(conditioning)
+                inversion_conditioning_tensors = model.conditioner(inversion_conditioning, self.device)
+                inversion_conditioning_inputs = model.get_conditioning_inputs(inversion_conditioning_tensors)
                 
-                # 2. Predict the next position tentatively
-                latents_next_pred = current_latents + v_curr * d_sigma
+                model_dtype = next(model.model.parameters()).dtype
+                inversion_conditioning_inputs = {
+                    k: v.type(model_dtype) if v is not None and hasattr(v, "type") else v
+                    for k, v in inversion_conditioning_inputs.items()
+                }
                 
-                # 3. Calculate velocity at the predicted next position
-                denoised_next = denoiser(latents_next_pred, t_next, **extra_args)
-                v_next = (latents_next_pred - denoised_next) / sigma_next
+                if inversion_unconditional:
+                    cfg_dropout_prob = 1.0
+                else:
+                    cfg_dropout_prob = 0.0
+                    for x in inversion_conditioning:
+                        if "prompt" in x:
+                            x["prompt"] = ""
+                    inversion_conditioning_tensors = model.conditioner(inversion_conditioning, self.device)
+                    inversion_conditioning_inputs = model.get_conditioning_inputs(inversion_conditioning_tensors)
+                    inversion_conditioning_inputs = {
+                        k: v.type(model_dtype) if v is not None and hasattr(v, "type") else v
+                        for k, v in inversion_conditioning_inputs.items()
+                    }
                 
-                # 4. Correct the trajectory by averaging the two velocities together
-                v_corrected = 0.5 * (v_curr + v_next)
+                torch.manual_seed(kwargs.get("seed", 0))
+                inversion_noise = torch.randn_like(init_latents)
                 
-                # 5. Take the actual step forward into noise space
-                current_latents = current_latents + v_corrected * d_sigma
-
-        # Explicit unit-variance scaling to normalize data before handing to generation samplers
-        latent_std = current_latents.std().item()
-        if latent_std > 0:
-            latent_tensor = (current_latents - current_latents.mean().item()) / latent_std
-        else:
+                # Perform native RF Inversion using invert_audio
+                current_latents = sat_inv.invert_audio(
+                    model=model.model,
+                    waveform_latent=init_latents,
+                    noise=inversion_noise,
+                    inversion_params=inversion_params,
+                    device=self.device,
+                    cfg_dropout_prob=cfg_dropout_prob,
+                    **inversion_conditioning_inputs
+                )
+                
             latent_tensor = current_latents
+            
+            # Setup metadata properties
+            algorithm = "native_rf_inversion"
+            sampler = "invert_audio"
+            stop_step = steps
+            sigma_min = 0.0
+            sigma_max = 1.0
+            
+        else:
+            sigma_min = kwargs.get("sigma_min", 0.3)
+            sigma_max = kwargs.get("sigma_max", 500.0)
+            
+            # Capture the fully pre-conditioned denoiser from stable-audio-tools
+            captured_denoiser = []
+            captured_extra_args = []
+            
+            import stable_audio_tools.inference.generation as sat_gen
+            import k_diffusion.sampling as k_samp
+            
+            original_sample_heun = k_samp.sample_heun
+            
+            def capture_denoiser(denoiser, x, sigmas, *args, **kwargs_inner):
+                captured_denoiser.append(denoiser)
+                captured_extra_args.append(kwargs_inner.get('extra_args', {}))
+                raise InterruptedError("Captured denoiser")
+                
+            k_samp.sample_heun = capture_denoiser
+            
+            try:
+                sat_gen.generate_diffusion_cond(
+                    model, 
+                    steps=steps,
+                    cfg_scale=1.0, # Pure inversion, no CFG
+                    conditioning=conditioning,
+                    sample_size=sample_size,
+                    sigma_min=sigma_min,
+                    sigma_max=sigma_max,
+                    sampler_type="k-heun",
+                    device=self.device
+                )
+            except InterruptedError:
+                pass
+            finally:
+                k_samp.sample_heun = original_sample_heun
+                
+            if not captured_denoiser:
+                raise RuntimeError("Failed to capture denoiser from generation pipeline.")
+                
+            denoiser = captured_denoiser[0]
+            extra_args = captured_extra_args[0]
+
+            # Build Continuous Sigmas Grid for Inversion (min to max)
+            sigmas = get_sigmas_karras(steps + 1, sigma_min, sigma_max, device=self.device)[:-1].flip(0)
+
+            stop_step = int(steps * inversion_strength)
+            
+            # Start at sigma_min by injecting the true noise floor
+            torch.manual_seed(kwargs.get("seed", 0))
+            current_latents = init_latents + torch.randn_like(init_latents) * sigma_min
+
+            # Euler ODE Inversion Step Loop with Heun Correction
+            for i in tqdm(range(stop_step), desc="Heun ODE Inversion"):
+                sigma_curr = sigmas[i]
+                sigma_next = sigmas[i + 1]
+                d_sigma = sigma_next - sigma_curr
+                
+                t_curr = torch.full((current_latents.shape[0],), sigma_curr.item(), device=self.device)
+                t_next = torch.full((current_latents.shape[0],), sigma_next.item(), device=self.device)
+                
+                with torch.no_grad():
+                    # 1. Calculate velocity at current position (Standard Euler Step)
+                    denoised_curr = denoiser(current_latents, t_curr, **extra_args)
+                    v_curr = (current_latents - denoised_curr) / sigma_curr
+                    
+                    # 2. Predict the next position tentatively
+                    latents_next_pred = current_latents + v_curr * d_sigma
+                    
+                    # 3. Calculate velocity at the predicted next position
+                    denoised_next = denoiser(latents_next_pred, t_next, **extra_args)
+                    v_next = (latents_next_pred - denoised_next) / sigma_next
+                    
+                    # 4. Correct the trajectory by averaging the two velocities together
+                    v_corrected = 0.5 * (v_curr + v_next)
+                    
+                    # 5. Take the actual step forward into noise space
+                    current_latents = current_latents + v_corrected * d_sigma
+
+            # Explicit unit-variance scaling to normalize data before handing to generation samplers
+            latent_std = current_latents.std().item()
+            if latent_std > 0:
+                latent_tensor = (current_latents - current_latents.mean().item()) / latent_std
+            else:
+                latent_tensor = current_latents
+                
+            algorithm = "euler_ode_inversion"
+            sampler = "euler"
 
         # Create latent artifact tracking IDs
         content_uid = self.uid_generator.from_tensor(latent_tensor)
@@ -713,8 +791,8 @@ class StableAudioAdapter(ModelAdapter):
 
         # Inject execution config data explicitly for backend self-documentation
         context["inversion_metadata"] = {
-            "algorithm": "euler_ode_inversion",
-            "sampler": "euler",
+            "algorithm": algorithm,
+            "sampler": sampler,
             "inversion_steps": steps,
             "stop_step_index": stop_step,
             "inversion_strength": inversion_strength,
