@@ -320,13 +320,92 @@ class StableAudioAdapter(ModelAdapter):
             sigma_min = inversion_meta.get("sigma_min", sigma_min)
             sigma_max = inversion_meta.get("sigma_max", sigma_max)
 
+        # Encode conditioning
+        conditioning_tensors = model.conditioner(conditioning, self.device)
+        negative_conditioning_tensors = None
+        if negative_conditioning is not None:
+            negative_conditioning_tensors = model.conditioner(negative_conditioning, self.device)
+
+        # Check model's expected conditioning IDs
+        expected_keys = []
+        for m in [model, getattr(model, "model", None)]:
+            if m is not None:
+                for attr in ["local_add_cond_ids", "input_concat_ids", "global_cond_ids", "prepend_cond_ids"]:
+                    if hasattr(m, attr):
+                        expected_keys.extend(getattr(m, attr))
+        expected_keys = list(set(expected_keys))
+
+        batch_size = kwargs.get("batch_size", 1)
+
+        # Replicate duration adaptation logic from generate_diffusion_cond
+        mask_padding_attention = getattr(model, 'mask_padding_attention', False)
+        use_effective_length_for_schedule = getattr(model, 'use_effective_length_for_schedule', False)
+        adapt_duration_to_conditioning = mask_padding_attention or use_effective_length_for_schedule
+
+        audio_sample_size = sample_size
+        if adapt_duration_to_conditioning and conditioning is not None:
+            max_seconds = 0.0
+            for cond_dict in conditioning:
+                if "seconds_total" in cond_dict:
+                    max_seconds = max(max_seconds, cond_dict["seconds_total"])
+
+            if max_seconds > 0:
+                duration_padding_sec = 6.0
+                target_audio_samples = int((max_seconds + duration_padding_sec) * getattr(model, "sample_rate", sample_rate))
+
+                if model.pretransform is not None:
+                    ds_ratio = model.pretransform.downsampling_ratio
+                    latent_align = 1
+                    if (hasattr(model.pretransform, 'model') and
+                            hasattr(model.pretransform.model, 'encoder')):
+                        encoder = model.pretransform.model.encoder
+                        if hasattr(encoder, 'layers'):
+                            first_chunked_index = next(
+                                (i for i, l in enumerate(encoder.layers)
+                                 if hasattr(l, 'chunk_size') and getattr(l, 'sliding_window_latents', True) is None), None
+                            )
+                            if first_chunked_index is not None:
+                                first_chunked = encoder.layers[first_chunked_index]
+                                stride = getattr(first_chunked, 'stride', None)
+                                if stride is None and hasattr(encoder, 'strides') and len(encoder.strides) > first_chunked_index:
+                                    stride = encoder.strides[first_chunked_index]
+                                if stride and stride > 0:
+                                    latent_align = max(1, first_chunked.chunk_size // stride)
+                    align = ds_ratio * latent_align
+                    target_audio_samples = ((target_audio_samples + align - 1) // align) * align
+                audio_sample_size = min(target_audio_samples, sample_size)
+
+        latent_sample_size = audio_sample_size
+        if model.pretransform is not None:
+            latent_sample_size = audio_sample_size // model.pretransform.downsampling_ratio
+
+        # Inject dummy inpaint mask/input if needed
+        needs_inpaint_mask = 'inpaint_mask' in expected_keys and 'inpaint_mask' not in conditioning_tensors
+        needs_inpaint_input = 'inpaint_masked_input' in expected_keys and 'inpaint_masked_input' not in conditioning_tensors
+
+        if needs_inpaint_mask or needs_inpaint_input:
+            mask = torch.zeros((batch_size, 1, latent_sample_size), device=self.device)
+            inpaint_input = torch.zeros((batch_size, model.io_channels, latent_sample_size), device=self.device)
+
+            if needs_inpaint_mask:
+                conditioning_tensors['inpaint_mask'] = [mask]
+                if negative_conditioning_tensors is not None:
+                    negative_conditioning_tensors['inpaint_mask'] = [mask]
+
+            if needs_inpaint_input:
+                conditioning_tensors['inpaint_masked_input'] = [inpaint_input]
+                if negative_conditioning_tensors is not None:
+                    negative_conditioning_tensors['inpaint_masked_input'] = [inpaint_input]
+
         # Set up generation arguments
         args = {
             "steps": steps,
             "cfg_scale": kwargs.get("cfg_scale", 1.0),
             "conditioning": conditioning,
             "negative_conditioning": negative_conditioning,
-            "batch_size": kwargs.get("batch_size", 1),
+            "conditioning_tensors": conditioning_tensors,
+            "negative_conditioning_tensors": negative_conditioning_tensors,
+            "batch_size": batch_size,
             "sample_size": sample_size,
             "sigma_min": sigma_min,
             "sigma_max": sigma_max,
