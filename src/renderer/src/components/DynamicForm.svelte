@@ -175,8 +175,32 @@
       formData[fieldName] = path
     }
   }
-  const visibleFields = $derived(
-    config.filter((field: FormField) => {
+  const visibleFields = $derived.by(() => {
+    // Collect all condition target keys from config's show_if
+    const targetKeys = new Set<string>()
+    for (const field of config) {
+      if (field.show_if) {
+        if (Array.isArray(field.show_if)) {
+          for (const condSet of field.show_if) {
+            for (const key in condSet) {
+              targetKeys.add(key)
+            }
+          }
+        } else {
+          for (const key in field.show_if) {
+            targetKeys.add(key)
+          }
+        }
+      }
+    }
+
+    // Touch condition keys to establish reactive dependencies
+    for (const key of targetKeys) {
+      const _dummy1 = formData[key]
+      const _dummy2 = contextData ? contextData[key] : null
+    }
+
+    return config.filter((field: FormField) => {
       if (!field.show_if) {
         return true
       }
@@ -217,7 +241,7 @@
 
       return true
     })
-  )
+  })
 </script>
 
 <form

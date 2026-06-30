@@ -446,6 +446,7 @@ class StableAudioAdapter(ModelAdapter):
             import k_diffusion.sampling as k_samp
             
             original_sample_k = sat_samp.sample_k
+            original_sample_diffusion = sat_samp.sample_diffusion
                 
             # ALWAYS patch sample_k to conditionally inject latent noise if present
             def patched_sample_k(*inner_args, **inner_kwargs):
@@ -514,13 +515,43 @@ class StableAudioAdapter(ModelAdapter):
 
                 return original_sample_k(*inner_args, **inner_kwargs)
 
+            # ALWAYS patch sample_diffusion to conditionally inject latent noise if present (for RF models)
+            def patched_sample_diffusion(*inner_args, **inner_kwargs):
+                inner_args = list(inner_args)
+                inner_kwargs = dict(inner_kwargs)
+                
+                if init_latent_tensor is not None and inversion_meta is not None:
+                    # Overwrite noise with the inverted latent
+                    custom_noise = init_latent_tensor.clone()
+                    
+                    # Ensure batch sizes match up
+                    target_shape = inner_args[1].shape if len(inner_args) > 1 else inner_kwargs.get("noise").shape
+                    if custom_noise.shape[0] == 1 and target_shape[0] > 1:
+                        custom_noise = custom_noise.repeat(target_shape[0], 1, 1)
+                        
+                    if len(inner_args) > 1:
+                        inner_args[1] = custom_noise
+                    else:
+                        inner_kwargs["noise"] = custom_noise
+                        
+                    inversion_strength = inversion_meta.get("inversion_strength", 1.0)
+                    inner_kwargs["init_noise_level"] = inversion_strength
+                    inner_kwargs["sigma_max"] = inversion_strength
+                    
+                    # Clear init_data to prevent any blending (start directly from inverted latent)
+                    inner_kwargs["init_data"] = None
+                    
+                return original_sample_diffusion(*inner_args, **inner_kwargs)
+
             sat_samp.sample_k = patched_sample_k
+            sat_samp.sample_diffusion = patched_sample_diffusion
             
             try:
                 output = generate_diffusion_cond(model, **args)
             finally:
                 # Restore original hooks immediately after execution completes
                 sat_samp.sample_k = original_sample_k
+                sat_samp.sample_diffusion = original_sample_diffusion
 
             # Trim silence to the remaining segment length
             trim_duration = max(0.0, seconds_total - seconds_start)

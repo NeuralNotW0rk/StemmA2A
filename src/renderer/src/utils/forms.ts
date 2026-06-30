@@ -120,8 +120,19 @@ export function initializeFormData(
           }
         }
       }
-      if (field.name === 'seconds_total' && initiatorNode && initiatorNode.type === 'audio' && initiatorNode.duration !== undefined) {
-        formData[field.name] = initiatorNode.duration;
+      if (field.name === 'seconds_total' && initiatorNode) {
+        if (initiatorNode.type === 'audio' && initiatorNode.duration !== undefined) {
+          formData[field.name] = initiatorNode.duration;
+        } else if (initiatorNode.type === 'latent') {
+          const duration = initiatorNode.duration || initiatorNode.context?.seconds_total || initiatorNode.context?.inversion_metadata?.seconds_total;
+          if (duration !== undefined) {
+            formData[field.name] = duration;
+          } else if (val !== undefined) {
+            formData[field.name] = val;
+          }
+        } else if (val !== undefined) {
+          formData[field.name] = val;
+        }
       } else if (val !== undefined) {
         formData[field.name] = val;
       }

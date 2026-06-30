@@ -227,16 +227,6 @@
             "placeholder": "Enter duration in seconds"
         },
         {
-            "name": "sampler_category",
-            "label": "Sampler Type",
-            "type": "select",
-            "defaultValue": "k_diffusion",
-            "options": [
-                { "label": "K-Diffusion", "value": "k_diffusion" },
-                { "label": "Rectified Flow", "value": "rectified_flow" }
-            ]
-        },
-        {
             "name": "inversion_gamma",
             "label": "Inversion Gamma",
             "type": "float",
