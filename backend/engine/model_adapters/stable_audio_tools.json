@@ -31,6 +31,7 @@
             "type": "float",
             "defaultValue": 7,
             "conditionalDefaults": [
+                { "show_if": {"init_latent": "exists"}, "value": 1.0 },
                 { "show_if": {"diffusion_objective": "rf_denoiser"}, "value": 1.0 }
             ],
             "placeholder": "Enter CFG scale"

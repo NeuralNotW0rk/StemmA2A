@@ -307,10 +307,15 @@ class StableAudioAdapter(ModelAdapter):
         inversion_meta = None
         
         if init_latent_element:
+            print(f"DEBUG: Found init_latent_element with ID {init_latent_element.id}")
             latent_path = Path(init_latent_element.file.path)
             if latent_path and latent_path.exists():
                 init_latent_tensor = torch.load(latent_path, map_location=self.device, weights_only=True)
                 inversion_meta = getattr(init_latent_element, "context", {}).get("inversion_metadata", None)
+                print(f"DEBUG: Loaded init_latent_tensor of shape {init_latent_tensor.shape}")
+                print(f"DEBUG: inversion_metadata = {inversion_meta}")
+            else:
+                print(f"DEBUG: Latent path does not exist: {latent_path}")
 
         # Establish execution steps and schedule boundaries
         for required_param in ["steps", "cfg_scale", "sigma_min", "sigma_max", "seed"]:
@@ -521,6 +526,7 @@ class StableAudioAdapter(ModelAdapter):
                 inner_kwargs = dict(inner_kwargs)
                 
                 if init_latent_tensor is not None and inversion_meta is not None:
+                    print("DEBUG: patched_sample_diffusion triggered! Injecting latent noise...")
                     # Overwrite noise with the inverted latent
                     custom_noise = init_latent_tensor.clone()
                     
@@ -540,6 +546,7 @@ class StableAudioAdapter(ModelAdapter):
                     
                     # Clear init_data to prevent any blending (start directly from inverted latent)
                     inner_kwargs["init_data"] = None
+                    print(f"DEBUG: Injected custom noise of shape {custom_noise.shape}, sigma_max={inversion_strength}")
                     
                 return original_sample_diffusion(*inner_args, **inner_kwargs)
 
