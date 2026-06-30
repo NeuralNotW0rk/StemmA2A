@@ -561,9 +561,13 @@ class StableAudioAdapter(ModelAdapter):
                 return original_sample_diffusion(*inner_args, **inner_kwargs)
 
             # ALWAYS patch build_schedule to return the exact flipped schedule used during inversion (for RF models)
-            def patched_build_schedule(sched_steps, sched_sigma_max=1.0, *inner_args, **inner_kwargs):
+            def patched_build_schedule(*inner_args, **inner_kwargs):
                 if init_latent_tensor is not None and inversion_meta is not None:
                     print("DEBUG: patched_build_schedule triggered!")
+                    
+                    # Extract steps (can be positional at index 0, or keyword 'steps')
+                    sched_steps = inner_args[0] if len(inner_args) > 0 else inner_kwargs.get("steps", steps)
+                    
                     inversion_strength = inversion_meta.get("inversion_strength", 1.0)
                     inversion_steps = inversion_meta.get("inversion_steps", sched_steps)
                     
@@ -578,7 +582,7 @@ class StableAudioAdapter(ModelAdapter):
                     print(f"DEBUG: Overrode sigmas schedule to start at {generation_sigmas[0].item()} and end at {generation_sigmas[-1].item()}")
                     return generation_sigmas
                     
-                return original_build_schedule(sched_steps, sched_sigma_max, *inner_args, **inner_kwargs)
+                return original_build_schedule(*inner_args, **inner_kwargs)
 
             sat_samp.sample_k = patched_sample_k
             sat_samp.sample_diffusion = patched_sample_diffusion
