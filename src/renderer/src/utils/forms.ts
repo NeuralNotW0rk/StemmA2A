@@ -96,7 +96,37 @@ export function initializeFormData(
     }
     if (formData[field.name] === undefined) {
       let val = field.defaultValue;
-      if (field.conditionalDefaults) {
+      let hasLatentContextValue = false;
+      
+      if (initiatorNode && initiatorNode.type === 'latent' && initiatorNode.context) {
+        const latCtx = initiatorNode.context;
+        if (field.name === 'prompt' && latCtx.prompt !== undefined) {
+          val = latCtx.prompt;
+          hasLatentContextValue = true;
+        } else if (field.name === 'steps' && latCtx.steps !== undefined) {
+          val = latCtx.steps;
+          hasLatentContextValue = true;
+        } else if (field.name === 'seed' && latCtx.seed !== undefined) {
+          val = latCtx.seed;
+          hasLatentContextValue = true;
+        } else if (field.name === 'sigma_min' && latCtx.sigma_min !== undefined) {
+          val = latCtx.sigma_min;
+          hasLatentContextValue = true;
+        } else if (field.name === 'sigma_max' && latCtx.sigma_max !== undefined) {
+          val = latCtx.sigma_max;
+          hasLatentContextValue = true;
+        } else if (field.name === 'cfg_scale') {
+          if (latCtx.inversion_cfg_scale !== undefined) {
+            val = latCtx.inversion_cfg_scale;
+            hasLatentContextValue = true;
+          } else if (latCtx.cfg_scale !== undefined) {
+            val = latCtx.cfg_scale;
+            hasLatentContextValue = true;
+          }
+        }
+      }
+
+      if (!hasLatentContextValue && field.conditionalDefaults) {
         const data = { ...context, ...formData };
         for (const condDefault of field.conditionalDefaults) {
           let conditionsMet = true;

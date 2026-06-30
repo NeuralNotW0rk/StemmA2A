@@ -65,6 +65,9 @@
     }
   })
 
+  let lastConfigProcessed: FormConfig | null = null
+  let previousConditionValues: Record<string, any> = {}
+
   $effect(() => {
     // Collect all condition target keys from config's conditionalDefaults
     const targetKeys = new Set<string>()
@@ -79,53 +82,71 @@
     }
 
     // Touch condition keys to establish reactive dependencies
+    const currentConditionValues: Record<string, any> = {}
     for (const key of targetKeys) {
-      const _dummy1 = formData[key]
-      const _dummy2 = contextData ? contextData[key] : null
+      const val = formData[key] !== undefined ? formData[key] : (contextData ? contextData[key] : null)
+      currentConditionValues[key] = val
     }
 
-    const data = { ...contextData, ...formData }
+    // Check if any condition key changed value compared to previousConditionValues
+    let conditionsChanged = false
+    for (const key of targetKeys) {
+      if (currentConditionValues[key] !== previousConditionValues[key]) {
+        conditionsChanged = true
+        break
+      }
+    }
 
-    untrack(() => {
-      for (const field of config) {
-        if (field.conditionalDefaults) {
-          let matchedDefaultValue: any = undefined
-          let conditionsMet = false
+    if (config !== lastConfigProcessed) {
+      conditionsChanged = true
+      lastConfigProcessed = config
+    }
 
-          for (const condDefault of field.conditionalDefaults) {
-            let itemConditionsMet = true
-            for (const key in condDefault.show_if) {
-              const condition = condDefault.show_if[key]
-              if (condition === 'exists') {
-                if (!data[key]) {
-                  itemConditionsMet = false
-                  break
-                }
-              } else {
-                if (data[key] !== condition) {
-                  itemConditionsMet = false
-                  break
+    // Update previousConditionValues
+    previousConditionValues = currentConditionValues
+
+    // Only apply conditional defaults if conditions changed (or on initial config load)
+    if (conditionsChanged) {
+      const data = { ...contextData, ...formData }
+
+      untrack(() => {
+        for (const field of config) {
+          if (field.conditionalDefaults) {
+            let matchedDefaultValue: any = undefined
+            let conditionsMet = false
+
+            for (const condDefault of field.conditionalDefaults) {
+              let itemConditionsMet = true
+              for (const key in condDefault.show_if) {
+                const condition = condDefault.show_if[key]
+                if (condition === 'exists') {
+                  if (!data[key]) {
+                    itemConditionsMet = false
+                    break
+                  }
+                } else {
+                  if (data[key] !== condition) {
+                    itemConditionsMet = false
+                    break
+                  }
                 }
               }
+              if (itemConditionsMet) {
+                matchedDefaultValue = condDefault.value
+                conditionsMet = true
+                break
+              }
             }
-            if (itemConditionsMet) {
-              matchedDefaultValue = condDefault.value
-              conditionsMet = true
-              break
-            }
-          }
 
-          if (conditionsMet && matchedDefaultValue !== undefined) {
-            const isVisible = visibleFields.includes(field)
-            if (!isVisible || formData[field.name] !== matchedDefaultValue) {
+            if (conditionsMet && matchedDefaultValue !== undefined) {
               formData[field.name] = matchedDefaultValue
+            } else if (!conditionsMet && field.defaultValue !== undefined) {
+              formData[field.name] = field.defaultValue
             }
-          } else if (!conditionsMet && field.defaultValue !== undefined && formData[field.name] !== field.defaultValue) {
-            formData[field.name] = field.defaultValue
           }
         }
-      }
-    })
+      })
+    }
   })
 
   $effect(() => {

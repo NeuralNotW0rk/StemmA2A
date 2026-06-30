@@ -431,6 +431,12 @@ class StableAudioAdapter(ModelAdapter):
             "duration_padding_sec": kwargs.get("duration_padding_sec", 6.0),
         }
 
+        if init_latent_tensor is not None:
+            # Match sample_size exactly to the latent shape to prevent cross-attention and schedule length mismatches
+            ds_ratio = model.pretransform.downsampling_ratio if model.pretransform is not None else 1
+            args["sample_size"] = init_latent_tensor.shape[-1] * ds_ratio
+            args["adapt_duration_to_conditioning"] = False
+
         # Handle traditional initial audio if provided
         init_audio_element = kwargs.get("init_audio_element")
         if init_audio_element:
