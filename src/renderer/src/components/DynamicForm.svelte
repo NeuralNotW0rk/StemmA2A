@@ -184,6 +184,24 @@
       // Combine context and form data, with form data taking precedence.
       const data = { ...contextData, ...formData }
 
+      if (Array.isArray(field.show_if)) {
+        return field.show_if.some((condSet) => {
+          for (const key in condSet) {
+            const condition = condSet[key]
+            if (condition === 'exists') {
+              if (!data[key]) {
+                return false
+              }
+            } else {
+              if (data[key] !== condition) {
+                return false
+              }
+            }
+          }
+          return true
+        })
+      }
+
       for (const key in field.show_if) {
         const condition = field.show_if[key]
         if (condition === 'exists') {

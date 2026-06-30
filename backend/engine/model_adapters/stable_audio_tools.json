@@ -191,7 +191,11 @@
             "label": "Prompt",
             "type": "textarea",
             "defaultValue": "",
-            "placeholder": "Enter the original generation prompt..."
+            "placeholder": "Enter the original generation prompt...",
+            "show_if": [
+                { "sampler_category": "k_diffusion" },
+                { "inversion_unconditional": false }
+            ]
         },
         {
             "name": "steps",
@@ -205,7 +209,8 @@
             "label": "Inversion Strength",
             "type": "float",
             "defaultValue": 1.0,
-            "placeholder": "Enter inversion strength (0 to 1)"
+            "placeholder": "Enter inversion strength (0 to 1)",
+            "show_if": {"sampler_category": "k_diffusion"}
         },
         {
             "name": "seconds_start",

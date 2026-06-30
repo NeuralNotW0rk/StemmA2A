@@ -642,6 +642,30 @@ class StableAudioAdapter(ModelAdapter):
                 # Modify the conditioning for inversion
                 inversion_conditioning = copy.deepcopy(conditioning)
                 inversion_conditioning_tensors = model.conditioner(inversion_conditioning, self.device)
+                
+                # Check model's expected conditioning IDs
+                expected_keys = []
+                for m in [model, getattr(model, "model", None)]:
+                    if m is not None:
+                        for attr in ["local_add_cond_ids", "input_concat_ids", "global_cond_ids", "prepend_cond_ids"]:
+                            if hasattr(m, attr):
+                                expected_keys.extend(getattr(m, attr))
+                expected_keys = list(set(expected_keys))
+                
+                needs_inpaint_mask = 'inpaint_mask' in expected_keys and 'inpaint_mask' not in inversion_conditioning_tensors
+                needs_inpaint_input = 'inpaint_masked_input' in expected_keys and 'inpaint_masked_input' not in inversion_conditioning_tensors
+                
+                if needs_inpaint_mask or needs_inpaint_input:
+                    b_size = init_latents.shape[0]
+                    l_size = init_latents.shape[-1]
+                    mask = torch.zeros((b_size, 1, l_size), device=self.device)
+                    inpaint_input = torch.zeros((b_size, model.io_channels, l_size), device=self.device)
+                    
+                    if needs_inpaint_mask:
+                        inversion_conditioning_tensors['inpaint_mask'] = [mask]
+                    if needs_inpaint_input:
+                        inversion_conditioning_tensors['inpaint_masked_input'] = [inpaint_input]
+
                 inversion_conditioning_inputs = model.get_conditioning_inputs(inversion_conditioning_tensors)
                 
                 model_dtype = next(model.model.parameters()).dtype
@@ -658,6 +682,12 @@ class StableAudioAdapter(ModelAdapter):
                         if "prompt" in x:
                             x["prompt"] = ""
                     inversion_conditioning_tensors = model.conditioner(inversion_conditioning, self.device)
+                    
+                    if needs_inpaint_mask:
+                        inversion_conditioning_tensors['inpaint_mask'] = [mask]
+                    if needs_inpaint_input:
+                        inversion_conditioning_tensors['inpaint_masked_input'] = [inpaint_input]
+
                     inversion_conditioning_inputs = model.get_conditioning_inputs(inversion_conditioning_tensors)
                     inversion_conditioning_inputs = {
                         k: v.type(model_dtype) if v is not None and hasattr(v, "type") else v

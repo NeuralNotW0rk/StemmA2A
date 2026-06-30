@@ -21,7 +21,7 @@ export interface FormField {
     maxLength?: number;
   };
   filters?: { name: string; extensions: string[] }[];
-  show_if?: Record<string, any>;
+  show_if?: Record<string, any> | Record<string, any>[];
   conditionalDefaults?: {
     show_if: Record<string, any>;
     value: any;
@@ -120,7 +120,9 @@ export function initializeFormData(
           }
         }
       }
-      if (val !== undefined) {
+      if (field.name === 'seconds_total' && initiatorNode && initiatorNode.type === 'audio' && initiatorNode.duration !== undefined) {
+        formData[field.name] = initiatorNode.duration;
+      } else if (val !== undefined) {
         formData[field.name] = val;
       }
     }
