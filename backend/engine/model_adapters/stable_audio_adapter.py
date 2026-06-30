@@ -436,6 +436,8 @@ class StableAudioAdapter(ModelAdapter):
             ds_ratio = model.pretransform.downsampling_ratio if model.pretransform is not None else 1
             args["sample_size"] = init_latent_tensor.shape[-1] * ds_ratio
             args["adapt_duration_to_conditioning"] = False
+            args["mask_padding_attention"] = False
+            args["use_effective_length_for_schedule"] = False
 
         # Handle traditional initial audio if provided
         init_audio_element = kwargs.get("init_audio_element")
