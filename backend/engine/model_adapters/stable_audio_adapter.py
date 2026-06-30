@@ -647,17 +647,46 @@ class StableAudioAdapter(ModelAdapter):
         else:
             raise FileNotFoundError(f"Audio path not found: {audio_path}")
 
-        # Crop/pad to exact segment length (total track minus start offset)
+        # Replicate duration adaptation logic from generate_diffusion_cond to match target shapes
+        mask_padding_attention = getattr(model, 'mask_padding_attention', False)
+        use_effective_length_for_schedule = getattr(model, 'use_effective_length_for_schedule', False)
+        adapt_duration_to_conditioning = mask_padding_attention or use_effective_length_for_schedule
+        
         trim_duration = max(0.0, seconds_total - seconds_start)
-        target_length = int(trim_duration * sample_rate)
-        if source_audio_tensor.shape[-1] > target_length:
-            source_audio_tensor = source_audio_tensor[:, :target_length]
-        elif source_audio_tensor.shape[-1] < target_length:
-            source_audio_tensor = torch.nn.functional.pad(source_audio_tensor, (0, target_length - source_audio_tensor.shape[-1]))
-
-        # Pad up to the model's native sample_size
-        if source_audio_tensor.shape[-1] < sample_size:
-            source_audio_tensor = torch.nn.functional.pad(source_audio_tensor, (0, sample_size - source_audio_tensor.shape[-1]))
+        target_audio_samples = int(trim_duration * sample_rate)
+        
+        if adapt_duration_to_conditioning:
+            duration_padding_sec = kwargs.get("duration_padding_sec", 6.0)
+            target_audio_samples = int((trim_duration + duration_padding_sec) * sample_rate)
+            
+            if model.pretransform is not None:
+                ds_ratio = model.pretransform.downsampling_ratio
+                latent_align = 1
+                if (hasattr(model.pretransform, 'model') and
+                        hasattr(model.pretransform.model, 'encoder')):
+                    encoder = model.pretransform.model.encoder
+                    if hasattr(encoder, 'layers'):
+                        first_chunked_index = next(
+                            (i for i, l in enumerate(encoder.layers)
+                             if hasattr(l, 'chunk_size') and getattr(l, 'sliding_window_latents', True) is None), None
+                        )
+                        if first_chunked_index is not None:
+                            first_chunked = encoder.layers[first_chunked_index]
+                            stride = getattr(first_chunked, 'stride', None)
+                            if stride is None and hasattr(encoder, 'strides') and len(encoder.strides) > first_chunked_index:
+                                stride = encoder.strides[first_chunked_index]
+                            if stride and stride > 0:
+                                latent_align = max(1, first_chunked.chunk_size // stride)
+                align = ds_ratio * latent_align
+                target_audio_samples = ((target_audio_samples + align - 1) // align) * align
+                
+        audio_sample_size = min(target_audio_samples, sample_size)
+        
+        # Crop/pad to adapted audio sample size
+        if source_audio_tensor.shape[-1] > audio_sample_size:
+            source_audio_tensor = source_audio_tensor[:, :audio_sample_size]
+        elif source_audio_tensor.shape[-1] < audio_sample_size:
+            source_audio_tensor = torch.nn.functional.pad(source_audio_tensor, (0, audio_sample_size - source_audio_tensor.shape[-1]))
 
         source_audio_tensor = source_audio_tensor.unsqueeze(0).to(self.device)
         
