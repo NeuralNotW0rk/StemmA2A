@@ -552,6 +552,7 @@ class StableAudioAdapter(ModelAdapter):
 
             sat_samp.sample_k = patched_sample_k
             sat_samp.sample_diffusion = patched_sample_diffusion
+            sat_gen.sample_diffusion = patched_sample_diffusion
             
             try:
                 output = generate_diffusion_cond(model, **args)
@@ -559,6 +560,7 @@ class StableAudioAdapter(ModelAdapter):
                 # Restore original hooks immediately after execution completes
                 sat_samp.sample_k = original_sample_k
                 sat_samp.sample_diffusion = original_sample_diffusion
+                sat_gen.sample_diffusion = original_sample_diffusion
 
             # Trim silence to the remaining segment length
             trim_duration = max(0.0, seconds_total - seconds_start)
