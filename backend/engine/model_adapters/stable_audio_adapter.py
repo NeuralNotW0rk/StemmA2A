@@ -457,9 +457,11 @@ class StableAudioAdapter(ModelAdapter):
             import stable_audio_tools.inference.generation as sat_gen
             import stable_audio_tools.inference.sampling as sat_samp
             import k_diffusion.sampling as k_samp
+            import math
             
             original_sample_k = sat_samp.sample_k
             original_sample_diffusion = sat_samp.sample_diffusion
+            original_build_schedule = sat_samp.build_schedule
                 
             # ALWAYS patch sample_k to conditionally inject latent noise if present
             def patched_sample_k(*inner_args, **inner_kwargs):
@@ -558,9 +560,30 @@ class StableAudioAdapter(ModelAdapter):
                     
                 return original_sample_diffusion(*inner_args, **inner_kwargs)
 
+            # ALWAYS patch build_schedule to return the exact flipped schedule used during inversion (for RF models)
+            def patched_build_schedule(sched_steps, sched_sigma_max=1.0, *inner_args, **inner_kwargs):
+                if init_latent_tensor is not None and inversion_meta is not None:
+                    print("DEBUG: patched_build_schedule triggered!")
+                    inversion_strength = inversion_meta.get("inversion_strength", 1.0)
+                    inversion_steps = inversion_meta.get("inversion_steps", sched_steps)
+                    
+                    logsnr_max = math.log(((1 - inversion_strength) / inversion_strength) + 1e-6) if inversion_strength < 1.0 else -6.0
+                    logsnr = torch.linspace(logsnr_max, 2.0, inversion_steps + 1, device=self.device)
+                    t_inv = torch.sigmoid(-logsnr)
+                    t_inv = t_inv.flip(0)
+                    t_inv[0] = 0.0
+                    t_inv[-1] = 1.0
+                    
+                    generation_sigmas = t_inv.flip(0)
+                    print(f"DEBUG: Overrode sigmas schedule to start at {generation_sigmas[0].item()} and end at {generation_sigmas[-1].item()}")
+                    return generation_sigmas
+                    
+                return original_build_schedule(sched_steps, sched_sigma_max, *inner_args, **inner_kwargs)
+
             sat_samp.sample_k = patched_sample_k
             sat_samp.sample_diffusion = patched_sample_diffusion
             sat_gen.sample_diffusion = patched_sample_diffusion
+            sat_samp.build_schedule = patched_build_schedule
             
             try:
                 output = generate_diffusion_cond(model, **args)
@@ -569,6 +592,7 @@ class StableAudioAdapter(ModelAdapter):
                 sat_samp.sample_k = original_sample_k
                 sat_samp.sample_diffusion = original_sample_diffusion
                 sat_gen.sample_diffusion = original_sample_diffusion
+                sat_samp.build_schedule = original_build_schedule
 
             # Trim silence to the remaining segment length
             trim_duration = max(0.0, seconds_total - seconds_start)
