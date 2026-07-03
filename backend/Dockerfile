@@ -23,6 +23,14 @@ RUN ln -sf /usr/bin/python3.10 /usr/bin/python && \
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install torch==2.5.1 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 
+# 5b. Install packaging and ninja (prerequisites for flash-attn)
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install packaging ninja
+
+# 5c. Install flash-attn
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install flash-attn --no-build-isolation
+
 # 6. Install the rest of the requirements
 COPY requirements.txt .
 RUN --mount=type=cache,target=/root/.cache/pip \

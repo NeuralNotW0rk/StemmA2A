@@ -439,6 +439,12 @@ class StableAudioAdapter(ModelAdapter):
             args["mask_padding_attention"] = False
             args["use_effective_length_for_schedule"] = False
 
+            # Retrieve inversion_unconditional flag from metadata (default to True for RF native)
+            inversion_unconditional = True
+            if inversion_meta is not None:
+                inversion_unconditional = inversion_meta.get("inversion_unconditional", True)
+            args["cfg_dropout_prob"] = 1.0 if inversion_unconditional else 0.0
+
         # Handle traditional initial audio if provided
         init_audio_element = kwargs.get("init_audio_element")
         if init_audio_element:
@@ -932,7 +938,10 @@ class StableAudioAdapter(ModelAdapter):
             "stop_step_index": stop_step,
             "inversion_strength": inversion_strength,
             "sigma_min": sigma_min,
-            "sigma_max": sigma_max
+            "sigma_max": sigma_max,
+            "inversion_unconditional": kwargs.get("inversion_unconditional", True),
+            "inversion_gamma": kwargs.get("inversion_gamma", 0.3),
+            "inversion_cfg_scale": kwargs.get("inversion_cfg_scale", 1.0),
         }
 
         artifact = Latent(

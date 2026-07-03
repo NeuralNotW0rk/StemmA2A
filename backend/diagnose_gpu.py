@@ -33,6 +33,15 @@ def run_diagnostics():
         else:
             print("WARNING: CUDA is NOT available to PyTorch. Operations will run on CPU.")
             
+        # 1b. Check Flash Attention availability
+        try:
+            import flash_attn
+            print(f"Flash Attention: Installed (Version {flash_attn.__version__})")
+        except ImportError:
+            print("Flash Attention: NOT installed")
+        except Exception as e:
+            print(f"Flash Attention: Import/initialization failed ({e})")
+            
         print(f"PyTorch Thread Count (Intraop): {torch.get_num_threads()}")
     except ImportError:
         print("ERROR: PyTorch is not installed in this environment.")

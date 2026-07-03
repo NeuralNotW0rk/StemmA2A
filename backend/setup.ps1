@@ -116,6 +116,29 @@ try {
 }
 
 
+# 6b. Install flash-attn if compatible (GPU only)
+if ($CudaVersion) {
+    Write-Host "Step 6b: Attempting to install flash-attn..."
+    try {
+        Write-Host "Installing ninja and packaging dependencies..."
+        & $PythonExe -m pip install packaging ninja
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "Failed to install ninja/packaging. Attempting flash-attn anyway..."
+        }
+        
+        Write-Host "Installing flash-attn..."
+        & $PythonExe -m pip install flash-attn --no-build-isolation
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "flash-attn installation failed or skipped (this is common on Windows due to compiler requirements). The system will still function using default PyTorch SDPA."
+        } else {
+            Write-Host "flash-attn installed successfully."
+        }
+    } catch {
+        Write-Warning "Could not install flash-attn. Error: $_"
+    }
+}
+
+
 # 7. Install Diffracture (if available)
 Write-Host "Step 7: Checking for Diffracture locally..."
 $DiffracturePath = (Resolve-Path (Join-Path $ProjectRoot "../Diffracture") -ErrorAction SilentlyContinue).Path
