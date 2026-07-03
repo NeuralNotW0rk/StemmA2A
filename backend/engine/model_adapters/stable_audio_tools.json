@@ -80,7 +80,7 @@
             "name": "rf_sampler_type",
             "label": "RF-Sampler",
             "type": "select",
-            "defaultValue": "pingpong",
+            "defaultValue": "euler",
             "options": [
                 { "label": "Euler", "value": "euler" },
                 { "label": "RK4", "value": "rk4" },
@@ -231,7 +231,7 @@
             "name": "inversion_gamma",
             "label": "Inversion Gamma",
             "type": "float",
-            "defaultValue": 0.3,
+            "defaultValue": 0,
             "placeholder": "0.3 - 0.5 is good for reproduction",
             "show_if": {"sampler_category": "rectified_flow"}
         },

@@ -124,8 +124,13 @@ const defaultStyle: CssStyleDeclaration[] = [
     selector: 'node[type="latent"]',
     style: {
       label: (node: NodeSingular) => {
-        const promptTxt = node.data('context') && node.data('context')["prompt"] || "[empty]";
-        const strength = node.data('context') && node.data('context')["inversion_strength"];
+        const context = node.data('context');
+        const isUnconditional = context && (
+          context["inversion_unconditional"] === true ||
+          (context["inversion_metadata"] && context["inversion_metadata"]["inversion_unconditional"] === true)
+        );
+        const promptTxt = (context && context["prompt"]) || (isUnconditional ? "[unconditional]" : "[empty]");
+        const strength = context && context["inversion_strength"];
         return `${promptTxt}\nx${strength}`;
       },
       'background-color': latentColor,

@@ -246,7 +246,8 @@
         const { formData: adapterData } = initializeFormData(
           opFields as FormConfig,
           $contextStore,
-          isReplicated ? null : $initiatorNodeStore
+          isReplicated ? null : $initiatorNodeStore,
+          formData
         )
 
         // Merge fields while keeping existing formData keys intact

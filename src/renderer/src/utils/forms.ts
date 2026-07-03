@@ -63,9 +63,10 @@ export type NodeData = ModelData | AudioData | BatchData
 export function initializeFormData(
   fields: FormConfig,
   context: Record<string, any> | null,
-  initiatorNode: Record<string, any> | null = null
+  initiatorNode: Record<string, any> | null = null,
+  currentData: Record<string, any> | null = null
 ): { formData: Record<string, unknown> } {
-  const formData: Record<string, unknown> = {}
+  const formData: Record<string, unknown> = currentData ? { ...currentData } : {}
 
   if (!fields) {
     return { formData }
@@ -75,6 +76,18 @@ export function initializeFormData(
     if (context) {
       if (context[field.name] !== undefined) {
         formData[field.name] = context[field.name]
+      } else if (field.name === 'cfg_scale') {
+        if (context.inversion_cfg_scale !== undefined) {
+          formData[field.name] = context.inversion_cfg_scale
+        } else if (context.inversion_metadata?.inversion_cfg_scale !== undefined) {
+          formData[field.name] = context.inversion_metadata.inversion_cfg_scale
+        }
+      } else if (field.name === 'inversion_cfg_scale') {
+        if (context.cfg_scale !== undefined) {
+          formData[field.name] = context.cfg_scale
+        } else if (context.inversion_metadata?.inversion_cfg_scale !== undefined) {
+          formData[field.name] = context.inversion_metadata.inversion_cfg_scale
+        }
       } else if (field.type === 'node' && context[`${field.name}_id`] !== undefined) {
         formData[field.name] = context[`${field.name}_id`]
       }
@@ -115,9 +128,12 @@ export function initializeFormData(
         } else if (field.name === 'sigma_max' && latCtx.sigma_max !== undefined) {
           val = latCtx.sigma_max;
           hasLatentContextValue = true;
-        } else if (field.name === 'cfg_scale') {
+        } else if (field.name === 'cfg_scale' || field.name === 'inversion_cfg_scale') {
           if (latCtx.inversion_cfg_scale !== undefined) {
             val = latCtx.inversion_cfg_scale;
+            hasLatentContextValue = true;
+          } else if (latCtx.inversion_metadata?.inversion_cfg_scale !== undefined) {
+            val = latCtx.inversion_metadata.inversion_cfg_scale;
             hasLatentContextValue = true;
           } else if (latCtx.cfg_scale !== undefined) {
             val = latCtx.cfg_scale;
