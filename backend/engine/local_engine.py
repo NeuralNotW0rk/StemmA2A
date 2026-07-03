@@ -55,9 +55,91 @@ class LocalEngine(Engine):
         except Exception as e:
             print(f"Error initializing CLAPEncoder: {e}")
 
+        # --- Shared Models Setup ---
+        self.shared_models = []
+        self._load_shared_models()
+
+    def _load_shared_models(self):
+        import json
+        import shutil
+        import traceback
+
+        config_path_str = os.environ.get("SHARED_MODELS_CONFIG", "shared_models.json")
+        config_path = Path(config_path_str)
+        if not config_path.is_absolute():
+            # Resolve relative to the backend directory
+            config_path = Path(__file__).parent.parent / config_path_str
+
+        if not config_path.exists():
+            print(f"Shared models config not found at {config_path}. No shared models loaded.")
+            return
+
+        try:
+            with open(config_path, "r") as f:
+                config_data = json.load(f)
+        except Exception as e:
+            print(f"Failed to read shared models config: {e}")
+            return
+
+        for entry in config_data:
+            name = entry.get("name")
+            adapter_name = entry.get("adapter")
+            model_type = entry.get("model_type")
+            config_file_path = entry.get("config_path")
+            checkpoint_file_path = entry.get("checkpoint_path")
+            encoder_file_path = entry.get("encoder_path")
+
+            if not name or not adapter_name or not config_file_path or not checkpoint_file_path:
+                print(f"Skipping invalid shared model entry: {entry}")
+                continue
+
+            if not os.path.exists(config_file_path):
+                print(f"Skipping shared model '{name}' because config path does not exist: {config_file_path}")
+                continue
+            if not os.path.exists(checkpoint_file_path):
+                print(f"Skipping shared model '{name}' because checkpoint path does not exist: {checkpoint_file_path}")
+                continue
+
+            try:
+                adapter_class = self._get_adapter_class(adapter_name)
+                adapter = adapter_class()
+                model_element = adapter.register_model(
+                    name=name,
+                    config_path=config_file_path,
+                    checkpoint_path=checkpoint_file_path,
+                    encoder_path=encoder_file_path,
+                    model_type=model_type,
+                )
+
+                # Cache/symlink assets
+                for asset_name, asset in model_element._iter_assets():
+                    if asset and asset.path and asset.uid:
+                        dest_path = Path(self.data_root) / path_from_uid(asset.uid)
+                        dest_path.parent.mkdir(parents=True, exist_ok=True)
+                        if not dest_path.exists():
+                            try:
+                                os.symlink(asset.path, dest_path)
+                                print(f"Created symlink for shared model asset {asset.uid}: {asset.path} -> {dest_path}")
+                            except Exception as sym_err:
+                                try:
+                                    shutil.copy(asset.path, dest_path)
+                                    print(f"Copied shared model asset {asset.uid} to cache: {dest_path}")
+                                except Exception as copy_err:
+                                    print(f"Failed to copy shared model asset {asset.uid}: {copy_err}")
+
+                self.shared_models.append(model_element)
+                print(f"Successfully loaded shared model: {name} ({model_element.id})")
+            except Exception as e:
+                print(f"Failed to load shared model '{name}': {e}")
+                traceback.print_exc()
+
+    async def get_shared_models(self) -> list[dict]:
+        return [model.to_dict() for model in self.shared_models]
+
     async def register_model(self, adapter_name: str, **kwargs) -> GraphElement:
         """
         Registers a model by creating a temporary adapter and using it to 
+
         create the model element. The adapter is not cached.
         This remains a direct, synchronous-style async operation as it's not expected to be long-running.
         """

@@ -96,3 +96,8 @@ class Engine(ABC):
     @abstractmethod
     async def register_model(self, adapter_name: str, **kwargs) -> GraphElement:
         pass
+
+    @abstractmethod
+    async def get_shared_models(self) -> list[dict]:
+        pass
+

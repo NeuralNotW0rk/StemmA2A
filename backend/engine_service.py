@@ -88,6 +88,18 @@ async def get_operations():
         traceback.print_exc()
         return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
+@app.route("/shared_models", methods=["GET"])
+async def get_shared_models():
+    """Gets the shared models from the engine."""
+    try:
+        engine = engine_provider.get_engine()
+        models = await engine.get_shared_models()
+        return jsonify({"shared_models": models, "success": True})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
 # --------------------
 #  Engine API
 # --------------------

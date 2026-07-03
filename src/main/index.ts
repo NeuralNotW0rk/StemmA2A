@@ -231,6 +231,18 @@ app.whenReady().then(async () => {
     return filePaths[0]
   })
 
+  ipcMain.handle('getSharedModels', async () => {
+    const response = await fetchWithAuth(`${BACKEND_URL}/shared_models`)
+    if (!response.ok) {
+      const errorBody = await response.text()
+      throw new Error(
+        `Failed to fetch shared models. Status: ${response.status}. Error: ${errorBody}`
+      )
+    }
+    const data = await response.json()
+    return data.shared_models || []
+  })
+
   ipcMain.handle('importModel', async (_event, modelData) => {
     const response = await fetchWithAuth(`${BACKEND_URL}/register_model`, {
       method: 'POST',

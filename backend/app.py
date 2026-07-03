@@ -398,6 +398,19 @@ def update_batch_endpoint(batch_id=None):
 #  Model Operations
 # --------------------
 
+@app.route("/shared_models", methods=["GET"])
+async def get_shared_models():
+    """Exposes the shared models from the engine provider."""
+    if engine_provider is None:
+        return jsonify({"shared_models": [], "success": True})
+    try:
+        engine = engine_provider.get_engine()
+        models = await engine.get_shared_models()
+        return jsonify({"shared_models": models, "success": True})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
 @app.route("/register_model", methods=["POST"])
 async def import_model():
     """Register a model by providing absolute paths to its files."""
@@ -406,7 +419,21 @@ async def import_model():
     
     try:
         data = request.get_json()
+
+        # Check if we are registering a pre-constructed model element (e.g., shared model)
+        if "model_element" in data:
+            model_dict = data["model_element"]
+            model_artifact = resolve_element(model_dict)
+            with graph_lock:
+                param_graph.add_element(model_artifact)
+                param_graph.save()
+            return jsonify({
+                "message": "Shared model registered successfully",
+                "success": True
+            })
+
         adapter_name = data.pop("adapter")
+
 
         config_path = data.get("config_path")
         checkpoint_path = data.get("checkpoint_path")

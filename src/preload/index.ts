@@ -28,6 +28,7 @@ const api = {
   getAudioFile: (audio_id: string): Promise<string | null> =>
     ipcRenderer.invoke('getAudioFile', audio_id),
   openFile: (options: unknown) => ipcRenderer.invoke('dialog:openFile', options),
+  getSharedModels: () => ipcRenderer.invoke('getSharedModels'),
   importModel: (data: unknown) => ipcRenderer.invoke('importModel', data),
   exportAudio: (names: string[], exportDir?: string): Promise<any> =>
     ipcRenderer.invoke('exportAudio', names, exportDir),

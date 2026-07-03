@@ -23,6 +23,7 @@ interface API {
   ) => Promise<{ buffer: Buffer; mimeType: string } | null>
   registerGrating: (data: { name: string; checkpoint_path: string; base_model_id: string }) => Promise<any>
   openFile: (options?: { title?: string; filters?: { name: string; extensions: string[] }[] }) => Promise<string | null>
+  getSharedModels: () => Promise<any>
   importModel: (data: any) => Promise<any>
   exportAudio: (names: string[], exportDir?: string) => Promise<any>
   getOperations: () => Promise<any>

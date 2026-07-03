@@ -44,6 +44,21 @@ class RemoteEngine(Engine):
             # Fallback to local default if remote call fails or is not available
             return await super().get_supported_operations()
 
+    async def get_shared_models(self) -> list[dict]:
+        """Fetches shared models from the remote engine."""
+        auth_headers = self._get_auth_headers()
+        timeout = aiohttp.ClientTimeout(total=self.timeout)
+
+        try:
+            async with aiohttp.ClientSession(headers=auth_headers, timeout=timeout) as session:
+                async with session.get(f"{self.remote_url}/shared_models") as response:
+                    response.raise_for_status()
+                    res = await response.json()
+                    return res.get("shared_models", [])
+        except Exception as e:
+            print(f"Failed to fetch shared models from remote engine: {e}")
+            return []
+
     def _get_auth_headers(self) -> dict:
         headers = {}
         if self.cf_client_id and self.cf_client_secret:
