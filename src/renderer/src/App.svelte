@@ -354,10 +354,33 @@
     }
   }
 
-  function handleElementSelect(elementData: any): void {
+  let imageSrc: string | null = $state(null)
+  let imageTitle: string | null = $state(null)
+
+  async function handleElementSelect(elementData: any): Promise<void> {
     selectedElementData = elementData
     errorInInfoPanel = null // Clear any existing errors when a new element is selected
     console.log(`Element selected: ${(selectedElementData?.name as string) || 'Unknown'}`)
+
+    if (imageSrc && imageSrc.startsWith('blob:')) {
+      URL.revokeObjectURL(imageSrc)
+    }
+    imageSrc = null
+    imageTitle = null
+
+    if (elementData && elementData.type === 'image') {
+      try {
+        const result = await window.api.getImageFile(elementData.id)
+        if (result && result.buffer) {
+          const { buffer, mimeType } = result
+          const blob = new Blob([new Uint8Array(buffer)], { type: mimeType })
+          imageSrc = URL.createObjectURL(blob)
+          imageTitle = elementData.name
+        }
+      } catch (error: any) {
+        console.error('Failed to get image file:', error)
+      }
+    }
   }
 
   function handleImportGrating(modelData: any): void {
@@ -691,6 +714,17 @@
   {#if audioSrc}
     <AudioPlayer src={audioSrc} title={audioTitle} onclose={() => (audioSrc = null)} />
   {/if}
+  {#if imageSrc}
+    <div class="image-preview-card">
+      <div class="preview-header">
+        <span>{imageTitle}</span>
+        <button class="close-btn" onclick={() => { if (imageSrc && imageSrc.startsWith('blob:')) { URL.revokeObjectURL(imageSrc); } imageSrc = null; }}>×</button>
+      </div>
+      <div class="preview-body">
+        <img src={imageSrc} alt={imageTitle} />
+      </div>
+    </div>
+  {/if}
 </main>
 
 <style>
@@ -820,5 +854,70 @@
     color: var(--color-overlay-text, #fff);
     font-size: 1.1rem;
     gap: 1.5rem;
+  }
+
+  .image-preview-card {
+    position: absolute;
+    bottom: 2rem;
+    left: 2rem;
+    width: 256px;
+    background: var(--color-background-glass-2, rgba(20, 20, 25, 0.7));
+    backdrop-filter: blur(12px);
+    border: 1px solid var(--color-overlay-border-primary, rgba(255, 255, 255, 0.1));
+    border-radius: 0.75rem;
+    box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.4);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    z-index: 1000;
+  }
+
+  .preview-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.5rem 0.75rem;
+    background: rgba(255, 255, 255, 0.05);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    font-size: 0.8rem;
+    color: var(--color-overlay-text, #fff);
+  }
+
+  .preview-header span {
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-right: 0.5rem;
+  }
+
+  .close-btn {
+    background: transparent !important;
+    border: none !important;
+    color: var(--color-text-overlay-secondary, #ccc) !important;
+    font-size: 1.2rem !important;
+    padding: 0 !important;
+    min-width: 20px !important;
+    min-height: 20px !important;
+    cursor: pointer;
+    line-height: 1;
+  }
+
+  .close-btn:hover {
+    color: #fff !important;
+  }
+
+  .preview-body {
+    padding: 0.5rem;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+  }
+
+  .preview-body img {
+    max-width: 100%;
+    max-height: 240px;
+    border-radius: 0.375rem;
+    object-fit: contain;
   }
 </style>

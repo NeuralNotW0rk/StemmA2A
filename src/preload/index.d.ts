@@ -21,6 +21,9 @@ interface API {
   getAudioFile: (
     filename: string
   ) => Promise<{ buffer: Buffer; mimeType: string } | null>
+  getImageFile: (
+    filename: string
+  ) => Promise<{ buffer: Buffer; mimeType: string } | null>
   registerGrating: (data: { name: string; checkpoint_path: string; base_model_id: string }) => Promise<any>
   openFile: (options?: { title?: string; filters?: { name: string; extensions: string[] }[] }) => Promise<string | null>
   getSharedModels: () => Promise<any>

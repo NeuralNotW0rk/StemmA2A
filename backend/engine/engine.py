@@ -3,10 +3,14 @@ from typing import Any
 from param_graph.elements.base_elements import GraphElement
 
 from .model_adapters.stable_audio_adapter import StableAudioAdapter
+from .model_adapters.stylegan_adapter import StyleGANAdapter
 
 class Engine(ABC):
     def __init__(self):
-        self.adapter_registry = {'stable_audio_tools': StableAudioAdapter}
+        self.adapter_registry = {
+            'stable_audio_tools': StableAudioAdapter,
+            'stylegan2': StyleGANAdapter
+        }
 
     def _get_adapter_class(self, adapter_name: str):
         adapter_class = self.adapter_registry.get(adapter_name)

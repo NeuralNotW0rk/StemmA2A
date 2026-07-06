@@ -562,6 +562,38 @@ app.whenReady().then(async () => {
     }
   })
 
+  ipcMain.handle('getImageFile', async (_event, image_id) => {
+    try {
+      // 1. Get path from Python backend
+      const pathResponse = await fetchWithAuth(`${BACKEND_URL}/image_path/${image_id}`)
+      if (!pathResponse.ok) {
+        const errorBody = await pathResponse.text()
+        throw new Error(
+          `Failed to get image path from backend. Status: ${pathResponse.status}. Body: ${errorBody}`
+        )
+      }
+      const { path: imagePath } = await pathResponse.json()
+
+      // 2. Read the file into a buffer
+      const imageBuffer = await fs.readFile(imagePath)
+
+      // 3. Determine MIME type
+      const extension = extname(imagePath).toLowerCase()
+      let mimeType = 'image/png' // Default
+      if (extension === '.jpg' || extension === '.jpeg') {
+        mimeType = 'image/jpeg'
+      } else if (extension === '.webp') {
+        mimeType = 'image/webp'
+      }
+
+      // 4. Return buffer and mime type
+      return { buffer: imageBuffer, mimeType: mimeType }
+    } catch (error) {
+      console.error('Failed to get image file:', error)
+      return null
+    }
+  })
+
   ipcMain.handle(
     'loadProject',
     async (_event, projectData: { project_path?: string; project_name?: string }) => {

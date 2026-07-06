@@ -15,6 +15,11 @@
       id: 'stable_audio_tools',
       name: 'Stable Audio Tools',
       description: 'Manually choose any Stable Audio-based model checkpoint and config file'
+    },
+    {
+      id: 'stylegan2',
+      name: 'StyleGAN2',
+      description: 'Choose a StyleGAN2 model checkpoint (.pkl or .pt)'
     }
   ]
 

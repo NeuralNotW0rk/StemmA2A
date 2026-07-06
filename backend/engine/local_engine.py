@@ -181,18 +181,21 @@ class LocalEngine(Engine):
             # Revert the model to its original state so it can remain safely in the cache
             adapter.actant.deactivate()
 
-        sample_rate = adapter.model_info.config["sample_rate"]
-
         local_path = self.data_root / path_from_uid(artifact.id)
         local_path.parent.mkdir(parents=True, exist_ok=True)
 
-        save_audio(tensor, local_path, sample_rate, format="wav")
+        if artifact.type == "image":
+            from torchvision.utils import save_image
+            save_image(tensor, local_path, normalize=True, value_range=(-1, 1))
+        else:
+            sample_rate = adapter.model_info.config["sample_rate"]
+            save_audio(tensor, local_path, sample_rate, format="wav")
 
         # Update the artifact with the persistent path
         new_file_asset = replace(artifact.file, path=str(local_path))
         artifact = replace(artifact, file=new_file_asset)
 
-        if self.encoder:
+        if self.encoder and artifact.type == "audio":
             try:
                 embedding = self.encoder.get_embedding(local_path)
                 new_embeddings = artifact.embeddings.copy()

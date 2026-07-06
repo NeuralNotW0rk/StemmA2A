@@ -27,6 +27,8 @@ const api = {
     ipcRenderer.invoke('getAdapterConfig', adapterName),
   getAudioFile: (audio_id: string): Promise<string | null> =>
     ipcRenderer.invoke('getAudioFile', audio_id),
+  getImageFile: (image_id: string): Promise<string | null> =>
+    ipcRenderer.invoke('getImageFile', image_id),
   openFile: (options: unknown) => ipcRenderer.invoke('dialog:openFile', options),
   getSharedModels: () => ipcRenderer.invoke('getSharedModels'),
   importModel: (data: unknown) => ipcRenderer.invoke('importModel', data),

@@ -5,6 +5,7 @@ import gratingIcon from '../../assets/icons/grating.svg'
 import audioIcon from '../../assets/icons/audio.svg'
 import latentIcon from '../../assets/icons/latent.svg'
 import pathIcon from '../../assets/icons/local_path.svg'
+import imageIcon from '../../assets/icons/image.svg'
 
 const gradientColor1 = getCssVar('--graph-gradient-1')
 const gradientColor2 = getCssVar('--graph-gradient-2')
@@ -21,6 +22,7 @@ const gratingColor = gradientColor4
 const latentColor = gradientColor5
 const favoriteColor = 'rgb(0, 255, 255)'
 const validColor = '#4CAF50'
+const imageColor = '#FF5722'
 
 
 const defaultStyle: CssStyleDeclaration[] = [
@@ -121,6 +123,51 @@ const defaultStyle: CssStyleDeclaration[] = [
     }
   },
   {
+    selector: 'node[type="image"]',
+    style: {
+      label: (node: NodeSingular) => {
+        const name = node.data('name');
+        const alias = node.data('alias');
+        const promptTxt = node.data('context') && node.data('context')["prompt"];
+        const secondary = alias || promptTxt;
+        
+        return secondary ? secondary : (name || node.data('id'));
+      },
+      'background-color': imageColor,
+      'background-image': imageIcon,
+      'background-fit': 'none',
+      'background-clip': 'node',
+      'background-width': '75%',
+      'background-height': '75%',
+      width: 30,
+      height: 30
+    }
+  },
+  {
+    selector: 'node[type="image"].detailed',
+    style: {
+      label: (node: NodeSingular) => {
+        const name = node.data('name');
+        const alias = node.data('alias');
+        const promptTxt = node.data('context') && node.data('context')["prompt"];
+        const secondary = alias || promptTxt;
+        
+        if (name && secondary && name !== secondary) {
+          return `${name}\n[${secondary}]`;
+        }
+        return name || (secondary ? `[${secondary}]` : node.data('id'));
+      }
+    }
+  },
+  {
+    selector: 'node[type="image"][?favorite]',
+    style: {
+      'border-color': favoriteColor,
+      'border-width': 4,
+      'border-style': 'solid'
+    }
+  },
+  {
     selector: 'node[type="latent"]',
     style: {
       label: (node: NodeSingular) => {
@@ -185,6 +232,12 @@ const defaultStyle: CssStyleDeclaration[] = [
     selector: 'node[type="batch"][member_type="audio"]',
     style: {
       'border-color': audioColor
+    }
+  },
+  {
+    selector: 'node[type="batch"][member_type="image"]',
+    style: {
+      'border-color': imageColor
     }
   },
   {
@@ -290,6 +343,13 @@ const defaultStyle: CssStyleDeclaration[] = [
     style: {
       'line-color': audioColor,
       'target-arrow-color': audioColor
+    }
+  },
+  {
+    selector: 'edge[type="image"]',
+    style: {
+      'line-color': imageColor,
+      'target-arrow-color': imageColor
     }
   },
   {

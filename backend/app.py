@@ -1215,6 +1215,28 @@ def resolve_audio_path(audio_id):
             
     return None
 
+def resolve_image_path(image_id):
+    """Gets the image path, falling back to the project cache if the original file was deleted."""
+    if param_graph is None:
+        return None
+        
+    path_str = param_graph.get_path_from_id(image_id, relative=False)
+    if not path_str:
+        return None
+        
+    original_path = Path(path_str)
+    if original_path.exists():
+        return original_path
+        
+    # Check fallback cache
+    cache_dir = Path(param_graph.root) / "cache"
+    if cache_dir.exists():
+        cached_files = list(cache_dir.glob(f"{image_id}.*"))
+        if cached_files:
+            return cached_files[0]
+            
+    return None
+
 def cache_used_audio(audio_id):
     """Copies an external audio file to the local project cache if it's not already there."""
     if param_graph is None:
@@ -1652,6 +1674,42 @@ def serve_audio(audio_id):
         
     except Exception as e:
         print(f"Failed to serve audio: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/image_path/<string:image_id>", methods=["GET"])
+def get_image_path(image_id):
+    """Get the absolute path of an image file"""
+    if param_graph is None:
+        return jsonify({"error": "No project loaded"}), 400
+    
+    try:
+        image_path = resolve_image_path(image_id)
+        if not image_path:
+            return jsonify({"error": "Image file not found"}), 404
+        
+        return jsonify({"path": str(image_path)})
+        
+    except Exception as e:
+        print(f"Failed to get image path: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/image/<string:image_id>", methods=["GET"])
+def serve_image(image_id):
+    """Serve image files"""
+    if param_graph is None:
+        return jsonify({"error": "No project loaded"}), 400
+    
+    try:
+        image_path = resolve_image_path(image_id)
+        if not image_path:
+            return jsonify({"error": "Image file not found"}), 404
+        
+        return send_file(str(image_path))
+        
+    except Exception as e:
+        print(f"Failed to serve image: {e}")
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
