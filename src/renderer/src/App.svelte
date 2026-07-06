@@ -340,7 +340,13 @@
       const result = await window.api.getAudioFile(audioData.id)
       if (result && result.buffer) {
         const { buffer, mimeType } = result
-        const blob = new Blob([new Uint8Array(buffer)], { type: mimeType })
+        let dataArray: Uint8Array
+        if (buffer && typeof buffer === 'object' && 'data' in buffer && Array.isArray((buffer as any).data)) {
+          dataArray = new Uint8Array((buffer as any).data)
+        } else {
+          dataArray = new Uint8Array(buffer)
+        }
+        const blob = new Blob([dataArray], { type: mimeType })
         audioSrc = URL.createObjectURL(blob)
         audioTitle = audioData.name
       } else {
@@ -373,12 +379,24 @@
         const result = await window.api.getImageFile(elementData.id)
         if (result && result.buffer) {
           const { buffer, mimeType } = result
-          const blob = new Blob([new Uint8Array(buffer)], { type: mimeType })
+          let dataArray: Uint8Array
+          if (buffer && typeof buffer === 'object' && 'data' in buffer && Array.isArray((buffer as any).data)) {
+            dataArray = new Uint8Array((buffer as any).data)
+          } else {
+            dataArray = new Uint8Array(buffer)
+          }
+          const blob = new Blob([dataArray], { type: mimeType })
           imageSrc = URL.createObjectURL(blob)
           imageTitle = elementData.name
+        } else {
+          throw new Error('Image data is empty or invalid.')
         }
       } catch (error: any) {
         console.error('Failed to get image file:', error)
+        errorInInfoPanel = {
+          title: 'Image Load Failed',
+          message: error?.message || String(error)
+        }
       }
     }
   }

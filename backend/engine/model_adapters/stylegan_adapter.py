@@ -3,6 +3,9 @@ import random
 import os
 import json
 import tempfile
+import sys
+import types
+import pickle
 from pathlib import Path
 import torch
 from torch import nn
@@ -14,6 +17,206 @@ from param_graph.elements.base_elements import Asset, GraphElement
 from param_graph.elements.artifacts.image_element import Image
 from param_graph.elements.models.stylegan_element import StyleGANModel
 from utils.uid import XXH3_64
+
+# ==============================================================================
+# Dynamic TensorFlow (NVIDIA legacy pkl) check-pointing utilities
+# ==============================================================================
+
+class DummyModule(types.ModuleType):
+    def __init__(self, name):
+        super().__init__(name)
+        self.__path__ = []
+
+    def __getattr__(self, name):
+        if name in ('__path__', '__file__', '__package__'):
+            return None
+        class DummyClass:
+            def __init__(self, *args, **kwargs):
+                pass
+            def __setstate__(self, state):
+                self.__dict__.update(state)
+        DummyClass.__name__ = name
+        return DummyClass
+
+class DummyFinder:
+    def find_spec(self, fullname, path, target=None):
+        if fullname.startswith('dnnlib') or fullname.startswith('legacy') or fullname.startswith('torch_utils'):
+            from importlib.machinery import ModuleSpec
+            return ModuleSpec(fullname, self)
+        return None
+
+    def create_module(self, spec):
+        return DummyModule(spec.name)
+
+    def exec_module(self, module):
+        pass
+
+# Register the meta-path import finder once
+if not any(isinstance(f, DummyFinder) for f in sys.meta_path):
+    sys.meta_path.insert(0, DummyFinder())
+
+def load_stylegan_checkpoint(ckpt_path):
+    """Loads a StyleGAN2 checkpoint, supporting standard PyTorch state_dict and TensorFlow legacy pickle (.pkl)."""
+    try:
+        # Try loading as a standard PyTorch state_dict
+        checkpoint = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+        return checkpoint, False
+    except Exception as e:
+        # Try loading as a standard TensorFlow legacy pickle
+        try:
+            with open(ckpt_path, "rb") as f:
+                checkpoint = pickle.load(f)
+            return checkpoint, True
+        except Exception as p_err:
+            raise RuntimeError(f"Failed to load checkpoint as PyTorch ({e}) or legacy Pickle ({p_err})")
+
+def convert_tf_to_pytorch(checkpoint):
+    """Converts a TensorFlow StyleGAN2 Network pickle into a PyTorch state dict."""
+    if isinstance(checkpoint, (tuple, list)) and len(checkpoint) >= 3:
+        G_ema = checkpoint[2]
+    elif isinstance(checkpoint, dict) and 'G_ema' in checkpoint:
+        G_ema = checkpoint['G_ema']
+    else:
+        G_ema = checkpoint
+    
+    tf_vars = {}
+    def collect_vars(net):
+        variables = getattr(net, 'variables', [])
+        for v in variables:
+            if isinstance(v, tuple) and len(v) >= 2:
+                tf_vars[v[0]] = v[1]
+        components = getattr(net, 'components', {})
+        if hasattr(components, 'items'):
+            for comp in components.values():
+                collect_vars(comp)
+    collect_vars(G_ema)
+    
+    res = 4
+    for k in tf_vars.keys():
+        if '/' in k:
+            parts = k.split('/')
+            if parts[0].endswith('x' + parts[0].split('x')[-1]) and parts[0].split('x')[0].isdigit():
+                res = max(res, int(parts[0].split('x')[0]))
+    size = res
+    
+    channel_multiplier = 2
+    conv0_key = "64x64/Conv0_up/weight"
+    if conv0_key in tf_vars:
+        out_channels = tf_vars[conv0_key].shape[3]
+        channel_multiplier = out_channels // (16384 // 64)
+    
+    state_dict = {}
+    
+    # style mapping network
+    for idx in range(8):
+        w_key = f"Dense{idx}/weight"
+        b_key = f"Dense{idx}/bias"
+        if w_key in tf_vars:
+            state_dict[f"style.{idx+1}.weight"] = torch.from_numpy(tf_vars[w_key]).t()
+        if b_key in tf_vars:
+            state_dict[f"style.{idx+1}.bias"] = torch.from_numpy(tf_vars[b_key])
+            
+    # Constant input
+    if "4x4/Const/const" in tf_vars:
+        state_dict["input.input"] = torch.from_numpy(tf_vars["4x4/Const/const"])
+        
+    # 4x4 block convs
+    if "4x4/Conv/weight" in tf_vars:
+        w = tf_vars["4x4/Conv/weight"].transpose(3, 2, 0, 1)
+        state_dict["conv1.conv.weight"] = torch.from_numpy(w).unsqueeze(0)
+    if "4x4/Conv/bias" in tf_vars:
+        state_dict["conv1.activate.bias"] = torch.from_numpy(tf_vars["4x4/Conv/bias"])
+    if "4x4/Conv/noise_strength" in tf_vars:
+        state_dict["conv1.noise.weight"] = torch.tensor([tf_vars["4x4/Conv/noise_strength"]], dtype=torch.float32)
+    if "4x4/Conv/mod_weight" in tf_vars:
+        state_dict["conv1.conv.modulation.weight"] = torch.from_numpy(tf_vars["4x4/Conv/mod_weight"]).t()
+    if "4x4/Conv/mod_bias" in tf_vars:
+        state_dict["conv1.conv.modulation.bias"] = torch.from_numpy(tf_vars["4x4/Conv/mod_bias"])
+        
+    # 4x4 ToRGB
+    if "4x4/ToRGB/weight" in tf_vars:
+        w = tf_vars["4x4/ToRGB/weight"].transpose(3, 2, 0, 1)
+        state_dict["to_rgb1.conv.weight"] = torch.from_numpy(w).unsqueeze(0)
+    if "4x4/ToRGB/bias" in tf_vars:
+        state_dict["to_rgb1.bias"] = torch.from_numpy(tf_vars["4x4/ToRGB/bias"]).reshape(1, 3, 1, 1)
+    if "4x4/ToRGB/mod_weight" in tf_vars:
+        state_dict["to_rgb1.conv.modulation.weight"] = torch.from_numpy(tf_vars["4x4/ToRGB/mod_weight"]).t()
+    if "4x4/ToRGB/mod_bias" in tf_vars:
+        state_dict["to_rgb1.conv.modulation.bias"] = torch.from_numpy(tf_vars["4x4/ToRGB/mod_bias"])
+        
+    # Resolution convs
+    log_size = int(math.log(size, 2))
+    for idx in range(3, log_size + 1):
+        res_str = f"{2**idx}x{2**idx}"
+        
+        # Conv0_up
+        w_key = f"{res_str}/Conv0_up/weight"
+        b_key = f"{res_str}/Conv0_up/bias"
+        ns_key = f"{res_str}/Conv0_up/noise_strength"
+        mw_key = f"{res_str}/Conv0_up/mod_weight"
+        mb_key = f"{res_str}/Conv0_up/mod_bias"
+        idx_0 = (idx - 3) * 2
+        
+        if w_key in tf_vars:
+            w = tf_vars[w_key].transpose(3, 2, 0, 1)
+            state_dict[f"convs.{idx_0}.conv.weight"] = torch.from_numpy(w).unsqueeze(0)
+        if b_key in tf_vars:
+            state_dict[f"convs.{idx_0}.activate.bias"] = torch.from_numpy(tf_vars[b_key])
+        if ns_key in tf_vars:
+            state_dict[f"convs.{idx_0}.noise.weight"] = torch.tensor([tf_vars[ns_key]], dtype=torch.float32)
+        if mw_key in tf_vars:
+            state_dict[f"convs.{idx_0}.conv.modulation.weight"] = torch.from_numpy(tf_vars[mw_key]).t()
+        if mb_key in tf_vars:
+            state_dict[f"convs.{idx_0}.conv.modulation.bias"] = torch.from_numpy(tf_vars[mb_key])
+            
+        # Conv1
+        w_key = f"{res_str}/Conv1/weight"
+        b_key = f"{res_str}/Conv1/bias"
+        ns_key = f"{res_str}/Conv1/noise_strength"
+        mw_key = f"{res_str}/Conv1/mod_weight"
+        mb_key = f"{res_str}/Conv1/mod_bias"
+        idx_1 = (idx - 3) * 2 + 1
+        
+        if w_key in tf_vars:
+            w = tf_vars[w_key].transpose(3, 2, 0, 1)
+            state_dict[f"convs.{idx_1}.conv.weight"] = torch.from_numpy(w).unsqueeze(0)
+        if b_key in tf_vars:
+            state_dict[f"convs.{idx_1}.activate.bias"] = torch.from_numpy(tf_vars[b_key])
+        if ns_key in tf_vars:
+            state_dict[f"convs.{idx_1}.noise.weight"] = torch.tensor([tf_vars[ns_key]], dtype=torch.float32)
+        if mw_key in tf_vars:
+            state_dict[f"convs.{idx_1}.conv.modulation.weight"] = torch.from_numpy(tf_vars[mw_key]).t()
+        if mb_key in tf_vars:
+            state_dict[f"convs.{idx_1}.conv.modulation.bias"] = torch.from_numpy(tf_vars[mb_key])
+            
+        # ToRGB
+        w_key = f"{res_str}/ToRGB/weight"
+        b_key = f"{res_str}/ToRGB/bias"
+        mw_key = f"{res_str}/ToRGB/mod_weight"
+        mb_key = f"{res_str}/ToRGB/mod_bias"
+        idx_rgb = idx - 3
+        
+        if w_key in tf_vars:
+            w = tf_vars[w_key].transpose(3, 2, 0, 1)
+            state_dict[f"to_rgbs.{idx_rgb}.conv.weight"] = torch.from_numpy(w).unsqueeze(0)
+        if b_key in tf_vars:
+            state_dict[f"to_rgbs.{idx_rgb}.bias"] = torch.from_numpy(tf_vars[b_key]).reshape(1, 3, 1, 1)
+        if mw_key in tf_vars:
+            state_dict[f"to_rgbs.{idx_rgb}.conv.modulation.weight"] = torch.from_numpy(tf_vars[mw_key]).t()
+        if mb_key in tf_vars:
+            state_dict[f"to_rgbs.{idx_rgb}.conv.modulation.bias"] = torch.from_numpy(tf_vars[mb_key])
+            
+    # noise buffers
+    for noise_idx in range(log_size * 2 - 1):
+        noise_key = f"noise{noise_idx}"
+        if noise_key in tf_vars:
+            state_dict[f"noises.noise_{noise_idx}"] = torch.from_numpy(tf_vars[noise_key])
+            
+    mean_latent = None
+    if "dlatent_avg" in tf_vars:
+        mean_latent = torch.from_numpy(tf_vars["dlatent_avg"]).reshape(1, 512)
+        
+    return state_dict, size, channel_multiplier, mean_latent
 
 # ==============================================================================
 # Pure PyTorch StyleGAN2 Generator Fallback Implementation (No C++ Compilation)
@@ -498,26 +701,31 @@ class StyleGANAdapter(ModelAdapter):
             
             try:
                 # Inspect checkpoint for configuration details
-                checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-                state_dict = checkpoint.get('g_ema') or checkpoint.get('g') or checkpoint
+                checkpoint, is_tf = load_stylegan_checkpoint(checkpoint_path)
                 
-                conv_keys = [k for k in state_dict.keys() if k.startswith("convs.")]
-                if conv_keys:
-                    indices = [int(k.split(".")[1]) for k in conv_keys if k.split(".")[1].isdigit()]
-                    if indices:
-                        max_idx = max(indices)
-                        log_size = (max_idx // 2) + 3
-                        size = 2 ** log_size
-                        
-                        # Detect channel multiplier from a high-resolution block (res >= 64)
-                        for idx in sorted(list(set(indices))):
-                            res = 2 ** ((idx // 2) + 3)
-                            if res >= 64:
-                                key = f"convs.{idx}.conv.weight"
-                                if key in state_dict:
-                                    out_channels = state_dict[key].shape[1]
-                                    channel_multiplier = out_channels // (16384 // res)
-                                    break
+                if is_tf:
+                    print("Detected legacy TensorFlow .pkl checkpoint on registration. Extracting configuration...")
+                    _, size, channel_multiplier, _ = convert_tf_to_pytorch(checkpoint)
+                else:
+                    state_dict = checkpoint.get('g_ema') or checkpoint.get('g') or checkpoint
+                    
+                    conv_keys = [k for k in state_dict.keys() if k.startswith("convs.")]
+                    if conv_keys:
+                        indices = [int(k.split(".")[1]) for k in conv_keys if k.split(".")[1].isdigit()]
+                        if indices:
+                            max_idx = max(indices)
+                            log_size = (max_idx // 2) + 3
+                            size = 2 ** log_size
+                            
+                            # Detect channel multiplier from a high-resolution block (res >= 64)
+                            for idx in sorted(list(set(indices))):
+                                res = 2 ** ((idx // 2) + 3)
+                                if res >= 64:
+                                    key = f"convs.{idx}.conv.weight"
+                                    if key in state_dict:
+                                        out_channels = state_dict[key].shape[1]
+                                        channel_multiplier = out_channels // (16384 // res)
+                                        break
                 print(f"Registered StyleGAN2 model with auto-detected shape: size={size}, multiplier={channel_multiplier}")
             except Exception as e:
                 print(f"Warning: Failed to inspect checkpoint parameters on registration: {e}. Using defaults.")
@@ -554,42 +762,48 @@ class StyleGANAdapter(ModelAdapter):
 
         ckpt_path = info.checkpoint.path
         loaded_state_dict = None
+        loaded_mean_latent = None
 
         if ckpt_path and os.path.exists(ckpt_path) and os.path.isfile(ckpt_path):
             try:
                 print(f"Inspecting checkpoint {ckpt_path} to auto-detect model shape...")
-                checkpoint = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-                if 'g_ema' in checkpoint:
-                    state_dict = checkpoint['g_ema']
-                elif 'g' in checkpoint:
-                    state_dict = checkpoint['g']
-                else:
-                    state_dict = checkpoint
+                checkpoint, is_tf = load_stylegan_checkpoint(ckpt_path)
                 
-                loaded_state_dict = {k: v for k, v in state_dict.items() if 'manipulation' not in k}
+                if is_tf:
+                    print("Detected legacy TensorFlow .pkl checkpoint. Converting weights...")
+                    loaded_state_dict, size, channel_multiplier, loaded_mean_latent = convert_tf_to_pytorch(checkpoint)
+                else:
+                    if 'g_ema' in checkpoint:
+                        state_dict = checkpoint['g_ema']
+                    elif 'g' in checkpoint:
+                        state_dict = checkpoint['g']
+                    else:
+                        state_dict = checkpoint
+                    
+                    loaded_state_dict = {k: v for k, v in state_dict.items() if 'manipulation' not in k}
 
-                # Auto-detect size & channel_multiplier from weights keys
-                conv_keys = [k for k in loaded_state_dict.keys() if k.startswith("convs.")]
-                if conv_keys:
-                    indices = [int(k.split(".")[1]) for k in conv_keys if k.split(".")[1].isdigit()]
-                    if indices:
-                        max_idx = max(indices)
-                        log_size = (max_idx // 2) + 3
-                        size = 2 ** log_size
-                        
-                        # Find channel_multiplier from high-res block (res >= 64)
-                        for idx in sorted(list(set(indices))):
-                            res = 2 ** ((idx // 2) + 3)
-                            if res >= 64:
-                                key = f"convs.{idx}.conv.weight"
-                                if key in loaded_state_dict:
-                                    out_channels = loaded_state_dict[key].shape[1]
-                                    channel_multiplier = out_channels // (16384 // res)
-                                    break
-                        print(f"Auto-detected model architecture: size={size}, channel_multiplier={channel_multiplier}")
-                        # Keep the model info config aligned
-                        info.config["size"] = size
-                        info.config["channel_multiplier"] = channel_multiplier
+                    # Auto-detect size & channel_multiplier from weights keys
+                    conv_keys = [k for k in loaded_state_dict.keys() if k.startswith("convs.")]
+                    if conv_keys:
+                        indices = [int(k.split(".")[1]) for k in conv_keys if k.split(".")[1].isdigit()]
+                        if indices:
+                            max_idx = max(indices)
+                            log_size = (max_idx // 2) + 3
+                            size = 2 ** log_size
+                            
+                            # Find channel_multiplier from high-res block (res >= 64)
+                            for idx in sorted(list(set(indices))):
+                                res = 2 ** ((idx // 2) + 3)
+                                if res >= 64:
+                                    key = f"convs.{idx}.conv.weight"
+                                    if key in loaded_state_dict:
+                                        out_channels = loaded_state_dict[key].shape[1]
+                                        channel_multiplier = out_channels // (16384 // res)
+                                        break
+                print(f"Auto-detected model architecture: size={size}, channel_multiplier={channel_multiplier}")
+                # Keep the model info config aligned
+                info.config["size"] = size
+                info.config["channel_multiplier"] = channel_multiplier
             except Exception as e:
                 print(f"Failed to auto-detect model shape from checkpoint: {e}. Falling back to default/config values.")
 
@@ -603,7 +817,13 @@ class StyleGANAdapter(ModelAdapter):
         if loaded_state_dict is not None:
             try:
                 print(f"Loading StyleGAN2 weights...")
-                self.model.load_state_dict(loaded_state_dict, strict=False)
+                missing, unexpected = self.model.load_state_dict(loaded_state_dict, strict=False)
+                if missing:
+                    weight_missing = [k for k in missing if not k.endswith('.kernel')]
+                    if weight_missing:
+                        print(f"Warning: Loaded checkpoint has {len(weight_missing)} missing weight keys! First 10: {weight_missing[:10]}")
+                if unexpected:
+                    print(f"Warning: Loaded checkpoint has {len(unexpected)} unexpected keys! First 10: {unexpected[:10]}")
             except Exception as e:
                 print(f"Failed to load weights: {e}. Running with random weights.")
         else:
@@ -613,8 +833,11 @@ class StyleGANAdapter(ModelAdapter):
         self.model.eval()
         self.model_info = info
 
-        with torch.no_grad():
-            self.mean_latent = self.model.mean_latent(4096).to(self.device)
+        if loaded_mean_latent is not None:
+            self.mean_latent = loaded_mean_latent.to(self.device)
+        else:
+            with torch.no_grad():
+                self.mean_latent = self.model.mean_latent(4096).to(self.device)
 
     def cleanup(self):
         if self.model:

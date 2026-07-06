@@ -1690,14 +1690,20 @@ def serve_audio(audio_id):
 @app.route("/image_path/<string:image_id>", methods=["GET"])
 def get_image_path(image_id):
     """Get the absolute path of an image file"""
+    print(f"get_image_path called with id: {image_id}")
     if param_graph is None:
+        print("get_image_path: param_graph is None. No project loaded.")
         return jsonify({"error": "No project loaded"}), 400
     
     try:
         image_path = resolve_image_path(image_id)
+        print(f"Path resolved for graph: {image_path}")
+
         if not image_path:
+            print(f"Image file not found for id: {image_id}")
             return jsonify({"error": "Image file not found"}), 404
         
+        print(f"Returning image path: {image_path}")
         return jsonify({"path": str(image_path)})
         
     except Exception as e:
