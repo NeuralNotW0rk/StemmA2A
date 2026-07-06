@@ -443,7 +443,7 @@ def _get_cached_uid(file_path: str, uid_generator) -> str:
     if entry and entry.get("size") == file_size and entry.get("mtime") == file_mtime:
         return entry.get("uid")
         
-    checkpoint = torch.load(abs_path, map_location="cpu")
+    checkpoint = torch.load(abs_path, map_location="cpu", weights_only=False)
     if not isinstance(checkpoint, dict):
         raise ValueError("Loaded checkpoint is not a dictionary. Ensure it is a valid PyTorch model file.")
         
@@ -486,16 +486,49 @@ class StyleGANAdapter(ModelAdapter):
 
     def register_model(self, **kwargs) -> StyleGANModel:
         checkpoint_path = kwargs.get("checkpoint_path")
+        
+        # Defaults
+        size = 256
+        channel_multiplier = 2
+        checkpoint_uid = ""
+
         if checkpoint_path and os.path.exists(checkpoint_path) and os.path.isfile(checkpoint_path):
             checkpoint_uid = _get_cached_uid(checkpoint_path, self.uid_generator)
             checkpoint_asset = Asset(path=checkpoint_path, uid=checkpoint_uid)
+            
+            try:
+                # Inspect checkpoint for configuration details
+                checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+                state_dict = checkpoint.get('g_ema') or checkpoint.get('g') or checkpoint
+                
+                conv_keys = [k for k in state_dict.keys() if k.startswith("convs.")]
+                if conv_keys:
+                    indices = [int(k.split(".")[1]) for k in conv_keys if k.split(".")[1].isdigit()]
+                    if indices:
+                        max_idx = max(indices)
+                        log_size = (max_idx // 2) + 3
+                        size = 2 ** log_size
+                        
+                        # Detect channel multiplier from a high-resolution block (res >= 64)
+                        for idx in sorted(list(set(indices))):
+                            res = 2 ** ((idx // 2) + 3)
+                            if res >= 64:
+                                key = f"convs.{idx}.conv.weight"
+                                if key in state_dict:
+                                    out_channels = state_dict[key].shape[1]
+                                    channel_multiplier = out_channels // (16384 // res)
+                                    break
+                print(f"Registered StyleGAN2 model with auto-detected shape: size={size}, multiplier={channel_multiplier}")
+            except Exception as e:
+                print(f"Warning: Failed to inspect checkpoint parameters on registration: {e}. Using defaults.")
         else:
             import uuid
             checkpoint_uid = "stylegan2_rand_" + str(uuid.uuid4())[:8]
             checkpoint_asset = Asset(path="", uid=checkpoint_uid)
 
-        size = int(kwargs.get("size", 256))
-        channel_multiplier = int(kwargs.get("channel_multiplier", 2))
+        # Allow explicit overrides if passed in kwargs, else use auto-detected/defaults
+        size = int(kwargs.get("size") or size)
+        channel_multiplier = int(kwargs.get("channel_multiplier") or channel_multiplier)
 
         return StyleGANModel(
             id=checkpoint_uid,
@@ -525,7 +558,7 @@ class StyleGANAdapter(ModelAdapter):
         if ckpt_path and os.path.exists(ckpt_path) and os.path.isfile(ckpt_path):
             try:
                 print(f"Inspecting checkpoint {ckpt_path} to auto-detect model shape...")
-                checkpoint = torch.load(ckpt_path, map_location="cpu")
+                checkpoint = torch.load(ckpt_path, map_location="cpu", weights_only=False)
                 if 'g_ema' in checkpoint:
                     state_dict = checkpoint['g_ema']
                 elif 'g' in checkpoint:

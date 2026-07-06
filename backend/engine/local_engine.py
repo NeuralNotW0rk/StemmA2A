@@ -186,7 +186,7 @@ class LocalEngine(Engine):
 
         if artifact.type == "image":
             from torchvision.utils import save_image
-            save_image(tensor, local_path, normalize=True, value_range=(-1, 1))
+            save_image(tensor, local_path, format="png", normalize=True, value_range=(-1, 1))
         else:
             sample_rate = adapter.model_info.config["sample_rate"]
             save_audio(tensor, local_path, sample_rate, format="wav")

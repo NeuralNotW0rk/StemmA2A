@@ -16,24 +16,6 @@
                 { "name": "PyTorch Checkpoint", "extensions": ["pt", "pth", "pkl"] }
             ],
             "placeholder": "Select StyleGAN2 checkpoint file (.pt or .pkl)"
-        },
-        {
-            "name": "size",
-            "label": "Image Resolution",
-            "type": "select",
-            "defaultValue": "256",
-            "options": [
-                { "label": "256 x 256", "value": "256" },
-                { "label": "512 x 512", "value": "512" },
-                { "label": "1024 x 1024", "value": "1024" }
-            ]
-        },
-        {
-            "name": "channel_multiplier",
-            "label": "Channel Multiplier",
-            "type": "integer",
-            "defaultValue": 2,
-            "placeholder": "Typically 2"
         }
     ],
     "generate": [
