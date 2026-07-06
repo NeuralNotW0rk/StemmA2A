@@ -8,5 +8,6 @@ from param_graph.elements.base_elements import Asset
 class StableAudioModel(Model):
     checkpoint: Asset
     config: dict
-    model_type: str
+    model_type: str | None = None
+    encoder: Asset | None = None
     adapter: str = 'stable_audio_tools'

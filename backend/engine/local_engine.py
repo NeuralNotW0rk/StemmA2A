@@ -16,9 +16,10 @@ from param_graph.elements.base_elements import GraphElement
 from .engine import Engine
 from .model_cache import ModelCache
 from utils.uid import path_from_uid
+from utils.audio import save_audio
 
 from diffracture import Actant
-from diffracture.topology.lattice import Lattice as DiffractureLattice
+from diffracture.topology.grating import Grating as DiffractureGrating
 
 class LocalEngine(Engine):
     def __init__(self, data_root: str = None):
@@ -53,10 +54,92 @@ class LocalEngine(Engine):
             print("CLAPEncoder not found, skipping embedding functionality.")
         except Exception as e:
             print(f"Error initializing CLAPEncoder: {e}")
-        
+
+        # --- Shared Models Setup ---
+        self.shared_models = []
+        self._load_shared_models()
+
+    def _load_shared_models(self):
+        import json
+        import shutil
+        import traceback
+
+        config_path_str = os.environ.get("SHARED_MODELS_CONFIG", "shared_models.json")
+        config_path = Path(config_path_str)
+        if not config_path.is_absolute():
+            # Resolve relative to the backend directory
+            config_path = Path(__file__).parent.parent / config_path_str
+
+        if not config_path.exists():
+            print(f"Shared models config not found at {config_path}. No shared models loaded.")
+            return
+
+        try:
+            with open(config_path, "r") as f:
+                config_data = json.load(f)
+        except Exception as e:
+            print(f"Failed to read shared models config: {e}")
+            return
+
+        for entry in config_data:
+            name = entry.get("name")
+            adapter_name = entry.get("adapter")
+            model_type = entry.get("model_type")
+            config_file_path = entry.get("config_path")
+            checkpoint_file_path = entry.get("checkpoint_path")
+            encoder_file_path = entry.get("encoder_path")
+
+            if not name or not adapter_name or not config_file_path or not checkpoint_file_path:
+                print(f"Skipping invalid shared model entry: {entry}")
+                continue
+
+            if not os.path.exists(config_file_path):
+                print(f"Skipping shared model '{name}' because config path does not exist: {config_file_path}")
+                continue
+            if not os.path.exists(checkpoint_file_path):
+                print(f"Skipping shared model '{name}' because checkpoint path does not exist: {checkpoint_file_path}")
+                continue
+
+            try:
+                adapter_class = self._get_adapter_class(adapter_name)
+                adapter = adapter_class()
+                model_element = adapter.register_model(
+                    name=name,
+                    config_path=config_file_path,
+                    checkpoint_path=checkpoint_file_path,
+                    encoder_path=encoder_file_path,
+                    model_type=model_type,
+                )
+
+                # Cache/symlink assets
+                for asset_name, asset in model_element._iter_assets():
+                    if asset and asset.path and asset.uid:
+                        dest_path = Path(self.data_root) / path_from_uid(asset.uid)
+                        dest_path.parent.mkdir(parents=True, exist_ok=True)
+                        if not dest_path.exists():
+                            try:
+                                os.symlink(asset.path, dest_path)
+                                print(f"Created symlink for shared model asset {asset.uid}: {asset.path} -> {dest_path}")
+                            except Exception as sym_err:
+                                try:
+                                    shutil.copy(asset.path, dest_path)
+                                    print(f"Copied shared model asset {asset.uid} to cache: {dest_path}")
+                                except Exception as copy_err:
+                                    print(f"Failed to copy shared model asset {asset.uid}: {copy_err}")
+
+                self.shared_models.append(model_element)
+                print(f"Successfully loaded shared model: {name} ({model_element.id})")
+            except Exception as e:
+                print(f"Failed to load shared model '{name}': {e}")
+                traceback.print_exc()
+
+    async def get_shared_models(self) -> list[dict]:
+        return [model.to_dict() for model in self.shared_models]
+
     async def register_model(self, adapter_name: str, **kwargs) -> GraphElement:
         """
         Registers a model by creating a temporary adapter and using it to 
+
         create the model element. The adapter is not cached.
         This remains a direct, synchronous-style async operation as it's not expected to be long-running.
         """
@@ -73,28 +156,28 @@ class LocalEngine(Engine):
         adapter_class = self._get_adapter_class(model_element.adapter)
         adapter = self.model_cache.get(model_element, adapter_class)
 
-        # Engine-level Lattice intervention orchestration
-        lattice_elements = kwargs.get("lattice_elements", [])
-        lattice_strengths = kwargs.get("lattice_strengths", [])
-        if lattice_elements:
+        # Engine-level Grating intervention orchestration
+        grating_elements = kwargs.get("grating_elements", [])
+        grating_strengths = kwargs.get("grating_strengths", [])
+        if grating_elements:
             if not hasattr(adapter, 'model') or adapter.model is None:
-                raise RuntimeError(f"Adapter '{model_element.adapter}' does not expose a loaded 'model' for lattice injection.")
+                raise RuntimeError(f"Adapter '{model_element.adapter}' does not expose a loaded 'model' for grating injection.")
             
             if not hasattr(adapter, 'actant'):
                 adapter.actant = Actant(adapter.model)
                 
             model_device = next(adapter.model.parameters()).device
             
-            for i, lattice_element in enumerate(lattice_elements):
-                strength = lattice_strengths[i] if lattice_strengths and i < len(lattice_strengths) else 1.0
-                print(f"Engine: Applying Lattice '{lattice_element.id}' with strength {strength}...")
-                lattice = DiffractureLattice.load(lattice_element.file.path)
-                lattice.to(model_device)
-                adapter.actant.activate(lattice, injection_strategy="graft", strength=strength)
+            for i, grating_element in enumerate(grating_elements):
+                strength = grating_strengths[i] if grating_strengths and i < len(grating_strengths) else 1.0
+                print(f"Engine: Applying Grating '{grating_element.id}' with strength {strength}...")
+                grating = DiffractureGrating.load(grating_element.file.path)
+                grating.to(model_device)
+                adapter.actant.activate(grating, injection_strategy="graft", strength=strength)
 
         artifact, tensor = adapter.generate(**kwargs)
 
-        if lattice_elements:
+        if grating_elements:
             # Revert the model to its original state so it can remain safely in the cache
             adapter.actant.deactivate()
 
@@ -103,12 +186,7 @@ class LocalEngine(Engine):
         local_path = self.data_root / path_from_uid(artifact.id)
         local_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Save to an in-memory buffer to avoid issues with filenames in soundfile
-        buffer = io.BytesIO()
-        torchaudio.save(buffer, tensor, sample_rate, format="wav")
-
-        # Write the buffer's content to the final destination file
-        local_path.write_bytes(buffer.getvalue())
+        save_audio(tensor, local_path, sample_rate, format="wav")
 
         # Update the artifact with the persistent path
         new_file_asset = replace(artifact.file, path=str(local_path))
@@ -216,12 +294,10 @@ class LocalEngine(Engine):
         """
         job_id = kwargs.pop('job_id', str(uuid.uuid4()))
         
-        # For 'generate', we want the worker to call the core logic
-        op_to_run = operation_id
-        if operation_id == 'generate':
-            op_to_run = '_generate_logic'
-        elif operation_id == 'invert':
-            op_to_run = '_invert_logic'
+        # Dynamically map the requested operation to its protected logic method
+        op_to_run = f"_{operation_id}_logic"
+        if not hasattr(self, op_to_run):
+            raise ValueError(f"Operation '{operation_id}' is not supported by the LocalEngine.")
 
         self.job_queue.put((job_id, op_to_run, kwargs))
         self.job_statuses[job_id] = {"status": "pending"}

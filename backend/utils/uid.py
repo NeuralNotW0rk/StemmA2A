@@ -36,6 +36,10 @@ class UIDGenerator(ABC):
         pass
 
     @abstractmethod
+    def from_state_dict(self, state_dict: dict) -> str:
+        pass
+
+    @abstractmethod
     def from_dict(self, data: dict) -> str:
         pass
 
@@ -69,15 +73,22 @@ class XXH3_64(UIDGenerator):
         """
         Generates a deterministic xxh3_64 UID for a PyTorch model's weights.
         """
+        return self.from_state_dict(module.state_dict())
+
+    def from_state_dict(self, state_dict: dict) -> str:
+        """
+        Generates a deterministic xxh3_64 UID for a model's state dict weights.
+        """
         h = xxhash.xxh3_64()
-        state_dict = module.state_dict()
         
         # Sorting keys ensures the UID is identical regardless of internal dict order
         for key in sorted(state_dict.keys()):
             # .contiguous() is the 'secret sauce'—it ensures the memory layout 
             # matches the logical data, regardless of previous slices or transposes.
-            data = state_dict[key].detach().cpu().contiguous().numpy().tobytes()
-            h.update(data)
+            tensor = state_dict[key].detach().cpu()
+            if not tensor.is_contiguous():
+                tensor = tensor.contiguous()
+            h.update(memoryview(tensor.numpy()))
             
         return f"{h.hexdigest()}{self.DELIMITER}{self.get_method_name()}"
 

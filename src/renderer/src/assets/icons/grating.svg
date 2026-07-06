@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Grating Frame -->
+  <rect x="9" y="3" width="6" height="18" rx="1" stroke="white" stroke-width="1.5" />
+
+  <!-- Grating Slits/Grooves -->
+  <line x1="9" y1="6" x2="15" y2="6" stroke="white" stroke-width="1" />
+  <line x1="9" y1="9" x2="15" y2="9" stroke="white" stroke-width="1" />
+  <line x1="9" y1="12" x2="15" y2="12" stroke="white" stroke-width="1" />
+  <line x1="9" y1="15" x2="15" y2="15" stroke="white" stroke-width="1" />
+  <line x1="9" y1="18" x2="15" y2="18" stroke="white" stroke-width="1" />
+
+  <!-- Incoming Light Ray -->
+  <line x1="2" y1="12" x2="9" y2="12" stroke="white" stroke-width="1.5" />
+
+  <!-- Diffracted Light Rays -->
+  <line x1="15" y1="12" x2="22" y2="6" stroke="white" stroke-width="1.5" />
+  <line x1="15" y1="12" x2="22" y2="12" stroke="white" stroke-width="1.5" />
+  <line x1="15" y1="12" x2="22" y2="18" stroke="white" stroke-width="1.5" />
+</svg>

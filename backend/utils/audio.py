@@ -1,6 +1,9 @@
 # backend/utils/audio.py
+import io
 from pathlib import Path
 from typing import Union
+import soundfile as sf
+import torch
 import torchaudio
 
 def load_audio(device, audio_path: Union[str, Path], sample_rate: int):
@@ -21,3 +24,28 @@ def load_audio(device, audio_path: Union[str, Path], sample_rate: int):
         audio = resample(audio)
 
     return audio
+
+
+def save_audio_to_buffer(tensor: torch.Tensor, sample_rate: int, format: str = "wav") -> io.BytesIO:
+    """Saves a torch tensor [channels, time] to a BytesIO buffer using soundfile."""
+    buffer = io.BytesIO()
+    # Move to CPU, detach, and convert to numpy
+    data = tensor.detach().cpu().numpy()
+    # Soundfile expects shape [time, channels]
+    if data.ndim == 2:
+        data = data.T
+    sf.write(buffer, data, sample_rate, format=format.upper())
+    buffer.seek(0)
+    return buffer
+
+
+def save_audio(tensor: torch.Tensor, filepath: Union[str, Path], sample_rate: int, format: str = "wav") -> None:
+    """Saves a torch tensor [channels, time] directly to a file path using soundfile."""
+    # Move to CPU, detach, and convert to numpy
+    data = tensor.detach().cpu().numpy()
+    # Soundfile expects shape [time, channels]
+    if data.ndim == 2:
+        data = data.T
+    with open(filepath, 'wb') as f:
+        sf.write(f, data, sample_rate, format=format.upper())
+

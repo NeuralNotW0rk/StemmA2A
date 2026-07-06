@@ -14,9 +14,9 @@
   *Example:* `async function fetchData(): Promise<void> { ... }`
 - **Strict State Typing:** Always provide explicit types for `$state` and `$derived` when the type cannot be safely and narrowly inferred by TypeScript.
   *Example:* `let user = $state<User | null>(null);`
-- **Never Use `any`:** The `any` type is strictly forbidden. Use `unknown` if the shape of the data is truly not guaranteed, and perform type narrowing/checking before accessing properties.
+- **Never Use `any`:** The `any` type is strictly forbidden. Use `unknown` if the shape of the data is truly not guaranteed, and perform type narrowing/checking before accessing properties. Prefer casting to specific types (e.g., `BatchData` from `src/renderer/src/utils/forms.ts`) instead of `any`.
 - **Error Handling Types:** In `try/catch` blocks, always type the caught error as `unknown` (e.g., `catch (error: unknown)`), and check `error instanceof Error` before accessing `.message`.
 
 ## 3. General Code Quality
-- **Line Endings:** Always use LF (`\n`) for line endings.
+- **Line Endings:** Always use LF (`\n`) for line endings for all files (especially `.svelte`, `.ts`, `.js`, `.json`, etc.). Do not introduce CRLF (`\r\n`).
 - **Linting & Formatting:** Ensure code adheres strictly to ESLint and Prettier configurations. Do not bypass linting rules using `eslint-disable` unless absolutely necessary and documented with a comment.

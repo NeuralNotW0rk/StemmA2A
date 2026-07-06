@@ -1,5 +1,10 @@
 import type { CssStyleDeclaration, NodeSingular } from 'cytoscape'
 import { getCssVar } from '../../utils/css'
+import modelIcon from '../../assets/icons/model.svg'
+import gratingIcon from '../../assets/icons/grating.svg'
+import audioIcon from '../../assets/icons/audio.svg'
+import latentIcon from '../../assets/icons/latent.svg'
+import pathIcon from '../../assets/icons/local_path.svg'
 
 const gradientColor1 = getCssVar('--graph-gradient-1')
 const gradientColor2 = getCssVar('--graph-gradient-2')
@@ -12,7 +17,7 @@ const batchColor = getCssVar('--graph-batch')
 const selectedColor = getCssVar('--graph-selected')
 const modelColor = gradientColor3
 const externalColor = gradientColor2
-const latticeColor = gradientColor4
+const gratingColor = gradientColor4
 const latentColor = gradientColor5
 const favoriteColor = 'rgb(0, 255, 255)'
 const validColor = '#4CAF50'
@@ -24,9 +29,10 @@ const defaultStyle: CssStyleDeclaration[] = [
     selector: 'node',
     style: {
       color: 'white',
-      'text-valign': 'center',
+      'text-valign': 'top',
       'text-halign': 'center',
-      'text-wrap': 'wrap'
+      'text-wrap': 'wrap',
+      'text-margin-y': -6
     }
   },
   {
@@ -46,15 +52,25 @@ const defaultStyle: CssStyleDeclaration[] = [
     style: {
       label: (node: NodeSingular) => node.data('name') || node.data('id'),
       'background-color': modelColor,
+      'background-image': modelIcon,
+      'background-fit': 'none',
+      'background-clip': 'node',
+      'background-width': '75%',
+      'background-height': '75%',
       width: 60,
       height: 60
     }
   },
   {
-    selector: 'node[type="lattice"]',
+    selector: 'node[type="grating"]',
     style: {
       label: (node: NodeSingular) => node.data('name') || node.data('id'),
-      'background-color': latticeColor,
+      'background-color': gratingColor,
+      'background-image': gratingIcon,
+      'background-fit': 'none',
+      'background-clip': 'node',
+      'background-width': '75%',
+      'background-height': '75%',
       width: 50,
       height: 50
     }
@@ -71,6 +87,11 @@ const defaultStyle: CssStyleDeclaration[] = [
         return secondary ? secondary : (name || node.data('id'));
       },
       'background-color': audioColor,
+      'background-image': audioIcon,
+      'background-fit': 'none',
+      'background-clip': 'node',
+      'background-width': '75%',
+      'background-height': '75%',
       width: 30,
       height: 30
     }
@@ -103,12 +124,21 @@ const defaultStyle: CssStyleDeclaration[] = [
     selector: 'node[type="latent"]',
     style: {
       label: (node: NodeSingular) => {
-        const promptTxt = node.data('context') && node.data('context')["prompt"] || "[empty]";
-        const strength = node.data('context') && node.data('context')["inversion_strength"];
+        const context = node.data('context');
+        const isUnconditional = context && (
+          context["inversion_unconditional"] === true ||
+          (context["inversion_metadata"] && context["inversion_metadata"]["inversion_unconditional"] === true)
+        );
+        const promptTxt = (context && context["prompt"]) || (isUnconditional ? "[unconditional]" : "[empty]");
+        const strength = context && context["inversion_strength"];
         return `${promptTxt}\nx${strength}`;
       },
       'background-color': latentColor,
-      shape: 'diamond',
+      'background-image': latentIcon,
+      'background-fit': 'none',
+      'background-clip': 'node',
+      'background-width': '75%',
+      'background-height': '75%',
       width: 30,
       height: 30
     }
@@ -127,6 +157,7 @@ const defaultStyle: CssStyleDeclaration[] = [
         return secondary ? secondary : (name || node.data('id'));
       },
       'text-valign': 'top',
+      'text-margin-y': 0,
       'background-color': batchColor,
       'background-opacity': 0.5,
       'border-width': 2,
@@ -157,6 +188,12 @@ const defaultStyle: CssStyleDeclaration[] = [
     }
   },
   {
+    selector: 'node[type="batch"][member_type="latent"]',
+    style: {
+      'border-color': latentColor
+    }
+  },
+  {
     selector: 'node.compatible-drop-target',
     style: {
       'border-color': validColor,
@@ -178,6 +215,11 @@ const defaultStyle: CssStyleDeclaration[] = [
     style: {
       label: (node: NodeSingular) => node.data('name') || node.data('id'),
       'background-color': externalColor,
+      'background-image': pathIcon,
+      'background-fit': 'none',
+      'background-clip': 'node',
+      'background-width': '60%',
+      'background-height': '60%',
       width: 60,
       height: 60
     }
@@ -187,6 +229,7 @@ const defaultStyle: CssStyleDeclaration[] = [
     style: {
       label: 'data(path)',
       'text-valign': 'top',
+      'text-margin-y': 0,
       'background-color': batchColor,
       'background-opacity': 0.5,
       'border-color': externalColor,
@@ -230,10 +273,10 @@ const defaultStyle: CssStyleDeclaration[] = [
     }
   },
   {
-    selector: 'edge[type="lattice"]',
+    selector: 'edge[type="grating"]',
     style: {
-      'line-color': latticeColor,
-      'target-arrow-color': latticeColor
+      'line-color': gratingColor,
+      'target-arrow-color': gratingColor
     }
   },
   {
@@ -279,10 +322,7 @@ const defaultStyle: CssStyleDeclaration[] = [
     style: {
       'border-color': 'yellow',
       'border-width': 4,
-      'border-style': 'solid',
-      'shadow-blur': 20,
-      'shadow-color': 'yellow',
-      'shadow-opacity': 0.8
+      'border-style': 'solid'
     }
   },
   {
@@ -290,10 +330,7 @@ const defaultStyle: CssStyleDeclaration[] = [
     style: {
       'border-color': validColor,
       'border-width': 4,
-      'border-style': 'solid',
-      'shadow-blur': 20,
-      'shadow-color': validColor,
-      'shadow-opacity': 0.8
+      'border-style': 'solid'
     }
   },
   {

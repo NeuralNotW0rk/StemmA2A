@@ -15,6 +15,7 @@
     onrepairEdges?: () => void
     showSpringEdges?: boolean
     showDetailedLabels?: boolean
+    chronologicalConstraint?: boolean
   }
 
   let {
@@ -29,7 +30,8 @@
     onupdateLabels,
     onrepairEdges,
     showSpringEdges = $bindable(false),
-    showDetailedLabels = $bindable(false)
+    showDetailedLabels = $bindable(false),
+    chronologicalConstraint = $bindable(false)
   }: Props = $props()
 
   let showFileMenu = $state(false)
@@ -92,6 +94,11 @@
 
   function toggleDetailedLabels(): void {
     showDetailedLabels = !showDetailedLabels
+    showUtilitiesMenu = false
+  }
+
+  function toggleChronological(): void {
+    chronologicalConstraint = !chronologicalConstraint
     showUtilitiesMenu = false
   }
 
@@ -301,6 +308,11 @@
           </button>
           <button class="dropdown-item" onclick={toggleDetailedLabels}>
             {showDetailedLabels ? 'Hide Detailed Labels' : 'Show Detailed Labels'}
+          </button>
+          <button class="dropdown-item" onclick={toggleChronological}>
+            {chronologicalConstraint
+              ? 'Disable Chronological Layout'
+              : 'Enable Chronological Layout'}
           </button>
         </div>
       {/if}

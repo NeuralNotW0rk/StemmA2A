@@ -9,13 +9,13 @@ $ErrorActionPreference = 'Stop'
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectRoot = Resolve-Path (Join-Path $ScriptDir "..")
 
-# 1. Check for Python 3.11
-Write-Host "Step 1: Checking for Python 3.11..."
+# 1. Check for Python 3.10
+Write-Host "Step 1: Checking for Python 3.10..."
 try {
-    py -3.11 -c "import sys; print('Found compatible Python version: ' + sys.version)"
+    py -3.10 -c "import sys; print('Found compatible Python version: ' + sys.version)"
     Write-Host "Python check passed."
 } catch {
-    Write-Error "ERROR: Python 3.11 not found. Please install it and ensure 'py -3.11' command works."
+    Write-Error "ERROR: Python 3.10 not found. Please install it and ensure 'py -3.10' command works."
     exit 1
 }
 
@@ -24,7 +24,7 @@ $VenvPath = Join-Path $ProjectRoot "backend/.venv"
 if (-not (Test-Path (Join-Path $VenvPath "pyvenv.cfg"))) {
     Write-Host "Step 2: Creating Python virtual environment..."
     try {
-        py -3.11 -m venv $VenvPath
+        py -3.10 -m venv $VenvPath
         Write-Host "Virtual environment created at $VenvPath"
     } catch {
         Write-Error "ERROR: Failed to create virtual environment."
@@ -38,12 +38,15 @@ if (-not (Test-Path (Join-Path $VenvPath "pyvenv.cfg"))) {
 $PipExe = Join-Path $VenvPath "Scripts/pip.exe"
 $PythonExe = Join-Path $VenvPath "Scripts/python.exe"
 
-# 3. Upgrade pip/setuptools
-Write-Host "Step 3: Upgrading pip, setuptools, and wheel..."
+# 3. Upgrade pip/wheel
+Write-Host "Step 3: Upgrading pip and wheel..."
 try {
-    & $PythonExe -m pip install --upgrade pip setuptools wheel
+    & $PythonExe -m pip install --upgrade pip wheel
+    if ($LASTEXITCODE -ne 0) {
+        throw "pip install failed with exit code $LASTEXITCODE"
+    }
 } catch {
-    Write-Error "ERROR: Failed to upgrade pip and other packaging tools."
+    Write-Error "ERROR: Failed to upgrade pip and wheel."
     exit 1
 }
 
@@ -103,10 +106,36 @@ try {
     } else {
         & $PythonExe -m pip install -r (Join-Path $ProjectRoot "backend/requirements.txt") --extra-index-url "https://download.pytorch.org/whl/cpu"
     }
+    if ($LASTEXITCODE -ne 0) {
+        throw "pip install failed with exit code $LASTEXITCODE"
+    }
 } catch {
     Write-Error "ERROR: Failed to install dependencies from requirements.txt."
     Write-Error "PIP ERROR: $_"
     exit 1
+}
+
+
+# 6b. Install flash-attn if compatible (GPU only)
+if ($CudaVersion) {
+    Write-Host "Step 6b: Attempting to install flash-attn..."
+    try {
+        Write-Host "Installing ninja and packaging dependencies..."
+        & $PythonExe -m pip install packaging ninja
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "Failed to install ninja/packaging. Attempting flash-attn anyway..."
+        }
+        
+        Write-Host "Installing flash-attn..."
+        & $PythonExe -m pip install flash-attn --no-build-isolation
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "flash-attn installation failed or skipped (this is common on Windows due to compiler requirements). The system will still function using default PyTorch SDPA."
+        } else {
+            Write-Host "flash-attn installed successfully."
+        }
+    } catch {
+        Write-Warning "Could not install flash-attn. Error: $_"
+    }
 }
 
 
@@ -123,6 +152,9 @@ if ($DiffracturePath) {
                 & $PythonExe -m pip install -e $DiffracturePath --extra-index-url $IndexUrl
             } else {
                 & $PythonExe -m pip install -e $DiffracturePath --extra-index-url "https://download.pytorch.org/whl/cpu"
+            }
+            if ($LASTEXITCODE -ne 0) {
+                throw "pip install failed with exit code $LASTEXITCODE"
             }
             Write-Host "Diffracture installed successfully."
         } catch {

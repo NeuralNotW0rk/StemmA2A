@@ -5,23 +5,24 @@
   import AudioPlayer from './components/AudioPlayer.svelte'
   import ContentPanel from './components/ContentPanel.svelte'
   import ElementInfoView from './components/views/ElementInfoView.svelte'
-  import GenerationView from './components/views/GenerationView.svelte'
-  import InversionView from './components/views/InversionView.svelte'
   import ErrorView from './components/views/ErrorView.svelte'
-  import ImportLatticeView from './components/views/ImportLatticeView.svelte'
+  import ImportGratingView from './components/views/ImportGratingView.svelte'
   import ImportModelView from './components/views/ImportModelView.svelte'
   import RemovalView from './components/views/RemovalView.svelte'
   import NewProjectView from './components/views/NewProjectView.svelte'
   import BatchingView from './components/views/BatchingView.svelte'
   import JobStatusView from './components/views/JobStatusView.svelte'
+  import OperationView from './components/views/OperationView.svelte'
   import { onMount, onDestroy } from 'svelte'
+  import { SvelteSet } from 'svelte/reactivity'
   import {
     initiatorNodeStore,
     contextStore,
     selectedForRemoval,
     backendStatus,
     isCreatingNewProject,
-    selectionStore
+    selectionStore,
+    selectedOperation
   } from './utils/stores'
   import { startEmbeddingUpdate } from './utils/execution'
   import {
@@ -40,11 +41,13 @@
   let audioTitle: string | null = $state(null)
   let showSpringEdges = $state(false)
   let showDetailedLabelsToggle = $state(false)
+  let chronologicalConstraint = $state(false)
   let isPeekPressed = $state(false)
   let showDetailedLabels = $derived(showDetailedLabelsToggle || isPeekPressed)
   let selectedElementData: ElementData | null = $state(null)
-  let actionPanelView: ActionPanelView | 'inversion' = $state('none')
+  let actionPanelView: ActionPanelView = $state('none')
   let errorInInfoPanel: ErrorInfo | null = $state(null)
+  let allOperations: any[] = $state([])
   let toolbarComponent: Toolbar
 
   let isWaitingForBackend = $state(true)
@@ -59,17 +62,27 @@
     $jobStore.some((job) => ['running', 'pending'].includes(job.status))
   )
 
+  let knownJobIds = new SvelteSet<string>()
+
   $effect(() => {
     const unsub = jobStore.subscribe((jobs) => {
-      // Find jobs that have just succeeded
-      const newlySucceeded = jobs.find((job) => job.status === 'success' && !job.result?.viewed)
+      let shouldRefresh = false
 
-      if (newlySucceeded) {
-        refreshGraphData()
-        // Mark as viewed to prevent re-triggering
-        if (newlySucceeded.result) {
-          newlySucceeded.result.viewed = true
+      for (const job of jobs) {
+        if (!knownJobIds.has(job.id)) {
+          knownJobIds.add(job.id)
+          shouldRefresh = true
         }
+        if (job.status === 'success' && !job.result?.viewed) {
+          shouldRefresh = true
+          if (job.result) {
+            job.result.viewed = true
+          }
+        }
+      }
+
+      if (shouldRefresh) {
+        refreshGraphData()
       }
     })
     return unsub
@@ -78,7 +91,19 @@
   onMount(async () => {
     await initialHealthCheck()
     setupHealthCheckPolling()
+    await loadOperations()
   })
+
+  async function loadOperations(): Promise<void> {
+    try {
+      const res = await window.api.getOperations()
+      if (res && res.success && Array.isArray(res.operations)) {
+        allOperations = res.operations
+      }
+    } catch (error) {
+      console.error('Failed to pre-load operations:', error)
+    }
+  }
 
   onDestroy(() => {
     if (healthCheckInterval) {
@@ -187,7 +212,7 @@
     try {
       const response = await window.api.repairEdges()
       await refreshGraphData()
-      
+
       errorInInfoPanel = {
         title: 'Repair Edges Successful',
         message: response?.message || 'Missing edges were successfully restored.'
@@ -206,6 +231,7 @@
     initiatorNodeStore.set(null)
     contextStore.set(null)
     selectedForRemoval.set(null)
+    selectedOperation.set(null)
   }
 
   async function handleProjectLoad(data: {
@@ -216,6 +242,7 @@
       const projectName = data.project_name || data.project_path?.split(/[/\\]/).pop()
       console.log(`Loading project: ${projectName}`)
       await window.api.loadProject(data)
+      await loadOperations()
       graphData = await window.api.getGraphData(viewMode)
       currentProject = projectName || null
       if (data.project_path) {
@@ -235,6 +262,7 @@
     const projectName = data.project_name || data.project_path?.split(/[/\\]/).pop()
     console.log(`Creating project: ${projectName} at ${data.project_path}`)
     await window.api.createProject(data) // Pass the whole data object
+    await loadOperations()
     graphData = await window.api.getGraphData(viewMode)
     currentProject = projectName || null
     if (data.project_path) {
@@ -332,42 +360,20 @@
     console.log(`Element selected: ${(selectedElementData?.name as string) || 'Unknown'}`)
   }
 
-  function handleModelSelect(modelData: any): void {
+  function handleImportGrating(modelData: any): void {
     initiatorNodeStore.set(modelData)
-    contextStore.set({ model_id: modelData.id })
-    actionPanelView = 'generation'
+    actionPanelView = 'import-grating'
   }
 
-  function handleImportLattice(modelData: any): void {
-    initiatorNodeStore.set(modelData)
-    actionPanelView = 'import-lattice'
-  }
-
-  function handleLatticeSelectForGeneration(latticeData: any): void {
-    initiatorNodeStore.set(latticeData)
-    contextStore.set({ model_id: latticeData.base_model_id })
-    actionPanelView = 'generation'
-  }
-
-  function handleLatentSelectForGeneration(latentData: any): void {
-    initiatorNodeStore.set(latentData)
-    contextStore.set(latentData.context || null)
-    actionPanelView = 'generation'
-  }
-
-  function handleAudioNodeSelectForGeneration(audioData: any, useContext?: boolean): void {
-    initiatorNodeStore.set(audioData)
+  function handleSelectOperation(op: any, initiatorNode: any, useContext = false): void {
+    initiatorNodeStore.set(initiatorNode)
+    selectedOperation.set(op)
     if (useContext) {
-      contextStore.set(audioData.context)
+      contextStore.set(initiatorNode.context || null)
     } else {
       contextStore.set(null)
     }
-    actionPanelView = 'generation'
-  }
-
-  function handleAudioNodeSelectForInversion(audioData: any): void {
-    initiatorNodeStore.set(audioData)
-    actionPanelView = 'inversion'
+    actionPanelView = 'operation'
   }
 
   function handleElementRemove(elementData: any): void {
@@ -382,11 +388,16 @@
 
   async function handleExport(data: { names: string[] }): Promise<void> {
     try {
-      const customPath = await window.api.selectDirectory()
+      let customPath: string | null = null
+      if (data.names.length === 1) {
+        customPath = await window.api.selectSavePath(`${data.names[0]}.wav`)
+      } else {
+        customPath = await window.api.selectDirectory()
+      }
       if (!customPath) return // User cancelled
 
       const response = await window.api.exportAudio(data.names, customPath)
-      
+
       errorInInfoPanel = {
         title: 'Export Successful',
         message: `Successfully exported to: ${response?.export_path || 'project export folder'}`
@@ -398,7 +409,7 @@
   }
 
   async function handleChangeBatchMembership(
-    nodeId: string,
+    _nodeId: string,
     oldBatchId: string | null,
     oldMembers: string[],
     newBatchId: string | null,
@@ -426,6 +437,7 @@
 
   async function refreshGraphData(): Promise<void> {
     try {
+      await loadOperations()
       graphData = await window.api.getGraphData(viewMode)
       console.log(`Graph data refreshed for view mode ${viewMode}`)
     } catch (error) {
@@ -438,20 +450,46 @@
     if (actionPanelView === 'import-model') {
       return 'Import Model'
     }
-    if (actionPanelView === 'import-lattice') {
-      return 'Import Model'
-    }
-    if (actionPanelView === 'generation') {
-      return 'Generation'
-    }
-    if (actionPanelView === 'inversion') {
-      return 'Invert Audio'
+    if (actionPanelView === 'import-grating') {
+      return 'Import Grating'
     }
     if (actionPanelView === 'removal') {
       return 'Confirm Removal'
     }
     if (actionPanelView === 'batching') {
-      return ($initiatorNodeStore?.type as string) === 'batch' ? 'Update Batch' : 'Create Batch'
+      const initNode = $initiatorNodeStore
+      if (initNode?.type === 'batch') {
+        const memberIds = (initNode as any).member_ids || []
+        return memberIds.length === 0 ? 'Create Batch' : 'Update Batch'
+      }
+      return 'Create Batch'
+    }
+    if (actionPanelView === 'operation') {
+      if ($selectedOperation) {
+        let initiatorType = $initiatorNodeStore?.type
+        if ($contextStore) {
+          if ($contextStore.init_audio || $contextStore.source_audio || $contextStore.source_audio_id) {
+            initiatorType = 'audio'
+          } else if ($contextStore.init_latent) {
+            initiatorType = 'latent'
+          } else if ($contextStore.gratings && $contextStore.gratings.length > 0) {
+            initiatorType = 'grating'
+          } else {
+            initiatorType = 'model'
+          }
+        }
+        let displayName = $selectedOperation.name
+        if (
+          initiatorType &&
+          $selectedOperation.context_overrides &&
+          $selectedOperation.context_overrides[initiatorType]
+        ) {
+          displayName =
+            $selectedOperation.context_overrides[initiatorType].name || $selectedOperation.name
+        }
+        return `Operation: ${displayName.toUpperCase()}`
+      }
+      return 'Operation'
     }
     return 'Action'
   }
@@ -461,16 +499,10 @@
       await window.api.updateElement(data.id, { favorite: isFavorite })
     } catch (error: any) {
       console.error('Error toggling favorite:', error)
-      errorInInfoPanel = { title: 'Favorite Toggle Failed', message: error.message || String(error) }
-    }
-  }
-
-  async function handleUpdateElement(id: string, attributes: Record<string, any>): Promise<void> {
-    try {
-      await window.api.updateElement(id, attributes)
-    } catch (error: any) {
-      console.error('Error updating element:', error)
-      errorInInfoPanel = { title: 'Update Failed', message: error.message || String(error) }
+      errorInInfoPanel = {
+        title: 'Favorite Toggle Failed',
+        message: error.message || String(error)
+      }
     }
   }
 
@@ -498,7 +530,7 @@
   onkeyup={(e) => {
     if (e.key === 'Alt') isPeekPressed = false
   }}
-  onblur={() => isPeekPressed = false}
+  onblur={() => (isPeekPressed = false)}
 />
 
 <main class="container">
@@ -523,6 +555,7 @@
     {viewMode}
     bind:showSpringEdges
     bind:showDetailedLabels={showDetailedLabelsToggle}
+    bind:chronologicalConstraint
   />
 
   {#if errorInInfoPanel}
@@ -535,19 +568,7 @@
     </ContentPanel>
   {:else if actionPanelView !== 'none'}
     <ContentPanel title={getActionPanelTitle()} onclose={closeActionPanel} position="left">
-      {#if actionPanelView === 'generation'}
-        <GenerationView
-          onClose={closeActionPanel}
-          onGenerate={closeActionPanel}
-          onError={handleGenerationError}
-        />
-      {:else if actionPanelView === 'inversion'}
-        <InversionView
-          onClose={closeActionPanel}
-          onInvert={closeActionPanel}
-          onError={handleGenerationError}
-        />
-      {:else if actionPanelView === 'import-model'}
+      {#if actionPanelView === 'import-model'}
         <ImportModelView
           onclose={closeActionPanel}
           onrefresh={() => {
@@ -560,15 +581,15 @@
             errorInInfoPanel = error
           }}
         />
-      {:else if actionPanelView === 'import-lattice'}
-        <ImportLatticeView
+      {:else if actionPanelView === 'import-grating'}
+        <ImportGratingView
           onclose={closeActionPanel}
           onrefresh={() => {
             closeActionPanel()
             refreshGraphData()
           }}
           onError={(error) => {
-            console.error('Lattice import error:', error)
+            console.error('Grating import error:', error)
             closeActionPanel()
             errorInInfoPanel = error
           }}
@@ -599,6 +620,8 @@
             errorInInfoPanel = error
           }}
         />
+      {:else if actionPanelView === 'operation'}
+        <OperationView onClose={closeActionPanel} onError={handleGenerationError} />
       {/if}
     </ContentPanel>
   {:else if $isCreatingNewProject}
@@ -648,13 +671,9 @@
     {graphData}
     {showSpringEdges}
     {viewMode}
+    operations={allOperations}
     onaudioSelect={handleAudioSelect}
-    onmodelSelect={handleModelSelect}
-    onimportLattice={handleImportLattice}
-    onlatticeSelectForGeneration={handleLatticeSelectForGeneration}
-    onaudioNodeSelectForGeneration={handleAudioNodeSelectForGeneration}
-    onaudioNodeSelectForInversion={handleAudioNodeSelectForInversion}
-    onlatentSelectForGeneration={handleLatentSelectForGeneration}
+    onimportGrating={handleImportGrating}
     onnodeSelect={handleElementSelect}
     onexport={handleExport}
     onedgeSelect={handleElementSelect}
@@ -663,9 +682,11 @@
     onsavePositions={handleSavePositions}
     onexpandPath={handleExpandPath}
     ontoggleFavorite={handleToggleFavorite}
-    onupdateElement={handleUpdateElement}
     {showDetailedLabels}
+    {chronologicalConstraint}
     onchangeBatchMembership={handleChangeBatchMembership}
+    onselectOperation={handleSelectOperation}
+    onrefresh={refreshGraphData}
   />
   {#if audioSrc}
     <AudioPlayer src={audioSrc} title={audioTitle} onclose={() => (audioSrc = null)} />

@@ -7,6 +7,8 @@ const api = {
   openProject: (): Promise<string | null> => ipcRenderer.invoke('dialog:openProject'),
   newProject: (): Promise<string | null> => ipcRenderer.invoke('dialog:newProject'),
   selectDirectory: (): Promise<string | null> => ipcRenderer.invoke('dialog:selectDirectory'),
+  selectSavePath: (defaultName?: string): Promise<string | null> =>
+    ipcRenderer.invoke('dialog:selectSavePath', defaultName),
   getRecentProjects: (): Promise<string[]> => ipcRenderer.invoke('getRecentProjects'),
   removeRecentProject: (projectPath: string): Promise<void> =>
     ipcRenderer.invoke('removeRecentProject', projectPath),
@@ -26,12 +28,13 @@ const api = {
   getAudioFile: (audio_id: string): Promise<string | null> =>
     ipcRenderer.invoke('getAudioFile', audio_id),
   openFile: (options: unknown) => ipcRenderer.invoke('dialog:openFile', options),
+  getSharedModels: () => ipcRenderer.invoke('getSharedModels'),
   importModel: (data: unknown) => ipcRenderer.invoke('importModel', data),
   exportAudio: (names: string[], exportDir?: string): Promise<any> =>
     ipcRenderer.invoke('exportAudio', names, exportDir),
-  registerLattice: (data: unknown) => ipcRenderer.invoke('registerLattice', data),
-  generate: (data: unknown) => ipcRenderer.invoke('generate', data),
-  invert: (data: unknown) => ipcRenderer.invoke('invert', data),
+  registerGrating: (data: unknown) => ipcRenderer.invoke('registerGrating', data),
+  getOperations: (): Promise<any> => ipcRenderer.invoke('getOperations'),
+  executeOperation: (data: unknown): Promise<any> => ipcRenderer.invoke('executeOperation', data),
   removeElement: (elementId: string, keepChildren?: boolean): Promise<any> =>
     ipcRenderer.invoke('removeElement', elementId, keepChildren),
   removeElements: (elementIds: string[], keepChildren?: boolean): Promise<any> =>

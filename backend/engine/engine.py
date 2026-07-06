@@ -24,6 +24,60 @@ class Engine(ABC):
 
         return adapter_instance.get_form_config()
 
+    async def get_supported_operations(self) -> list[dict]:
+        """
+        Returns the top-level async operations explicitly supported by the engine.
+        The full dynamic forms will be resolved via the adapter once a model is linked.
+        """
+        import inspect
+        supported_ops = {}
+
+        for adapter_name, adapter_class in self.adapter_registry.items():
+            for attr_name in dir(adapter_class):
+                member = getattr(adapter_class, attr_name)
+                if getattr(member, "_is_operation", False):
+                    op_name = member._op_name
+                    is_standard = member._op_is_standard
+                    description = member._op_description
+                    initiator_types = member._op_initiator_types
+                    context_overrides = member._op_context_overrides
+
+                    if is_standard:
+                        if op_name not in supported_ops:
+                            supported_ops[op_name] = {
+                                "name": op_name,
+                                "description": description,
+                                "initiator_types": set(initiator_types),
+                                "context_overrides": dict(context_overrides),
+                                "form_config": [
+                                    {"name": "model", "type": "node", "label": "Model", "filter": {"type": "model"}, "required": True}
+                                ]
+                            }
+                            if op_name == "invert":
+                                supported_ops[op_name]["form_config"].append(
+                                    {"name": "source_audio", "type": "node", "label": "Source Audio", "filter": {"type": "audio"}, "required": True}
+                                )
+                        else:
+                            supported_ops[op_name]["initiator_types"].update(initiator_types)
+                            supported_ops[op_name]["context_overrides"].update(context_overrides)
+                    else:
+                        namespaced_name = f"{op_name}:{adapter_name}"
+                        supported_ops[namespaced_name] = {
+                            "name": namespaced_name,
+                            "description": description,
+                            "initiator_types": list(initiator_types),
+                            "context_overrides": dict(context_overrides),
+                            "form_config": [
+                                {"name": "model", "type": "node", "label": "Model", "filter": {"type": "model"}, "required": True}
+                            ]
+                        }
+
+        for op in supported_ops.values():
+            if isinstance(op["initiator_types"], set):
+                op["initiator_types"] = list(op["initiator_types"])
+
+        return list(supported_ops.values())
+
     @abstractmethod
     async def execute(self, operation_id: str, **kwargs) -> str:
         """Queues an operation and returns a job ID."""
@@ -42,3 +96,8 @@ class Engine(ABC):
     @abstractmethod
     async def register_model(self, adapter_name: str, **kwargs) -> GraphElement:
         pass
+
+    @abstractmethod
+    async def get_shared_models(self) -> list[dict]:
+        pass
+

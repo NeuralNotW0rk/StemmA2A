@@ -65,6 +65,90 @@
     }
   })
 
+  let lastConfigProcessed: FormConfig | null = null
+  let previousConditionValues: Record<string, any> = {}
+
+  $effect(() => {
+    // Collect all condition target keys from config's conditionalDefaults
+    const targetKeys = new Set<string>()
+    for (const field of config) {
+      if (field.conditionalDefaults) {
+        for (const condDefault of field.conditionalDefaults) {
+          for (const key in condDefault.show_if) {
+            targetKeys.add(key)
+          }
+        }
+      }
+    }
+
+    // Touch condition keys to establish reactive dependencies
+    const currentConditionValues: Record<string, any> = {}
+    for (const key of targetKeys) {
+      const val = formData[key] !== undefined ? formData[key] : (contextData ? contextData[key] : null)
+      currentConditionValues[key] = val
+    }
+
+    // Check if any condition key changed value compared to previousConditionValues
+    let conditionsChanged = false
+    for (const key of targetKeys) {
+      if (currentConditionValues[key] !== previousConditionValues[key]) {
+        conditionsChanged = true
+        break
+      }
+    }
+
+    if (config !== lastConfigProcessed) {
+      conditionsChanged = true
+      lastConfigProcessed = config
+    }
+
+    // Update previousConditionValues
+    previousConditionValues = currentConditionValues
+
+    // Only apply conditional defaults if conditions changed (or on initial config load)
+    if (conditionsChanged) {
+      const data = { ...contextData, ...formData }
+
+      untrack(() => {
+        for (const field of config) {
+          if (field.conditionalDefaults) {
+            let matchedDefaultValue: any = undefined
+            let conditionsMet = false
+
+            for (const condDefault of field.conditionalDefaults) {
+              let itemConditionsMet = true
+              for (const key in condDefault.show_if) {
+                const condition = condDefault.show_if[key]
+                if (condition === 'exists') {
+                  if (!data[key]) {
+                    itemConditionsMet = false
+                    break
+                  }
+                } else {
+                  if (data[key] !== condition) {
+                    itemConditionsMet = false
+                    break
+                  }
+                }
+              }
+              if (itemConditionsMet) {
+                matchedDefaultValue = condDefault.value
+                conditionsMet = true
+                break
+              }
+            }
+
+            if (conditionsMet && matchedDefaultValue !== undefined) {
+              formData[field.name] = matchedDefaultValue
+            } else if (!conditionsMet && field.defaultValue !== undefined) {
+              formData[field.name] = field.defaultValue
+            }
+          }
+        }
+      })
+    }
+  })
+
   $effect(() => {
     isFormValid = visibleFields.every(
       (f) =>
@@ -105,14 +189,63 @@
       formData[fieldName] = path
     }
   }
-  const visibleFields = $derived(
-    config.filter((field: FormField) => {
+
+  async function selectFieldDirectory(fieldName: string): Promise<void> {
+    const path = await window.api.selectDirectory()
+    if (path) {
+      formData[fieldName] = path
+    }
+  }
+  const visibleFields = $derived.by(() => {
+    // Collect all condition target keys from config's show_if
+    const targetKeys = new Set<string>()
+    for (const field of config) {
+      if (field.show_if) {
+        if (Array.isArray(field.show_if)) {
+          for (const condSet of field.show_if) {
+            for (const key in condSet) {
+              targetKeys.add(key)
+            }
+          }
+        } else {
+          for (const key in field.show_if) {
+            targetKeys.add(key)
+          }
+        }
+      }
+    }
+
+    // Touch condition keys to establish reactive dependencies
+    for (const key of targetKeys) {
+      const _dummy1 = formData[key]
+      const _dummy2 = contextData ? contextData[key] : null
+    }
+
+    return config.filter((field: FormField) => {
       if (!field.show_if) {
         return true
       }
 
       // Combine context and form data, with form data taking precedence.
       const data = { ...contextData, ...formData }
+
+      if (Array.isArray(field.show_if)) {
+        return field.show_if.some((condSet) => {
+          for (const key in condSet) {
+            const condition = condSet[key]
+            if (condition === 'exists') {
+              if (!data[key]) {
+                return false
+              }
+            } else {
+              if (data[key] !== condition) {
+                return false
+              }
+            }
+          }
+          return true
+        })
+      }
 
       for (const key in field.show_if) {
         const condition = field.show_if[key]
@@ -129,7 +262,7 @@
 
       return true
     })
-  )
+  })
 </script>
 
 <form
@@ -291,6 +424,12 @@
           <input type="text" bind:value={formData[field.name]} placeholder={field.placeholder} />
           <button onclick={() => selectFieldFile(field.name, field.filters)}>Browse</button>
         </div>
+      {:else if field.type === 'directory'}
+        <label for={field.name}>{field.label}</label>
+        <div class="path-input">
+          <input type="text" bind:value={formData[field.name]} placeholder={field.placeholder} />
+          <button onclick={() => selectFieldDirectory(field.name)}>Browse</button>
+        </div>
       {:else if field.type === 'select'}
         <label for={field.name}>{field.label}</label>
         <div class="input-row">
@@ -357,6 +496,13 @@
           label={field.label}
           filter={field.filter}
           bind:node={formData[field.name] as ModelData | AudioData}
+          onBatchToggle={(active) => {
+            if (active) {
+              batchFields.add(field.name)
+            } else {
+              batchFields.delete(field.name)
+            }
+          }}
           id={field.name}
         />
       {:else}

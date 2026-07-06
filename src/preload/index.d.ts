@@ -8,6 +8,7 @@ interface API {
   openProject: () => Promise<string | null>
   newProject: () => Promise<string | null>
   selectDirectory: () => Promise<string | null>
+  selectSavePath: (defaultName?: string) => Promise<string | null>
   getRecentProjects: () => Promise<string[]>
   removeRecentProject: (projectPath: string) => Promise<void>
   addRecentProject: (projectPath: string) => Promise<void>
@@ -20,12 +21,13 @@ interface API {
   getAudioFile: (
     filename: string
   ) => Promise<{ buffer: Buffer; mimeType: string } | null>
-  registerLattice: (data: { name: string; checkpoint_path: string; base_model_id: string }) => Promise<any>
+  registerGrating: (data: { name: string; checkpoint_path: string; base_model_id: string }) => Promise<any>
   openFile: (options?: { title?: string; filters?: { name: string; extensions: string[] }[] }) => Promise<string | null>
+  getSharedModels: () => Promise<any>
   importModel: (data: any) => Promise<any>
   exportAudio: (names: string[], exportDir?: string) => Promise<any>
-  generate: (data: any) => Promise<any>
-  invert: (data: any) => Promise<any>
+  getOperations: () => Promise<any>
+  executeOperation: (data: any) => Promise<any>
   removeElement: (elementId: string, keepChildren?: boolean) => Promise<any>
   removeElements: (elementIds: string[], keepChildren?: boolean) => Promise<any>
   logMessage: (message: string) => Promise<any>

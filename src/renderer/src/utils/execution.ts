@@ -25,16 +25,21 @@ export const embeddingUpdateExecutionStore: Writable<ExecutionState> = writable(
   error: null
 })
 
-export async function startExecution(name: string, payload: unknown, operation: 'generate' | 'invert' = 'generate'): Promise<void> {
+export async function startExecution(
+  name: string, 
+  payload: unknown, 
+  operation: string = 'generate',
+  executionMode: 'sync' | 'async' = 'async'
+): Promise<void> {
   const job = addJob(name, payload, 'pending')
 
   try {
     const payloadWithId =
       typeof payload === 'object' && payload !== null
-        ? { ...payload, job_id: job.id }
-        : { job_id: job.id, payload }
+        ? { ...payload, job_id: job.id, operation, execution_mode: executionMode }
+        : { job_id: job.id, payload, operation, execution_mode: executionMode }
     
-    const initData = operation === 'invert' ? await window.api.invert(payloadWithId) : await window.api.generate(payloadWithId)
+    const initData = await window.api.executeOperation(payloadWithId)
     
     if (initData.status === 'running' || initData.status === 'pending') {
       const finalResult = await pollJobStatus(initData.job_id)
@@ -49,7 +54,7 @@ export async function startExecution(name: string, payload: unknown, operation: 
   } catch (e: unknown) {
     let message = e instanceof Error ? e.message : String(e)
     message = message.replace(/^Error invoking remote method '[^']+':\s*(Error:\s*)?/, '')
-    const error = { title: 'Generation Failed', message }
+    const error = { title: 'Execution Failed', message }
     job.status = 'error'
     job.error = error
     updateJob(job)

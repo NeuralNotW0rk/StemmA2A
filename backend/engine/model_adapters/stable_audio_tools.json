@@ -13,13 +13,16 @@
             "type": "textarea",
             "defaultValue": "low fidelity",
             "placeholder": "Enter a negative prompt for the model...",
-            "show_if": {"model_type": "k_diffusion"}
+            "show_if": {"sampler_category": "k_diffusion"}
         },
         {
             "name": "steps",
             "label": "Steps",
             "type": "integer",
             "defaultValue": 50,
+            "conditionalDefaults": [
+                { "show_if": {"diffusion_objective": "rf_denoiser"}, "value": 8 }
+            ],
             "placeholder": "Enter number of steps"
         },
         {
@@ -27,6 +30,10 @@
             "label": "CFG Scale",
             "type": "float",
             "defaultValue": 7,
+            "conditionalDefaults": [
+                { "show_if": {"init_latent": "exists"}, "value": 1.0 },
+                { "show_if": {"diffusion_objective": "rf_denoiser"}, "value": 1.0 }
+            ],
             "placeholder": "Enter CFG scale"
         },
         {
@@ -44,6 +51,16 @@
             "placeholder": "Enter duration in seconds"
         },
         {
+            "name": "sampler_category",
+            "label": "Sampler Type",
+            "type": "select",
+            "defaultValue": "k_diffusion",
+            "options": [
+                { "label": "K-Diffusion", "value": "k_diffusion" },
+                { "label": "Rectified Flow", "value": "rectified_flow" }
+            ]
+        },
+        {
             "name": "k_sampler_type",
             "label": "K-Sampler",
             "type": "select",
@@ -57,37 +74,40 @@
                 { "label": "k-DPM Fast", "value": "k-dpm-fast" },
                 { "label": "k-DPM Adaptive", "value": "k-dpm-adaptive" }
             ],
-            "show_if": {"model_type": "k_diffusion"}
+            "show_if": {"sampler_category": "k_diffusion"}
         },
         {
             "name": "rf_sampler_type",
             "label": "RF-Sampler",
             "type": "select",
-            "defaultValue": "pingpong",
+            "defaultValue": "euler",
             "options": [
                 { "label": "Euler", "value": "euler" },
                 { "label": "RK4", "value": "rk4" },
                 { "label": "DPM++", "value": "dpmpp" },
                 { "label": "Ping-pong", "value": "pingpong" }
-
             ],
-            "show_if": {"model_type": "rectified_flow"}
+            "show_if": {"sampler_category": "rectified_flow"}
         },
         {
             "name": "sigma_min",
             "label": "Sigma Min",
             "type": "float",
             "defaultValue": 0.3,
-            "placeholder": "Enter sigma min",
-            "show_if": {"model_type": "k_diffusion"}
+            "conditionalDefaults": [
+                { "show_if": {"sampler_category": "rectified_flow"}, "value": 0.0 }
+            ],
+            "placeholder": "Enter sigma min"
         },
         {
             "name": "sigma_max",
             "label": "Sigma Max",
             "type": "float",
             "defaultValue": 500,
-            "placeholder": "Enter sigma max",
-            "show_if": {"model_type": "k_diffusion"}
+            "conditionalDefaults": [
+                { "show_if": {"sampler_category": "rectified_flow"}, "value": 1.0 }
+            ],
+            "placeholder": "Enter sigma max"
         },
         {
             "name": "seed",
@@ -96,6 +116,51 @@
             "defaultValue": 0,
             "placeholder": "Enter a seed",
             "randomizable": true
+        },
+        {
+            "name": "cfg_interval_min",
+            "label": "CFG Interval Min",
+            "type": "float",
+            "defaultValue": 0.0,
+            "placeholder": "Enter CFG interval min",
+            "show_if": {"sampler_category": "rectified_flow"}
+        },
+        {
+            "name": "cfg_interval_max",
+            "label": "CFG Interval Max",
+            "type": "float",
+            "defaultValue": 1.0,
+            "placeholder": "Enter CFG interval max",
+            "show_if": {"sampler_category": "rectified_flow"}
+        },
+        {
+            "name": "cfg_rescale",
+            "label": "CFG Rescale",
+            "type": "float",
+            "defaultValue": 0.0,
+            "placeholder": "Enter CFG rescale amount"
+        },
+        {
+            "name": "cfg_norm_threshold",
+            "label": "CFG Norm Threshold",
+            "type": "float",
+            "defaultValue": 0.0,
+            "placeholder": "Enter CFG norm threshold"
+        },
+        {
+            "name": "apg_scale",
+            "label": "APG Scale",
+            "type": "float",
+            "defaultValue": 1.0,
+            "placeholder": "1.0=full APG, 0.0=vanilla CFG",
+            "show_if": {"sampler_category": "rectified_flow"}
+        },
+        {
+            "name": "duration_padding_sec",
+            "label": "Duration Padding (sec)",
+            "type": "float",
+            "defaultValue": 6.0,
+            "placeholder": "Enter duration padding in seconds"
         },
         {
             "name": "init_audio",
@@ -127,7 +192,11 @@
             "label": "Prompt",
             "type": "textarea",
             "defaultValue": "",
-            "placeholder": "Enter the original generation prompt..."
+            "placeholder": "Enter the original generation prompt...",
+            "show_if": [
+                { "sampler_category": "k_diffusion" },
+                { "inversion_unconditional": false }
+            ]
         },
         {
             "name": "steps",
@@ -141,7 +210,8 @@
             "label": "Inversion Strength",
             "type": "float",
             "defaultValue": 1.0,
-            "placeholder": "Enter inversion strength (0 to 1)"
+            "placeholder": "Enter inversion strength (0 to 1)",
+            "show_if": {"sampler_category": "k_diffusion"}
         },
         {
             "name": "seconds_start",
@@ -156,6 +226,53 @@
             "type": "float",
             "defaultValue": 11,
             "placeholder": "Enter duration in seconds"
+        },
+        {
+            "name": "inversion_gamma",
+            "label": "Inversion Gamma",
+            "type": "float",
+            "defaultValue": 0,
+            "placeholder": "0.3 - 0.5 is good for reproduction",
+            "show_if": {"sampler_category": "rectified_flow"}
+        },
+        {
+            "name": "inversion_unconditional",
+            "label": "Inversion Unconditional",
+            "type": "boolean",
+            "defaultValue": true,
+            "show_if": {"sampler_category": "rectified_flow"}
+        },
+        {
+            "name": "inversion_cfg_scale",
+            "label": "Inversion CFG Scale",
+            "type": "float",
+            "defaultValue": 1.0,
+            "placeholder": "Usually 1.0",
+            "show_if": {"sampler_category": "rectified_flow"}
+        },
+        {
+            "name": "seed",
+            "label": "Seed",
+            "type": "integer",
+            "defaultValue": 0,
+            "placeholder": "Enter seed",
+            "randomizable": true
+        },
+        {
+            "name": "sigma_min",
+            "label": "Sigma Min",
+            "type": "float",
+            "defaultValue": 0.3,
+            "placeholder": "Enter sigma min",
+            "show_if": {"sampler_category": "k_diffusion"}
+        },
+        {
+            "name": "sigma_max",
+            "label": "Sigma Max",
+            "type": "float",
+            "defaultValue": 500.0,
+            "placeholder": "Enter sigma max",
+            "show_if": {"sampler_category": "k_diffusion"}
         }
     ],
     "import": [
@@ -165,16 +282,6 @@
             "type": "text",
             "placeholder": "Enter a name for the model",
             "required": true
-        },
-        {
-            "name": "model_type",
-            "label": "Model Type",
-            "type": "select",
-            "defaultValue": "k_diffusion",
-            "options": [
-                { "label": "K-Diffusion", "value": "k_diffusion" },
-                { "label": "Rectified Flow", "value": "rectified_flow" }
-            ]
         },
         {
             "name": "checkpoint_path",
@@ -194,6 +301,13 @@
             "placeholder": "Select a config file",
             "required": true,
             "filters": [{ "name": "JSON Files", "extensions": ["json"] }]
+        },
+        {
+            "name": "encoder_path",
+            "label": "Text Encoder Folder (Optional)",
+            "type": "directory",
+            "placeholder": "Select local directory containing text encoder files (tokenizer, configs, etc.)",
+            "required": false
         }
     ]
 }

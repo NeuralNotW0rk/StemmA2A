@@ -29,14 +29,21 @@ function createSelectionStore() {
       filter: NodeFilter,
       boundNodeId: string | null,
       onSelect: (node: SelectableNodeData) => void
-    ) =>
-      update((state) => ({
+    ) => {
+      if (!filter || Object.keys(filter).length === 0) {
+        throw new Error(
+          '[SelectionStore] Cannot start graph selection mode with an empty or missing filter constraint. ' +
+          'Ensure the parameter form configuration specifies a valid filter.'
+        )
+      }
+      return update((state) => ({
         ...state,
         isSelecting: true,
         filter,
         boundNodeId,
         onSelect
-      })),
+      }))
+    },
     cancelSelection: () =>
       update((state) => ({
         ...state,
@@ -128,3 +135,5 @@ function createFormStateStore() {
 }
 
 export const formStateStore = createFormStateStore()
+
+export const selectedOperation = writable<any>(null)

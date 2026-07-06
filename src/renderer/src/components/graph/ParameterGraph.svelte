@@ -6,33 +6,33 @@
   import cytoscape, { type EventObject, type Singular } from 'cytoscape'
   import fcose from 'cytoscape-fcose'
   import cxtmenu from 'cytoscape-cxtmenu'
+  import popper from 'cytoscape-popper'
+  import { createPopper } from '@popperjs/core'
   import graphStyle from './Style'
   import layoutConfig from './Layout'
   import { cyInstanceStore, selectionStore } from '../../utils/stores'
   import { BATCHING_CONFIG } from '../../utils/app-config'
 
   interface Props {
-    graphData?: { elements: cytoscape.ElementDefinition[] } | null
+    graphData?: {
+      elements: cytoscape.ElementDefinition[] | cytoscape.ElementsDefinition
+    } | null
     viewMode?: 'batch' | 'cluster'
     showSpringEdges?: boolean
     showDetailedLabels?: boolean
-    onmodelSelect?: (data: any) => void
+    chronologicalConstraint?: boolean
+    operations?: any[]
     onaudioSelect?: (data: any) => void
-    onaudioNodeSelectForGeneration?: (data: any, useContext?: boolean) => void
-    onaudioNodeSelectForInversion?: (data: any) => void
     onexport?: (data: { names: string[] }) => void
-    onimportLattice?: (data: any) => void
-    onlatticeSelectForGeneration?: (data: any) => void
+    onimportGrating?: (data: any) => void
     onrescanSource?: (name: string) => void
     onnodeSelect?: (data: any) => void
-    onlatentSelectForGeneration?: (data: any) => void
     onedgeSelect?: (data: any) => void
     onElementRemove?: (data: any) => void
     onstartBatching?: (data: any) => void
     onsavePositions?: (positions: Record<string, { x: number; y: number }>) => void | Promise<void>
     onexpandPath?: (id: string) => void
     ontoggleFavorite?: (data: any, isFavorite: boolean) => void
-    onupdateElement?: (id: string, attributes: Record<string, any>) => void
     onchangeBatchMembership?: (
       nodeId: string,
       oldBatchId: string | null,
@@ -40,21 +40,20 @@
       newBatchId: string | null,
       newMembers: string[]
     ) => void | Promise<void>
+    onselectOperation?: (op: any, initiatorNode: any, useContext?: boolean) => void
+    onrefresh?: () => void | Promise<void>
   }
 
   let {
     graphData = null,
     showSpringEdges = false,
     showDetailedLabels = true,
-    onmodelSelect,
+    chronologicalConstraint = false,
+    operations: operationsProp = [],
     onaudioSelect,
-    onaudioNodeSelectForGeneration,
-    onaudioNodeSelectForInversion,
-    onimportLattice,
-    onlatticeSelectForGeneration,
+    onimportGrating,
     onrescanSource,
     onexport,
-    onlatentSelectForGeneration,
     onnodeSelect,
     onedgeSelect,
     onElementRemove,
@@ -62,25 +61,199 @@
     onsavePositions,
     onexpandPath,
     ontoggleFavorite,
-    onupdateElement,
-    onchangeBatchMembership
+    onchangeBatchMembership,
+    onselectOperation,
+    onrefresh
   }: Props = $props()
 
   let graphContainer: HTMLElement | undefined = $state()
   let cy: cytoscape.Core | null = null
   let isInitialized = $state(false)
 
-  let isSelecting = $state(false)
-  let selectionFilter: Record<string, any> | null = $state(null)
-  let selectionBoundNodeId: string | null = $state(null)
-  selectionStore.subscribe((store) => {
-    isSelecting = store.isSelecting
-    selectionFilter = store.filter
-    selectionBoundNodeId = store.boundNodeId
+  // --- In-place Audio Operations Popover State ---
+  let operationsMenuOpen = $state(false)
+  let targetNode: any = $state(null)
+  let operations: any[] = $state([])
+  let searchQuery = $state('')
+
+  $effect(() => {
+    if (operationsProp && operationsProp.length > 0) {
+      operations = operationsProp
+    }
+  })
+
+  let selectedIndex = $state(0)
+  let menuElement: HTMLElement | null = $state(null)
+  let searchInput: HTMLInputElement | null = $state(null)
+  let loadingOperations = $state(false)
+  let operationsError: string | null = $state(null)
+  let lastCxtTapPosition = { x: 0, y: 0 }
+
+  let filteredOperations = $derived.by(() => {
+    const initiatorType = targetNode ? targetNode.data('type') : null
+    let ops = operations
+    if (initiatorType) {
+      const filterType = initiatorType === 'batch' ? targetNode.data('member_type') : initiatorType
+      if (filterType) {
+        ops = operations.filter((op) => {
+          return (
+            !op.initiator_types ||
+            op.initiator_types.length === 0 ||
+            op.initiator_types.includes(filterType)
+          )
+        })
+      }
+    }
+    if (!searchQuery) return ops
+    const q = searchQuery.toLowerCase()
+    const displayType = targetNode ? (targetNode.data('type') === 'batch' ? targetNode.data('member_type') : targetNode.data('type')) : null
+    return ops.filter((op) => {
+      const display = getOpDisplayProps(op, displayType)
+      return (
+        display.name.toLowerCase().includes(q) ||
+        (display.description && display.description.toLowerCase().includes(q))
+      )
+    })
+  })
+
+  function getOpDisplayProps(
+    op: any,
+    initiatorType?: string
+  ): { name: string; description?: string } {
+    if (initiatorType && op.context_overrides && op.context_overrides[initiatorType]) {
+      const override = op.context_overrides[initiatorType]
+      return {
+        name: override.name || op.name,
+        description: override.description || op.description
+      }
+    }
+    return {
+      name: op.name,
+      description: op.description
+    }
+  }
+
+  function toTitleCase(str: string): string {
+    return str
+      .split(/[\s-_]+/)
+      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(' ')
+  }
+
+  async function openOperationsMenu(node: any): Promise<void> {
+    targetNode = node
+    operationsMenuOpen = true
+    searchQuery = ''
+    selectedIndex = 0
+    loadingOperations = true
+    operationsError = null
+
+    try {
+      const response = await window.api.getOperations()
+      if (response && response.success && Array.isArray(response.operations)) {
+        operations = response.operations
+      } else {
+        throw new Error('Invalid operations response format')
+      }
+    } catch (err: any) {
+      console.error('Failed to get operations:', err)
+      operationsError = err.message || String(err)
+    } finally {
+      loadingOperations = false
+      setTimeout(() => {
+        if (searchInput) searchInput.focus()
+      }, 50)
+    }
+  }
+
+  function handleKeyDown(e: KeyboardEvent): void {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      if (filteredOperations.length > 0) {
+        selectedIndex = (selectedIndex + 1) % filteredOperations.length
+      }
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      if (filteredOperations.length > 0) {
+        selectedIndex = (selectedIndex - 1 + filteredOperations.length) % filteredOperations.length
+      }
+    } else if (e.key === 'Enter') {
+      e.preventDefault()
+      if (filteredOperations[selectedIndex]) {
+        selectOp(filteredOperations[selectedIndex])
+      }
+    } else if (e.key === 'Escape') {
+      e.preventDefault()
+      closeOperationsMenu()
+    }
+  }
+
+  function selectOp(op: any): void {
+    const nodeData = targetNode ? targetNode.data() : null
+    closeOperationsMenu()
+    if (onselectOperation && nodeData) {
+      onselectOperation(op, nodeData)
+    }
+  }
+
+  function closeOperationsMenu(): void {
+    operationsMenuOpen = false
+    targetNode = null
+  }
+
+  function handleClickOutside(e: MouseEvent): void {
+    if (operationsMenuOpen && menuElement && !menuElement.contains(e.target as Node)) {
+      closeOperationsMenu()
+    }
+  }
+
+  let popperInstance: any = null
+
+  $effect(() => {
+    if (operationsMenuOpen && menuElement && targetNode && cy) {
+      const ref = targetNode.popperRef()
+      popperInstance = createPopper(ref, menuElement, {
+        placement: 'right-start',
+        strategy: 'fixed',
+        modifiers: [
+          {
+            name: 'offset',
+            options: {
+              offset: [0, 10]
+            }
+          }
+        ]
+      })
+
+      const update = (): void => {
+        if (popperInstance) popperInstance.update()
+      }
+
+      targetNode.on('position', update)
+      cy.on('pan zoom resize', update)
+
+      return () => {
+        if (targetNode) targetNode.off('position', update)
+        if (cy) cy.off('pan zoom resize', update)
+        if (popperInstance) {
+          popperInstance.destroy()
+          popperInstance = null
+        }
+      }
+    }
+    return undefined
   })
 
   function matchesFilter(node: cytoscape.NodeSingular, filter: Record<string, any>): boolean {
     const data = node.data()
+
+    if (data.type === 'batch') {
+      const memberIds = data.member_ids || []
+      if (memberIds.length === 0) return false
+      const firstMember = node.cy().getElementById(memberIds[0])
+      if (!firstMember || firstMember.length === 0) return false
+      return matchesFilter(firstMember, filter)
+    }
     for (const [key, expectedValue] of Object.entries(filter)) {
       // Special evaluation: Exclude specified nodes
       if (key === '_exclude_node_ids') {
@@ -133,7 +306,9 @@
   }
 
   function isBatchCompatible(batch: cytoscape.NodeSingular, node: cytoscape.NodeSingular): boolean {
-    const filter: Record<string, any> = batch.data('member_type') ? { type: batch.data('member_type') } : {}
+    const filter: Record<string, any> = batch.data('member_type')
+      ? { type: batch.data('member_type') }
+      : {}
 
     // Extract the structural dependencies from the batch's existing members to match BatchingView's logic
     const memberIds = batch.data('member_ids') || []
@@ -158,12 +333,14 @@
         // We do NOT remove 'bound' here. NodeSelectors naturally manage their own 'bound' class!
         cy.elements().removeClass('highlighted dimmed bound-active bound-other')
 
-        if (isSelecting && selectionFilter) {
+        if ($selectionStore.isSelecting) {
+          const filter = $selectionStore.filter || {}
+          console.log('[ParameterGraph] Selection active. Filter is:', JSON.stringify(filter))
           // 1. Dim everything by default
           cy.elements().addClass('dimmed')
 
           // 2. Identify valid candidates based on the filter
-          const highlightedNodes = cy.nodes().filter((node) => matchesFilter(node, selectionFilter!))
+          const highlightedNodes = cy.nodes().filter((node) => matchesFilter(node, filter))
           const ancestorNodes = highlightedNodes.ancestors()
 
           // 3. Un-dim and highlight valid candidates, and keep their structural ancestors visible
@@ -171,8 +348,8 @@
           ancestorNodes.removeClass('dimmed')
 
           // 4. Force the active bound node to show its indicator and un-dim it
-          if (selectionBoundNodeId) {
-            cy.getElementById(String(selectionBoundNodeId))
+          if ($selectionStore.boundNodeId) {
+            cy.getElementById(String($selectionStore.boundNodeId))
               .removeClass('highlighted dimmed')
               .addClass('bound-active')
           }
@@ -202,6 +379,19 @@
     }
   })
 
+  // Run layout when chronological constraint changes to show the immediate effect
+  let firstEffectRun = true
+  $effect(() => {
+    void chronologicalConstraint
+    if (isInitialized && cy) {
+      if (firstEffectRun) {
+        firstEffectRun = false
+        return
+      }
+      tidyView()
+    }
+  })
+
   onMount(() => {
     initializeGraph()
   })
@@ -213,9 +403,19 @@
     }
   })
 
-  function initializeGraph(): void {
+  async function initializeGraph(): Promise<void> {
     cytoscape.use(fcose)
     cytoscape.use(cxtmenu)
+    cytoscape.use(popper(createPopper))
+
+    try {
+      const response = await window.api.getOperations()
+      if (response && response.success && Array.isArray(response.operations)) {
+        operations = response.operations
+      }
+    } catch (e) {
+      console.error('Failed to load operations for context menus:', e)
+    }
 
     cy = cytoscape({
       container: graphContainer,
@@ -243,13 +443,66 @@
 
     // --- Command Definitions (Inheritance-style) ---
 
+    const PINNED_OPERATIONS = new Set(['generate', 'invert'])
+
+    const getPinnedOperations = (ele: Singular): Command[] => {
+      if (!operations) return []
+      const type = ele.data('type')
+      return operations
+        .filter(
+          (op) =>
+            PINNED_OPERATIONS.has(op.name) &&
+            op.initiator_types &&
+            op.initiator_types.includes(type)
+        )
+        .map((op) => {
+          const display = getOpDisplayProps(op, type)
+          return {
+            content: toTitleCase(display.name),
+            select: () => {
+              onselectOperation?.(op, ele.data())
+            }
+          }
+        })
+    }
+
+    const getReplicateCommand = (ele: Singular): Command | null => {
+      const context = ele.data().context
+      if (!context) return null
+
+      let targetOpName = context.operation
+      if (!targetOpName) {
+        // Fallback for legacy elements
+        const type = ele.data('type')
+        if (type === 'audio') {
+          targetOpName = 'generate'
+        } else if (type === 'latent') {
+          targetOpName = 'invert'
+        }
+      }
+
+      if (!targetOpName) return null
+
+      const targetOp = operations?.find((op) => op.name === targetOpName)
+      if (!targetOp) return null
+
+      return {
+        content: 'Replicate',
+        select: () => {
+          if (onselectOperation) {
+            onselectOperation(targetOp, ele.data(), true)
+          }
+        }
+      }
+    }
+
     const elementCommands = (ele: Singular): Command[] => [
       {
         content: 'Remove',
         select: () => {
           const selectedEles = cy!.$(':selected')
           if (selectedEles.length > 1 && selectedEles.contains(ele)) {
-            onElementRemove?.(selectedEles.map(e => e.data()))
+            onElementRemove?.(selectedEles.map((e) => e.data()))
           } else {
             onElementRemove?.(ele.data())
           }
@@ -263,33 +516,28 @@
     ]
 
     const modelNodeCommands = (ele: Singular): Command[] => [
-      // Inherits from nodeCommands
+      ...getPinnedOperations(ele),
       {
-        content: 'Generate Audio',
-        select: () => onmodelSelect?.(ele.data())
-      },
-      {
-        content: 'Import Lattice',
-        select: () => onimportLattice?.(ele.data())
+        content: 'Import Grating',
+        select: () => onimportGrating?.(ele.data())
       },
       ...nodeCommands(ele)
     ]
 
-    const latticeNodeCommands = (ele: Singular): Command[] => [
-      {
-        content: 'Generate',
-        select: () => onlatticeSelectForGeneration?.(ele.data())
-      },
+    const gratingNodeCommands = (ele: Singular): Command[] => [
+      ...getPinnedOperations(ele),
       ...nodeCommands(ele)
     ]
 
-    const latentNodeCommands = (ele: Singular): Command[] => [
-      {
-        content: 'Generate Audio',
-        select: () => onlatentSelectForGeneration?.(ele.data())
-      },
-      ...nodeCommands(ele)
-    ]
+    const latentNodeCommands = (ele: Singular): Command[] => {
+      const specificCommands: Command[] = []
+      const replicateCmd = getReplicateCommand(ele)
+      if (replicateCmd) {
+        specificCommands.push(replicateCmd)
+      }
+      specificCommands.push(...getPinnedOperations(ele))
+      return [...specificCommands, ...nodeCommands(ele)]
+    }
 
     const audioNodeCommands = (ele: Singular): Command[] => {
       const specificCommands: Command[] = [
@@ -302,32 +550,23 @@
           }
         }
       ]
-      if (ele.data().context) {
-        specificCommands.push({
-          content: 'Replicate',
-          select: () => onaudioNodeSelectForGeneration?.(ele.data(), true)
-        })
-      }
-      specificCommands.push({
-        content: 'Audio to Audio',
-        select: () => onaudioNodeSelectForGeneration?.(ele.data(), false)
-      })
-      specificCommands.push({
-        content: 'Invert',
-        select: () => onaudioNodeSelectForInversion?.(ele.data())
-      })
 
-      // Only allow batch creation for independent artifacts
-      if (!ele.data('parent')) {
-        specificCommands.push({
-          content: 'Create Batch',
-          select: () => onstartBatching?.(ele.data())
-        })
+      const replicateCmd = getReplicateCommand(ele)
+      if (replicateCmd) {
+        specificCommands.push(replicateCmd)
       }
-      
+
+      // Inject pinned dynamic operations (e.g. Audio to Audio, Invert)
+      specificCommands.push(...getPinnedOperations(ele))
+
       specificCommands.push({
         content: 'Export',
         select: () => onexport?.({ names: [ele.data('name')] })
+      })
+
+      specificCommands.push({
+        content: 'Operations...',
+        select: () => openOperationsMenu(ele)
       })
 
       // Inherits from nodeCommands
@@ -360,9 +599,15 @@
         content: 'Export Batch',
         select: () => {
           const memberIds = ele.data('member_ids') || []
-          const names = memberIds.map((id: string) => cy!.getElementById(id).data('name')).filter(Boolean)
+          const names = memberIds
+            .map((id: string) => cy!.getElementById(id).data('name'))
+            .filter(Boolean)
           if (names.length > 0) onexport?.({ names })
         }
+      },
+      {
+        content: 'Operations...',
+        select: () => openOperationsMenu(ele)
       },
       ...nodeCommands(ele)
     ]
@@ -373,7 +618,24 @@
       selector: 'core',
       commands: [
         { content: 'Tidy', select: tidyView },
-        { content: 'Fit', select: fitView }
+        { content: 'Fit', select: fitView },
+        {
+          content: 'Create Batch',
+          select: async () => {
+            try {
+              const response = await window.api.batchElements([])
+              if (response && response.success) {
+                const newBatch = response.collection
+                await onsavePositions?.({
+                  [newBatch.id]: { x: lastCxtTapPosition.x, y: lastCxtTapPosition.y }
+                })
+                await onrefresh?.()
+              }
+            } catch (err: any) {
+              console.error('Failed to create empty batch:', err)
+            }
+          }
+        }
       ]
     })
 
@@ -383,8 +645,8 @@
         switch (ele.data('type')) {
           case 'model':
             return modelNodeCommands(ele)
-          case 'lattice':
-            return latticeNodeCommands(ele)
+          case 'grating':
+            return gratingNodeCommands(ele)
           case 'audio':
             return audioNodeCommands(ele)
           case 'external':
@@ -410,6 +672,13 @@
   function setupEventListeners(): void {
     if (!cy) return
 
+    cy.on('cxttapstart', (evt: EventObject) => {
+      if (evt.position) {
+        lastCxtTapPosition = { ...evt.position }
+        console.log('[ParameterGraph] Position updated to:', lastCxtTapPosition)
+      }
+    })
+
     cy.on('tap', (evt: EventObject) => {
       if (evt.target === cy) {
         onnodeSelect?.(null)
@@ -421,10 +690,10 @@
       const node = evt.target
       const nodeData = node.data()
 
-      if (isSelecting) {
+      if ($selectionStore.isSelecting) {
         console.log('[ParameterGraph] Node tapped during selection:', nodeData.id)
 
-        if (!selectionFilter || matchesFilter(node, selectionFilter)) {
+        if (!$selectionStore.filter || matchesFilter(node, $selectionStore.filter)) {
           console.log('[ParameterGraph] Valid node clicked. Resolving selection:', nodeData)
           // Pass a clean clone of the data to avoid Svelte 5 proxy / Cytoscape internal conflicts
           selectionStore.resolveSelection({ ...nodeData })
@@ -456,40 +725,47 @@
       }
     })
 
-    let ghostNode: cytoscape.NodeCollection | null = null
-    let sourceNode: Singular | null = null
+    let ghostNode: cytoscape.NodeSingular | null = null
+    let sourceNode: cytoscape.NodeSingular | null = null
 
     cy.on('mousedown', 'node', (evt: EventObject) => {
       const node = evt.target
       const oe = evt.originalEvent as MouseEvent
+      const nodeType = node.data('type')
+      const parent = node.parent()
+      const parentType = parent && parent.length > 0 ? parent.data('type') : null
 
-      if (node.children().length === 0 && oe && (oe.ctrlKey || oe.metaKey)) {
-        sourceNode = node
+      // Block ghost-dragging for members of directory nodes, directories, and batches
+      const isGhostDraggable =
+        parentType !== 'directory' && nodeType !== 'directory' && nodeType !== 'batch'
+
+      if (node.children().length === 0 && isGhostDraggable && oe && (oe.ctrlKey || oe.metaKey)) {
+        sourceNode = node as unknown as cytoscape.NodeSingular
         ghostNode = cy!.add({
           group: 'nodes',
           data: { id: `ghost-node-${Date.now()}` },
           position: { ...node.position() }
-        })
+        }) as unknown as cytoscape.NodeSingular
 
         ghostNode.style({
           'background-color': node.style('background-color'),
-          'shape': node.style('shape'),
-          'width': node.style('width'),
-          'height': node.style('height'),
-          'label': node.style('label'),
-          'opacity': 0.5,
+          shape: node.style('shape'),
+          width: node.style('width'),
+          height: node.style('height'),
+          label: node.style('label'),
+          opacity: 0.5,
           'border-width': node.style('border-width'),
           'border-color': node.style('border-color'),
           'text-valign': node.style('text-valign'),
           'text-halign': node.style('text-halign'),
-          'color': node.style('color'),
+          color: node.style('color'),
           'z-index': 9999,
-          'events': 'no' // Do not capture events on the ghost node
+          events: 'no' // Do not capture events on the ghost node
         })
 
         cy!.nodes('[type="batch"]').forEach((batch) => {
           if (batch.id() === sourceNode!.id()) return
-          if (isBatchCompatible(batch, sourceNode!)) {
+          if (isBatchCompatible(batch as unknown as cytoscape.NodeSingular, sourceNode!)) {
             batch.addClass('compatible-drop-target')
           }
         })
@@ -517,7 +793,7 @@
       }
     })
 
-    cy.on('mouseup', async (evt: EventObject) => {
+    cy.on('mouseup', async () => {
       if (ghostNode && sourceNode) {
         const nodePos = ghostNode.position()
         let targetBatchId: string | null = null
@@ -555,7 +831,10 @@
 
         if (currentParentId !== targetBatchId) {
           const oldMembers = currentParentId
-            ? cy!.getElementById(currentParentId).data('member_ids')?.filter((id: string) => id !== sourceNodeId) || []
+            ? cy!
+                .getElementById(currentParentId)
+                .data('member_ids')
+                ?.filter((id: string) => id !== sourceNodeId) || []
             : []
           const newMembers = targetBatchId
             ? [...(cy!.getElementById(targetBatchId).data('member_ids') || []), sourceNodeId]
@@ -573,7 +852,7 @@
             const elementsList = Array.isArray(graphData.elements)
               ? graphData.elements
               : [...(graphData.elements.nodes || []), ...(graphData.elements.edges || [])]
-            
+
             const rawNode = elementsList.find((e: any) => e.data.id === sourceNodeId)
             if (rawNode) {
               if (targetBatchId) {
@@ -590,7 +869,13 @@
           // 5. Persist
           await extractAndSavePositions()
           if (onchangeBatchMembership) {
-            await onchangeBatchMembership(sourceNodeId, currentParentId, oldMembers, targetBatchId, newMembers)
+            await onchangeBatchMembership(
+              sourceNodeId,
+              currentParentId,
+              oldMembers,
+              targetBatchId,
+              newMembers
+            )
           }
         } else {
           sourceNode.position({ ...nodePos })
@@ -652,7 +937,52 @@
     })
   }
 
-  function applyLayout(randomize = false, fit = false): void {
+  function isGeneratedArtifact(node: cytoscape.NodeSingular): boolean {
+    const type = node.data('type')
+    if (type !== 'audio' && type !== 'latent') {
+      return false
+    }
+    const parentId = node.data('parent')
+    if (parentId) {
+      const parentNode = cy!.getElementById(parentId)
+      if (parentNode && parentNode.length > 0) {
+        const parentType = parentNode.data('type')
+        if (
+          parentType === 'local_path' ||
+          parentType === 'directory' ||
+          parentType === 'external'
+        ) {
+          return false
+        }
+      }
+    }
+    return true
+  }
+
+  function buildChronologicalConstraints(): { left: string; right: string; gap: number }[] {
+    if (!cy) return []
+    const leafNodes = cy.nodes().filter((node) => node.children().length === 0)
+    const sortedNodes = (leafNodes.toArray() as cytoscape.NodeSingular[])
+      .filter((node) => node.data('created') !== undefined && isGeneratedArtifact(node))
+      .sort((a, b) => {
+        const timeA = a.data('created') || 0
+        const timeB = b.data('created') || 0
+        if (timeA !== timeB) return timeA - timeB
+        return a.id().localeCompare(b.id())
+      })
+
+    const constraints: { left: string; right: string; gap: number }[] = []
+    for (let i = 0; i < sortedNodes.length - 1; i++) {
+      constraints.push({
+        left: sortedNodes[i].id(),
+        right: sortedNodes[i + 1].id(),
+        gap: 80
+      })
+    }
+    return constraints
+  }
+
+  function applyLayout(randomize = false, fit = false, useFixedConstraints = true): void {
     if (!cy) return
 
     // Save viewport state before layout to restore it if not fitting
@@ -661,11 +991,37 @@
 
     const elementsToLayout = cy.elements()
 
+    // Dynamically build fixed node constraints for all nodes that have positions
+    const fixedConstraints: { nodeId: string; position: { x: number; y: number } }[] = []
+    if (useFixedConstraints) {
+      cy.nodes().forEach((node) => {
+        const isChildless = node.children().length === 0
+        const pos = node.position()
+        if (
+          isChildless &&
+          node.locked() &&
+          typeof pos.x === 'number' &&
+          typeof pos.y === 'number' &&
+          !isNaN(pos.x) &&
+          !isNaN(pos.y)
+        ) {
+          fixedConstraints.push({
+            nodeId: node.id(),
+            position: { x: pos.x, y: pos.y }
+          })
+        }
+      })
+    }
+
     const layout = elementsToLayout.layout({
       ...layoutConfig,
       randomize,
       fit: false, // Prevent the layout algorithm from doing its own bounding box fitting
-      animate: true
+      animate: true,
+      fixedNodeConstraint: fixedConstraints.length > 0 ? fixedConstraints : undefined,
+      relativePlacementConstraint: chronologicalConstraint
+        ? buildChronologicalConstraints()
+        : undefined
     } as any)
     layout.on('layoutstop', () => {
       cy?.nodes().unlock()
@@ -767,7 +1123,7 @@
           const target = targetNode?.data.parent || edgeData.target
 
           // We explicitly DO NOT proxy the source to its parent batch.
-          // This ensures that when a single sample is used as init_audio, 
+          // This ensures that when a single sample is used as init_audio,
           // the edge visually originates from that specific sample, not the whole batch.
           const source = edgeData.source
 
@@ -842,7 +1198,7 @@
   })
 
   export function tidyView(): void {
-    applyLayout(false, false)
+    applyLayout(false, false, false)
   }
 
   export function fitView(): void {
@@ -855,6 +1211,7 @@
 </script>
 
 <svelte:window
+  onmousedown={handleClickOutside}
   onkeydown={(e) => {
     if (e.key === 'Control' || e.key === 'Meta') {
       cy?.boxSelectionEnabled(false)
@@ -863,9 +1220,7 @@
     if (e.key === 'Delete' || e.key === 'Backspace') {
       const target = e.target as HTMLElement
       const isInput =
-        target.tagName === 'INPUT' ||
-        target.tagName === 'TEXTAREA' ||
-        target.isContentEditable
+        target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable
       if (!isInput) {
         const selectedEles = cy?.$(':selected')
         if (selectedEles && selectedEles.length > 0) {
@@ -886,8 +1241,72 @@
   }}
 />
 
-<div class="graph-wrapper" class:selecting={isSelecting}>
+<div class="graph-wrapper" class:selecting={$selectionStore.isSelecting}>
   <div bind:this={graphContainer} class="graph-container"></div>
+
+  {#if operationsMenuOpen}
+    <div bind:this={menuElement} class="operations-command-palette">
+      <div class="search-header">
+        <svg
+          class="search-icon"
+          xmlns="http://www.w3.org/2000/svg"
+          width="16"
+          height="16"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+        </svg>
+        <input
+          bind:this={searchInput}
+          type="text"
+          bind:value={searchQuery}
+          onkeydown={handleKeyDown}
+          placeholder="Search audio operations..."
+        />
+      </div>
+
+      <div class="palette-content">
+        {#if loadingOperations}
+          <div class="status-message">
+            <div class="spinner" style="margin-bottom: 0.5rem;"></div>
+            Loading operations...
+          </div>
+        {:else if operationsError}
+          <div class="status-message error">{operationsError}</div>
+        {:else if filteredOperations.length === 0}
+          <div class="status-message">No operations found</div>
+        {:else}
+          <ul class="operations-list">
+            {#each filteredOperations as op, index (op.name)}
+              {@const display = getOpDisplayProps(op, targetNode?.data('type'))}
+              <li class="operation-item" class:active={index === selectedIndex}>
+                <button
+                  type="button"
+                  onclick={() => selectOp(op)}
+                  onmouseenter={() => (selectedIndex = index)}
+                >
+                  <div class="op-title-row">
+                    <span class="op-name">{display.name.toUpperCase()}</span>
+                    <span class="op-badge" class:async={op.execution_mode === 'async'}>
+                      {op.execution_mode}
+                    </span>
+                  </div>
+                  {#if display.description}
+                    <div class="op-desc">{display.description}</div>
+                  {/if}
+                </button>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+      </div>
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -915,5 +1334,136 @@
 
   .graph-wrapper.selecting .graph-container {
     cursor: crosshair;
+  }
+
+  /* --- Command Palette Custom Styles --- */
+  .operations-command-palette {
+    position: fixed;
+    width: 280px;
+    background: var(--color-background-glass-2, rgba(20, 20, 25, 0.85));
+    backdrop-filter: blur(12px);
+    border: 1px solid var(--color-overlay-border-primary, rgba(255, 255, 255, 0.15));
+    border-radius: 8px;
+    box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.4);
+    z-index: 10000;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    max-height: 320px;
+    font-family: inherit;
+  }
+
+  .search-header {
+    display: flex;
+    align-items: center;
+    padding: 0.75rem;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(255, 255, 255, 0.03);
+    gap: 0.5rem;
+  }
+
+  .search-icon {
+    color: var(--color-text-muted, #888);
+    opacity: 0.7;
+    flex-shrink: 0;
+  }
+
+  .search-header input {
+    background: none;
+    border: none;
+    outline: none;
+    color: var(--color-overlay-text, #fff);
+    font-size: 0.9rem;
+    width: 100%;
+    padding: 0;
+    margin: 0;
+  }
+
+  .palette-content {
+    overflow-y: auto;
+    flex-grow: 1;
+  }
+
+  .status-message {
+    padding: 1.5rem 1rem;
+    text-align: center;
+    color: var(--color-text-muted, #888);
+    font-size: 0.85rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .status-message.error {
+    color: var(--color-error, #ef4444);
+  }
+
+  .operations-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+  }
+
+  .operation-item {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+  }
+
+  .operation-item:last-child {
+    border-bottom: none;
+  }
+
+  .operation-item button {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: none;
+    border: none;
+    border-radius: 0;
+    padding: 0.75rem 1rem;
+    color: var(--color-overlay-text, #fff);
+    cursor: pointer;
+    transition: background 0.15s;
+    min-height: auto;
+  }
+
+  .operation-item.active button {
+    background: var(--color-primary-t-30, rgba(235, 94, 40, 0.2));
+  }
+
+  .op-title-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.25rem;
+  }
+
+  .op-name {
+    font-weight: 600;
+    font-size: 0.85rem;
+    letter-spacing: 0.05em;
+  }
+
+  .op-badge {
+    font-size: 0.65rem;
+    padding: 0.1rem 0.4rem;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--color-text-muted, #aaa);
+    text-transform: uppercase;
+  }
+
+  .op-badge.async {
+    background: rgba(59, 130, 246, 0.2);
+    color: #93c5fd;
+    border: 1px solid rgba(59, 130, 246, 0.3);
+  }
+
+  .op-desc {
+    font-size: 0.75rem;
+    color: var(--color-text-muted, #888);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 </style>

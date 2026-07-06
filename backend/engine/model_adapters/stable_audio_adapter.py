@@ -1,6 +1,22 @@
 import json
 import struct
+import copy
+import os
+import xxhash
 from pathlib import Path
+
+def _hash_directory(directory_path: Path) -> str:
+    h = xxhash.xxh3_64()
+    # Find all files recursively and sort them to be deterministic
+    for file_path in sorted(directory_path.glob("**/*")):
+        if file_path.is_file():
+            # Update hash with relative path to ensure structure is identical
+            h.update(str(file_path.relative_to(directory_path)).encode("utf-8"))
+            # Update hash with file content in chunks
+            with open(file_path, "rb") as f:
+                while chunk := f.read(8192):
+                    h.update(chunk)
+    return f"{h.hexdigest()}.xxh3_64"
 
 import torch
 import torchaudio
@@ -12,7 +28,7 @@ from coolname import generate_slug
 from tqdm import tqdm
 from k_diffusion.sampling import get_sigmas_karras
 
-from .base_adapter import ModelAdapter
+from .base_adapter import ModelAdapter, operation
 from param_graph.elements.base_elements import Asset
 from param_graph.elements.artifacts.audio_element import Audio
 from param_graph.elements.artifacts.latent_element import Latent
@@ -36,6 +52,71 @@ def load_ckpt_state_dict(ckpt_path):
     return state_dict
 
 
+def _get_cache_file_path() -> Path:
+    is_container = os.environ.get("RUNNING_IN_CONTAINER") == "true"
+    if is_container:
+        data_path = os.environ.get("CONTAINER_DATA_PATH")
+    else:
+        data_path = os.environ.get("LOCAL_DATA_PATH")
+        
+    if data_path:
+        cache_dir = Path(data_path).expanduser()
+        try:
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            return cache_dir / "model_uid_cache.json"
+        except Exception:
+            pass
+            
+    for p in ["/app/data", "./data", "."]:
+        path = Path(p)
+        if path.exists() and os.access(path, os.W_OK):
+            return path / "model_uid_cache.json"
+            
+    return Path("model_uid_cache.json")
+
+def _get_cached_uid(file_path: str, uid_generator) -> str:
+    abs_path = os.path.abspath(file_path)
+    if not os.path.exists(abs_path):
+        raise FileNotFoundError(f"Checkpoint file not found: {abs_path}")
+        
+    stat = os.stat(abs_path)
+    file_size = stat.st_size
+    file_mtime = stat.st_mtime
+    
+    cache_file = _get_cache_file_path()
+    cache = {}
+    if cache_file.exists():
+        try:
+            with open(cache_file, "r") as f:
+                cache = json.load(f)
+        except Exception as e:
+            print(f"Error reading UID cache: {e}")
+            
+    entry = cache.get(abs_path)
+    if entry and entry.get("size") == file_size and entry.get("mtime") == file_mtime:
+        return entry.get("uid")
+        
+    # Cache miss: compute uid by loading state dict
+    print(f"Cache miss for {abs_path}. Computing state dict UID...")
+    state_dict = load_ckpt_state_dict(abs_path)
+    uid = uid_generator.from_state_dict(state_dict)
+    
+    # Save to cache
+    cache[abs_path] = {
+        "size": file_size,
+        "mtime": file_mtime,
+        "uid": uid
+    }
+    
+    try:
+        with open(cache_file, "w") as f:
+            json.dump(cache, f, indent=2)
+    except Exception as e:
+        print(f"Error writing UID cache: {e}")
+        
+    return uid
+
+
 class StableAudioAdapter(ModelAdapter):
     def __init__(self) -> None:
         super().__init__()
@@ -47,24 +128,36 @@ class StableAudioAdapter(ModelAdapter):
     def register_model(self, **kwargs) -> StableAudioModel:
         config_path = kwargs.get("config_path")
         checkpoint_path = kwargs.get("checkpoint_path")
+        encoder_path = kwargs.get("encoder_path")
 
         # Load the config
         with open(config_path, 'r') as cf:
             config_json = cf.read()
             config = json.loads(config_json)
 
-        # Create a temporary model object to generate a UID from
-        model = create_model_from_config(config)
-        model.load_state_dict(load_ckpt_state_dict(checkpoint_path))
+        # Generate the checkpoint ID using the persistent cache or by computing it
+        checkpoint_uid = _get_cached_uid(checkpoint_path, self.uid_generator)
 
-        model_id = self.uid_generator.from_module(model)
+        encoder_asset = None
+        if encoder_path:
+            encoder_dir = Path(encoder_path)
+            if encoder_dir.is_dir():
+                encoder_uid = _hash_directory(encoder_dir)
+                encoder_asset = Asset(path=str(encoder_dir).replace("\\", "/"), uid=encoder_uid)
+                # Combine checkpoint UID and encoder UID to form the overall Model ID
+                model_id = self.uid_generator.from_uids([checkpoint_uid, encoder_uid])
+            else:
+                model_id = checkpoint_uid
+        else:
+            model_id = checkpoint_uid
 
         return StableAudioModel(
             id=model_id,
             name=kwargs.get("name"),
-            checkpoint=Asset(path=checkpoint_path, uid=model_id),
+            checkpoint=Asset(path=checkpoint_path, uid=checkpoint_uid),
             config=config,
             model_type=kwargs.get("model_type"),
+            encoder=encoder_asset,
             context={}
         )
         
@@ -78,13 +171,50 @@ class StableAudioAdapter(ModelAdapter):
             del self.model
             self.model = None
 
-        # Load the new model
-        self.model = create_model_from_config(info.config)
-        self.model.load_state_dict(load_ckpt_state_dict(info.checkpoint.path))
-        self.model_info = info
+        if verify:
+            checkpoint_uid = _get_cached_uid(info.checkpoint.path, self.uid_generator)
+            encoder_asset = getattr(info, "encoder", None)
+            if encoder_asset:
+                expected_id = self.uid_generator.from_uids([checkpoint_uid, encoder_asset.uid])
+            else:
+                expected_id = checkpoint_uid
+            if expected_id != info.id:
+                raise UIDMismatchError("Combined Model UID mismatch")
 
-        if verify and self.uid_generator.from_module(self.model) != info.id:
-            raise UIDMismatchError("Checkpoint UID mismatch")
+        # Load the state dict
+        state_dict = load_ckpt_state_dict(info.checkpoint.path)
+
+        # Load the new model
+        # Override conditioner paths if local encoder path is supplied and exists
+        config = copy.deepcopy(info.config)
+        encoder_asset = getattr(info, "encoder", None)
+        if encoder_asset and encoder_asset.path:
+            actual_path = encoder_asset.path
+            # If the path points to an archive file (uploaded via sync), extract it first
+            if os.path.isfile(actual_path):
+                extracted_dir = Path(actual_path + "_extracted")
+                if not extracted_dir.exists():
+                    import zipfile
+                    print(f"Extracting encoder archive {actual_path} to {extracted_dir}...")
+                    extracted_dir.mkdir(parents=True, exist_ok=True)
+                    with zipfile.ZipFile(actual_path, 'r') as zip_ref:
+                        zip_ref.extractall(extracted_dir)
+                actual_path = str(extracted_dir)
+
+            if os.path.exists(actual_path):
+                clean_encoder_path = str(Path(actual_path)).replace("\\", "/")
+                conditioning = config.get("model", {}).get("conditioning", {})
+                for cond_config in conditioning.get("configs", []):
+                    cond_type = cond_config.get("type")
+                    if cond_type in ["t5", "t5gemma", "clap", "clap_audio"]:
+                        cond_inner_config = cond_config.setdefault("config", {})
+                        cond_inner_config["model_path"] = clean_encoder_path
+                        cond_inner_config.pop("repo_id", None)
+                        cond_inner_config.pop("subfolder", None)
+
+        self.model = create_model_from_config(config)
+        self.model.load_state_dict(state_dict)
+        self.model_info = info
 
     def cleanup(self):
         if self.model:
@@ -93,6 +223,30 @@ class StableAudioAdapter(ModelAdapter):
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
+    @operation(
+        name="generate",
+        is_standard=True,
+        description="Generate audio from a generative model",
+        initiator_types=["model", "grating", "latent", "audio"],
+        context_overrides={
+            "audio": {
+                "name": "audio-to-audio",
+                "description": "Perform audio-guided generation (audio-to-audio) using this node as initialization"
+            },
+            "grating": {
+                "name": "generate from grating",
+                "description": "Generate audio guided by the selected grating structure"
+            },
+            "latent": {
+                "name": "generate from latent",
+                "description": "Generate audio guided by the selected latent structure"
+            },
+            "model": {
+                "name": "Generate Audio",
+                "description": "Generate audio from the selected generative model"
+            }
+        }
+    )
     def generate(self, **kwargs) -> tuple[Audio, torch.Tensor]:
         model = self.model.to(self.device)
         sample_rate = self.model_info.config["sample_rate"]
@@ -122,22 +276,30 @@ class StableAudioAdapter(ModelAdapter):
         print(f"Sample Rate: {sample_rate}")
         print(f"Sample Size: {sample_size}")
 
+        # Determine sampler category (explicit toggle or model config fallback)
+        model_config = self.model_info.config.get("model", {})
+        diffusion_config = model_config.get("diffusion", {})
+        diffusion_objective = diffusion_config.get("diffusion_objective", "v")
+        is_rf_denoiser = diffusion_objective == "rf_denoiser"
+
+        sampler_category = kwargs.get("sampler_category")
+        if not sampler_category:
+            sampler_category = "rectified_flow" if diffusion_objective in ["rectified_flow", "rf_denoiser"] else "k_diffusion"
+
         sampler_type = None
-        if self.model_info.model_type == "k_diffusion":
+        if sampler_category == "k_diffusion":
             sampler_type = kwargs.get("k_sampler_type")
             if not sampler_type:
-                raise ValueError("k_sampler_type is required for k_diffusion models.")
-        elif self.model_info.model_type == "rectified_flow":
+                raise ValueError("k_sampler_type is required for k_diffusion inference.")
+        elif sampler_category == "rectified_flow":
             sampler_type = kwargs.get("rf_sampler_type")
             if not sampler_type:
-                raise ValueError("rf_sampler_type is required for rectified_flow models.")
+                raise ValueError("rf_sampler_type is required for rectified_flow inference.")
         
         if not sampler_type:
-            raise ValueError(f"Unable to determine sampler type for model_type: {self.model_info.model_type}")
+            raise ValueError(f"Unable to determine sampler type for category: {sampler_category}")
             
-        is_euler = sampler_type == "euler"
-        if is_euler:
-            sampler_type = "k-heun"  # Bypass stable-audio-tools string validation
+
             
         # Extract metadata and tensor payload from initial latent if available
         init_latent_element = kwargs.get("init_latent_element")
@@ -145,15 +307,24 @@ class StableAudioAdapter(ModelAdapter):
         inversion_meta = None
         
         if init_latent_element:
+            print(f"DEBUG: Found init_latent_element with ID {init_latent_element.id}")
             latent_path = Path(init_latent_element.file.path)
             if latent_path and latent_path.exists():
                 init_latent_tensor = torch.load(latent_path, map_location=self.device, weights_only=True)
                 inversion_meta = getattr(init_latent_element, "context", {}).get("inversion_metadata", None)
+                print(f"DEBUG: Loaded init_latent_tensor of shape {init_latent_tensor.shape}")
+                print(f"DEBUG: inversion_metadata = {inversion_meta}")
+            else:
+                print(f"DEBUG: Latent path does not exist: {latent_path}")
 
         # Establish execution steps and schedule boundaries
-        steps = kwargs.get("steps", 8)
-        sigma_min = kwargs.get("sigma_min", 0.3)
-        sigma_max = kwargs.get("sigma_max", 500.0)
+        for required_param in ["steps", "cfg_scale", "sigma_min", "sigma_max", "seed"]:
+            if required_param not in kwargs:
+                raise ValueError(f"Parameter '{required_param}' is required.")
+
+        steps = kwargs["steps"]
+        sigma_min = kwargs["sigma_min"]
+        sigma_max = kwargs["sigma_max"]
 
         # Synchronize parameters to the latent node if using an inverted blueprint
         if inversion_meta:
@@ -161,20 +332,118 @@ class StableAudioAdapter(ModelAdapter):
             sigma_min = inversion_meta.get("sigma_min", sigma_min)
             sigma_max = inversion_meta.get("sigma_max", sigma_max)
 
+        # Encode conditioning
+        conditioning_tensors = model.conditioner(conditioning, self.device)
+        negative_conditioning_tensors = None
+        if negative_conditioning is not None:
+            negative_conditioning_tensors = model.conditioner(negative_conditioning, self.device)
+
+        # Check model's expected conditioning IDs
+        expected_keys = []
+        for m in [model, getattr(model, "model", None)]:
+            if m is not None:
+                for attr in ["local_add_cond_ids", "input_concat_ids", "global_cond_ids", "prepend_cond_ids"]:
+                    if hasattr(m, attr):
+                        expected_keys.extend(getattr(m, attr))
+        expected_keys = list(set(expected_keys))
+
+        batch_size = kwargs.get("batch_size", 1)
+
+        # Replicate duration adaptation logic from generate_diffusion_cond
+        mask_padding_attention = getattr(model, 'mask_padding_attention', False)
+        use_effective_length_for_schedule = getattr(model, 'use_effective_length_for_schedule', False)
+        adapt_duration_to_conditioning = mask_padding_attention or use_effective_length_for_schedule
+
+        audio_sample_size = sample_size
+        if adapt_duration_to_conditioning and conditioning is not None:
+            max_seconds = 0.0
+            for cond_dict in conditioning:
+                if "seconds_total" in cond_dict:
+                    max_seconds = max(max_seconds, cond_dict["seconds_total"])
+
+            if max_seconds > 0:
+                duration_padding_sec = kwargs.get("duration_padding_sec", 6.0)
+                target_audio_samples = int((max_seconds + duration_padding_sec) * getattr(model, "sample_rate", sample_rate))
+
+                if model.pretransform is not None:
+                    ds_ratio = model.pretransform.downsampling_ratio
+                    latent_align = 1
+                    if (hasattr(model.pretransform, 'model') and
+                            hasattr(model.pretransform.model, 'encoder')):
+                        encoder = model.pretransform.model.encoder
+                        if hasattr(encoder, 'layers'):
+                            first_chunked_index = next(
+                                (i for i, l in enumerate(encoder.layers)
+                                 if hasattr(l, 'chunk_size') and getattr(l, 'sliding_window_latents', True) is None), None
+                            )
+                            if first_chunked_index is not None:
+                                first_chunked = encoder.layers[first_chunked_index]
+                                stride = getattr(first_chunked, 'stride', None)
+                                if stride is None and hasattr(encoder, 'strides') and len(encoder.strides) > first_chunked_index:
+                                    stride = encoder.strides[first_chunked_index]
+                                if stride and stride > 0:
+                                    latent_align = max(1, first_chunked.chunk_size // stride)
+                    align = ds_ratio * latent_align
+                    target_audio_samples = ((target_audio_samples + align - 1) // align) * align
+                audio_sample_size = min(target_audio_samples, sample_size)
+
+        latent_sample_size = audio_sample_size
+        if model.pretransform is not None:
+            latent_sample_size = audio_sample_size // model.pretransform.downsampling_ratio
+
+        # Inject dummy inpaint mask/input if needed
+        needs_inpaint_mask = 'inpaint_mask' in expected_keys and 'inpaint_mask' not in conditioning_tensors
+        needs_inpaint_input = 'inpaint_masked_input' in expected_keys and 'inpaint_masked_input' not in conditioning_tensors
+
+        if needs_inpaint_mask or needs_inpaint_input:
+            mask = torch.zeros((batch_size, 1, latent_sample_size), device=self.device)
+            inpaint_input = torch.zeros((batch_size, model.io_channels, latent_sample_size), device=self.device)
+
+            if needs_inpaint_mask:
+                conditioning_tensors['inpaint_mask'] = [mask]
+                if negative_conditioning_tensors is not None:
+                    negative_conditioning_tensors['inpaint_mask'] = [mask]
+
+            if needs_inpaint_input:
+                conditioning_tensors['inpaint_masked_input'] = [inpaint_input]
+                if negative_conditioning_tensors is not None:
+                    negative_conditioning_tensors['inpaint_masked_input'] = [inpaint_input]
+
         # Set up generation arguments
         args = {
             "steps": steps,
-            "cfg_scale": kwargs.get("cfg_scale", 1.0),
+            "cfg_scale": kwargs["cfg_scale"],
             "conditioning": conditioning,
             "negative_conditioning": negative_conditioning,
-            "batch_size": kwargs.get("batch_size", 1),
+            "conditioning_tensors": conditioning_tensors,
+            "negative_conditioning_tensors": negative_conditioning_tensors,
+            "batch_size": batch_size,
             "sample_size": sample_size,
             "sigma_min": sigma_min,
             "sigma_max": sigma_max,
             "sampler_type": sampler_type,
             "device": self.device,
-            "seed": kwargs.get("seed", 0)
+            "seed": kwargs["seed"],
+            "apg_scale": kwargs.get("apg_scale", 1.0),
+            "cfg_interval": (kwargs.get("cfg_interval_min", 0.0), kwargs.get("cfg_interval_max", 1.0)),
+            "scale_phi": kwargs.get("cfg_rescale", 0.0),
+            "cfg_norm_threshold": kwargs.get("cfg_norm_threshold", 0.0),
+            "duration_padding_sec": kwargs.get("duration_padding_sec", 6.0),
         }
+
+        if init_latent_tensor is not None:
+            # Match sample_size exactly to the latent shape to prevent cross-attention and schedule length mismatches
+            ds_ratio = model.pretransform.downsampling_ratio if model.pretransform is not None else 1
+            args["sample_size"] = init_latent_tensor.shape[-1] * ds_ratio
+            args["adapt_duration_to_conditioning"] = False
+            args["mask_padding_attention"] = False
+            args["use_effective_length_for_schedule"] = False
+
+            # Retrieve inversion_unconditional flag from metadata (default to True for RF native)
+            inversion_unconditional = True
+            if inversion_meta is not None:
+                inversion_unconditional = inversion_meta.get("inversion_unconditional", True)
+            args["cfg_dropout_prob"] = 1.0 if inversion_unconditional else 0.0
 
         # Handle traditional initial audio if provided
         init_audio_element = kwargs.get("init_audio_element")
@@ -192,13 +461,13 @@ class StableAudioAdapter(ModelAdapter):
         # Generate stereo audio
         with torch.no_grad():
             import stable_audio_tools.inference.generation as sat_gen
+            import stable_audio_tools.inference.sampling as sat_samp
             import k_diffusion.sampling as k_samp
+            import math
             
-            original_sample_k = sat_gen.sample_k
-            original_heun = k_samp.sample_heun
-            
-            if is_euler:
-                k_samp.sample_heun = k_samp.sample_euler
+            original_sample_k = sat_samp.sample_k
+            original_sample_diffusion = sat_samp.sample_diffusion
+            original_build_schedule = sat_samp.build_schedule
                 
             # ALWAYS patch sample_k to conditionally inject latent noise if present
             def patched_sample_k(*inner_args, **inner_kwargs):
@@ -267,18 +536,77 @@ class StableAudioAdapter(ModelAdapter):
 
                 return original_sample_k(*inner_args, **inner_kwargs)
 
-            sat_gen.sample_k = patched_sample_k
+            # ALWAYS patch sample_diffusion to conditionally inject latent noise if present (for RF models)
+            def patched_sample_diffusion(*inner_args, **inner_kwargs):
+                inner_args = list(inner_args)
+                inner_kwargs = dict(inner_kwargs)
+                
+                if init_latent_tensor is not None and inversion_meta is not None:
+                    print("DEBUG: patched_sample_diffusion triggered! Injecting latent noise...")
+                    # Overwrite noise with the inverted latent
+                    custom_noise = init_latent_tensor.clone()
+                    
+                    # Ensure batch sizes match up
+                    target_shape = inner_args[1].shape if len(inner_args) > 1 else inner_kwargs.get("noise").shape
+                    if custom_noise.shape[0] == 1 and target_shape[0] > 1:
+                        custom_noise = custom_noise.repeat(target_shape[0], 1, 1)
+                        
+                    if len(inner_args) > 1:
+                        inner_args[1] = custom_noise
+                    else:
+                        inner_kwargs["noise"] = custom_noise
+                        
+                    inversion_strength = inversion_meta.get("inversion_strength", 1.0)
+                    inner_kwargs["init_noise_level"] = inversion_strength
+                    inner_kwargs["sigma_max"] = inversion_strength
+                    
+                    # Clear init_data to prevent any blending (start directly from inverted latent)
+                    inner_kwargs["init_data"] = None
+                    print(f"DEBUG: Injected custom noise of shape {custom_noise.shape}, sigma_max={inversion_strength}")
+                    
+                return original_sample_diffusion(*inner_args, **inner_kwargs)
+
+            # ALWAYS patch build_schedule to return the exact flipped schedule used during inversion (for RF models)
+            def patched_build_schedule(*inner_args, **inner_kwargs):
+                if init_latent_tensor is not None and inversion_meta is not None:
+                    print("DEBUG: patched_build_schedule triggered!")
+                    
+                    # Extract steps (can be positional at index 0, or keyword 'steps')
+                    sched_steps = inner_args[0] if len(inner_args) > 0 else inner_kwargs.get("steps", steps)
+                    
+                    inversion_strength = inversion_meta.get("inversion_strength", 1.0)
+                    inversion_steps = inversion_meta.get("inversion_steps", sched_steps)
+                    
+                    logsnr_max = math.log(((1 - inversion_strength) / inversion_strength) + 1e-6) if inversion_strength < 1.0 else -6.0
+                    logsnr = torch.linspace(logsnr_max, 2.0, inversion_steps + 1, device=self.device)
+                    t_inv = torch.sigmoid(-logsnr)
+                    t_inv = t_inv.flip(0)
+                    t_inv[0] = 0.0
+                    t_inv[-1] = 1.0
+                    
+                    generation_sigmas = t_inv.flip(0)
+                    print(f"DEBUG: Overrode sigmas schedule to start at {generation_sigmas[0].item()} and end at {generation_sigmas[-1].item()}")
+                    return generation_sigmas
+                    
+                return original_build_schedule(*inner_args, **inner_kwargs)
+
+            sat_samp.sample_k = patched_sample_k
+            sat_samp.sample_diffusion = patched_sample_diffusion
+            sat_gen.sample_diffusion = patched_sample_diffusion
+            sat_samp.build_schedule = patched_build_schedule
             
             try:
                 output = generate_diffusion_cond(model, **args)
             finally:
                 # Restore original hooks immediately after execution completes
-                sat_gen.sample_k = original_sample_k
-                if is_euler:
-                    k_samp.sample_heun = original_heun
+                sat_samp.sample_k = original_sample_k
+                sat_samp.sample_diffusion = original_sample_diffusion
+                sat_gen.sample_diffusion = original_sample_diffusion
+                sat_samp.build_schedule = original_build_schedule
 
-            # Trim silence
-            output = output[:,:,:int(seconds_total*sample_rate)]
+            # Trim silence to the remaining segment length
+            trim_duration = max(0.0, seconds_total - seconds_start)
+            output = output[:,:,:int(trim_duration*sample_rate)]
 
             # Rearrange audio batch to a single sequence
             print("Generation complete, rearranging...")
@@ -314,6 +642,12 @@ class StableAudioAdapter(ModelAdapter):
 
         return artifact, output
 
+    @operation(
+        name="invert",
+        is_standard=True,
+        description="Invert audio to a latent representation",
+        initiator_types=["audio"]
+    )
     def invert(self, **kwargs) -> tuple[Latent, torch.Tensor]:
         model = self.model.to(self.device)
         sample_rate = self.model_info.config["sample_rate"]
@@ -347,16 +681,46 @@ class StableAudioAdapter(ModelAdapter):
         else:
             raise FileNotFoundError(f"Audio path not found: {audio_path}")
 
-        # Crop/pad to exact length
-        target_length = int(seconds_total * sample_rate)
-        if source_audio_tensor.shape[-1] > target_length:
-            source_audio_tensor = source_audio_tensor[:, :target_length]
-        elif source_audio_tensor.shape[-1] < target_length:
-            source_audio_tensor = torch.nn.functional.pad(source_audio_tensor, (0, target_length - source_audio_tensor.shape[-1]))
-
-        # Pad up to the model's native sample_size
-        if source_audio_tensor.shape[-1] < sample_size:
-            source_audio_tensor = torch.nn.functional.pad(source_audio_tensor, (0, sample_size - source_audio_tensor.shape[-1]))
+        # Replicate duration adaptation logic from generate_diffusion_cond to match target shapes
+        mask_padding_attention = getattr(model, 'mask_padding_attention', False)
+        use_effective_length_for_schedule = getattr(model, 'use_effective_length_for_schedule', False)
+        adapt_duration_to_conditioning = mask_padding_attention or use_effective_length_for_schedule
+        
+        trim_duration = max(0.0, seconds_total - seconds_start)
+        target_audio_samples = int(trim_duration * sample_rate)
+        
+        if adapt_duration_to_conditioning:
+            duration_padding_sec = kwargs.get("duration_padding_sec", 6.0)
+            target_audio_samples = int((trim_duration + duration_padding_sec) * sample_rate)
+            
+            if model.pretransform is not None:
+                ds_ratio = model.pretransform.downsampling_ratio
+                latent_align = 1
+                if (hasattr(model.pretransform, 'model') and
+                        hasattr(model.pretransform.model, 'encoder')):
+                    encoder = model.pretransform.model.encoder
+                    if hasattr(encoder, 'layers'):
+                        first_chunked_index = next(
+                            (i for i, l in enumerate(encoder.layers)
+                             if hasattr(l, 'chunk_size') and getattr(l, 'sliding_window_latents', True) is None), None
+                        )
+                        if first_chunked_index is not None:
+                            first_chunked = encoder.layers[first_chunked_index]
+                            stride = getattr(first_chunked, 'stride', None)
+                            if stride is None and hasattr(encoder, 'strides') and len(encoder.strides) > first_chunked_index:
+                                stride = encoder.strides[first_chunked_index]
+                            if stride and stride > 0:
+                                latent_align = max(1, first_chunked.chunk_size // stride)
+                align = ds_ratio * latent_align
+                target_audio_samples = ((target_audio_samples + align - 1) // align) * align
+                
+        audio_sample_size = min(target_audio_samples, sample_size)
+        
+        # Crop/pad to adapted audio sample size
+        if source_audio_tensor.shape[-1] > audio_sample_size:
+            source_audio_tensor = source_audio_tensor[:, :audio_sample_size]
+        elif source_audio_tensor.shape[-1] < audio_sample_size:
+            source_audio_tensor = torch.nn.functional.pad(source_audio_tensor, (0, audio_sample_size - source_audio_tensor.shape[-1]))
 
         source_audio_tensor = source_audio_tensor.unsqueeze(0).to(self.device)
         
@@ -366,90 +730,192 @@ class StableAudioAdapter(ModelAdapter):
             if isinstance(init_latents, tuple):
                 init_latents = init_latents[0]
 
-        sigma_min = kwargs.get("sigma_min", 0.3)
-        sigma_max = kwargs.get("sigma_max", 500.0)
-        
-        # Capture the fully pre-conditioned denoiser from stable-audio-tools
-        captured_denoiser = []
-        captured_extra_args = []
-        
-        import stable_audio_tools.inference.generation as sat_gen
-        import k_diffusion.sampling as k_samp
-        
-        original_sample_heun = k_samp.sample_heun
-        
-        def capture_denoiser(denoiser, x, sigmas, *args, **kwargs_inner):
-            captured_denoiser.append(denoiser)
-            captured_extra_args.append(kwargs_inner.get('extra_args', {}))
-            raise InterruptedError("Captured denoiser")
-            
-        k_samp.sample_heun = capture_denoiser
-        
-        try:
-            sat_gen.generate_diffusion_cond(
-                model, 
-                steps=steps,
-                cfg_scale=1.0, # Pure inversion, no CFG
-                conditioning=conditioning,
-                sample_size=sample_size,
-                sigma_min=sigma_min,
-                sigma_max=sigma_max,
-                sampler_type="k-heun",
-                device=self.device
-            )
-        except InterruptedError:
-            pass
-        finally:
-            k_samp.sample_heun = original_sample_heun
-            
-        if not captured_denoiser:
-            raise RuntimeError("Failed to capture denoiser from generation pipeline.")
-            
-        denoiser = captured_denoiser[0]
-        extra_args = captured_extra_args[0]
+        is_rf = (self.model_info.config.get("model", {}).get("diffusion", {}).get("diffusion_objective") in ["rectified_flow", "rf_denoiser"])
+        sampler_category = kwargs.get("sampler_category", "rectified_flow" if is_rf else "k_diffusion")
 
-        # Build Continuous Sigmas Grid for Inversion (min to max)
-        sigmas = get_sigmas_karras(steps + 1, sigma_min, sigma_max, device=self.device)[:-1].flip(0)
-
-        stop_step = int(steps * inversion_strength)
-        
-        # Start at sigma_min by injecting the true noise floor
-        torch.manual_seed(kwargs.get("seed", 0))
-        current_latents = init_latents + torch.randn_like(init_latents) * sigma_min
-
-        # Euler ODE Inversion Step Loop with Heun Correction
-        for i in tqdm(range(stop_step), desc="Heun ODE Inversion"):
-            sigma_curr = sigmas[i]
-            sigma_next = sigmas[i + 1]
-            d_sigma = sigma_next - sigma_curr
+        if sampler_category == "rectified_flow":
+            import stable_audio_tools.inference.inversion as sat_inv
+            import copy
             
-            t_curr = torch.full((current_latents.shape[0],), sigma_curr.item(), device=self.device)
-            t_next = torch.full((current_latents.shape[0],), sigma_next.item(), device=self.device)
+            inversion_gamma = kwargs.get("inversion_gamma", 0.3)
+            inversion_unconditional = kwargs.get("inversion_unconditional", True)
+            inversion_cfg_scale = kwargs.get("inversion_cfg_scale", 1.0)
+            
+            inversion_params = {
+                "inversion_steps": steps,
+                "inversion_gamma": inversion_gamma,
+                "inversion_unconditional": inversion_unconditional,
+                "inversion_sigma_max": 1.0,
+                "inversion_cfg_scale": inversion_cfg_scale,
+            }
             
             with torch.no_grad():
-                # 1. Calculate velocity at current position (Standard Euler Step)
-                denoised_curr = denoiser(current_latents, t_curr, **extra_args)
-                v_curr = (current_latents - denoised_curr) / sigma_curr
+                # Modify the conditioning for inversion
+                inversion_conditioning = copy.deepcopy(conditioning)
+                inversion_conditioning_tensors = model.conditioner(inversion_conditioning, self.device)
                 
-                # 2. Predict the next position tentatively
-                latents_next_pred = current_latents + v_curr * d_sigma
+                # Check model's expected conditioning IDs
+                expected_keys = []
+                for m in [model, getattr(model, "model", None)]:
+                    if m is not None:
+                        for attr in ["local_add_cond_ids", "input_concat_ids", "global_cond_ids", "prepend_cond_ids"]:
+                            if hasattr(m, attr):
+                                expected_keys.extend(getattr(m, attr))
+                expected_keys = list(set(expected_keys))
                 
-                # 3. Calculate velocity at the predicted next position
-                denoised_next = denoiser(latents_next_pred, t_next, **extra_args)
-                v_next = (latents_next_pred - denoised_next) / sigma_next
+                needs_inpaint_mask = 'inpaint_mask' in expected_keys and 'inpaint_mask' not in inversion_conditioning_tensors
+                needs_inpaint_input = 'inpaint_masked_input' in expected_keys and 'inpaint_masked_input' not in inversion_conditioning_tensors
                 
-                # 4. Correct the trajectory by averaging the two velocities together
-                v_corrected = 0.5 * (v_curr + v_next)
-                
-                # 5. Take the actual step forward into noise space
-                current_latents = current_latents + v_corrected * d_sigma
+                if needs_inpaint_mask or needs_inpaint_input:
+                    b_size = init_latents.shape[0]
+                    l_size = init_latents.shape[-1]
+                    mask = torch.zeros((b_size, 1, l_size), device=self.device)
+                    inpaint_input = torch.zeros((b_size, model.io_channels, l_size), device=self.device)
+                    
+                    if needs_inpaint_mask:
+                        inversion_conditioning_tensors['inpaint_mask'] = [mask]
+                    if needs_inpaint_input:
+                        inversion_conditioning_tensors['inpaint_masked_input'] = [inpaint_input]
 
-        # Explicit unit-variance scaling to normalize data before handing to generation samplers
-        latent_std = current_latents.std().item()
-        if latent_std > 0:
-            latent_tensor = (current_latents - current_latents.mean().item()) / latent_std
-        else:
+                inversion_conditioning_inputs = model.get_conditioning_inputs(inversion_conditioning_tensors)
+                
+                model_dtype = next(model.model.parameters()).dtype
+                inversion_conditioning_inputs = {
+                    k: v.type(model_dtype) if v is not None and hasattr(v, "type") else v
+                    for k, v in inversion_conditioning_inputs.items()
+                }
+                
+                if inversion_unconditional:
+                    cfg_dropout_prob = 1.0
+                else:
+                    cfg_dropout_prob = 0.0
+                    for x in inversion_conditioning:
+                        if "prompt" in x:
+                            x["prompt"] = ""
+                    inversion_conditioning_tensors = model.conditioner(inversion_conditioning, self.device)
+                    
+                    if needs_inpaint_mask:
+                        inversion_conditioning_tensors['inpaint_mask'] = [mask]
+                    if needs_inpaint_input:
+                        inversion_conditioning_tensors['inpaint_masked_input'] = [inpaint_input]
+
+                    inversion_conditioning_inputs = model.get_conditioning_inputs(inversion_conditioning_tensors)
+                    inversion_conditioning_inputs = {
+                        k: v.type(model_dtype) if v is not None and hasattr(v, "type") else v
+                        for k, v in inversion_conditioning_inputs.items()
+                    }
+                
+                torch.manual_seed(kwargs.get("seed", 0))
+                inversion_noise = torch.randn_like(init_latents)
+                
+                # Perform native RF Inversion using invert_audio
+                current_latents = sat_inv.invert_audio(
+                    model=model.model,
+                    waveform_latent=init_latents,
+                    noise=inversion_noise,
+                    inversion_params=inversion_params,
+                    device=self.device,
+                    cfg_dropout_prob=cfg_dropout_prob,
+                    **inversion_conditioning_inputs
+                )
+                
             latent_tensor = current_latents
+            
+            # Setup metadata properties
+            algorithm = "native_rf_inversion"
+            sampler = "invert_audio"
+            stop_step = steps
+            sigma_min = 0.0
+            sigma_max = 1.0
+            
+        else:
+            sigma_min = kwargs.get("sigma_min", 0.3)
+            sigma_max = kwargs.get("sigma_max", 500.0)
+            
+            # Capture the fully pre-conditioned denoiser from stable-audio-tools
+            captured_denoiser = []
+            captured_extra_args = []
+            
+            import stable_audio_tools.inference.generation as sat_gen
+            import k_diffusion.sampling as k_samp
+            
+            original_sample_heun = k_samp.sample_heun
+            
+            def capture_denoiser(denoiser, x, sigmas, *args, **kwargs_inner):
+                captured_denoiser.append(denoiser)
+                captured_extra_args.append(kwargs_inner.get('extra_args', {}))
+                raise InterruptedError("Captured denoiser")
+                
+            k_samp.sample_heun = capture_denoiser
+            
+            try:
+                sat_gen.generate_diffusion_cond(
+                    model, 
+                    steps=steps,
+                    cfg_scale=1.0, # Pure inversion, no CFG
+                    conditioning=conditioning,
+                    sample_size=sample_size,
+                    sigma_min=sigma_min,
+                    sigma_max=sigma_max,
+                    sampler_type="k-heun",
+                    device=self.device
+                )
+            except InterruptedError:
+                pass
+            finally:
+                k_samp.sample_heun = original_sample_heun
+                
+            if not captured_denoiser:
+                raise RuntimeError("Failed to capture denoiser from generation pipeline.")
+                
+            denoiser = captured_denoiser[0]
+            extra_args = captured_extra_args[0]
+
+            # Build Continuous Sigmas Grid for Inversion (min to max)
+            sigmas = get_sigmas_karras(steps + 1, sigma_min, sigma_max, device=self.device)[:-1].flip(0)
+
+            stop_step = int(steps * inversion_strength)
+            
+            # Start at sigma_min by injecting the true noise floor
+            torch.manual_seed(kwargs.get("seed", 0))
+            current_latents = init_latents + torch.randn_like(init_latents) * sigma_min
+
+            # Euler ODE Inversion Step Loop with Heun Correction
+            for i in tqdm(range(stop_step), desc="Heun ODE Inversion"):
+                sigma_curr = sigmas[i]
+                sigma_next = sigmas[i + 1]
+                d_sigma = sigma_next - sigma_curr
+                
+                t_curr = torch.full((current_latents.shape[0],), sigma_curr.item(), device=self.device)
+                t_next = torch.full((current_latents.shape[0],), sigma_next.item(), device=self.device)
+                
+                with torch.no_grad():
+                    # 1. Calculate velocity at current position (Standard Euler Step)
+                    denoised_curr = denoiser(current_latents, t_curr, **extra_args)
+                    v_curr = (current_latents - denoised_curr) / sigma_curr
+                    
+                    # 2. Predict the next position tentatively
+                    latents_next_pred = current_latents + v_curr * d_sigma
+                    
+                    # 3. Calculate velocity at the predicted next position
+                    denoised_next = denoiser(latents_next_pred, t_next, **extra_args)
+                    v_next = (latents_next_pred - denoised_next) / sigma_next
+                    
+                    # 4. Correct the trajectory by averaging the two velocities together
+                    v_corrected = 0.5 * (v_curr + v_next)
+                    
+                    # 5. Take the actual step forward into noise space
+                    current_latents = current_latents + v_corrected * d_sigma
+
+            # Explicit unit-variance scaling to normalize data before handing to generation samplers
+            latent_std = current_latents.std().item()
+            if latent_std > 0:
+                latent_tensor = (current_latents - current_latents.mean().item()) / latent_std
+            else:
+                latent_tensor = current_latents
+                
+            algorithm = "euler_ode_inversion"
+            sampler = "euler"
 
         # Create latent artifact tracking IDs
         content_uid = self.uid_generator.from_tensor(latent_tensor)
@@ -466,13 +932,16 @@ class StableAudioAdapter(ModelAdapter):
 
         # Inject execution config data explicitly for backend self-documentation
         context["inversion_metadata"] = {
-            "algorithm": "euler_ode_inversion",
-            "sampler": "euler",
+            "algorithm": algorithm,
+            "sampler": sampler,
             "inversion_steps": steps,
             "stop_step_index": stop_step,
             "inversion_strength": inversion_strength,
             "sigma_min": sigma_min,
-            "sigma_max": sigma_max
+            "sigma_max": sigma_max,
+            "inversion_unconditional": kwargs.get("inversion_unconditional", True),
+            "inversion_gamma": kwargs.get("inversion_gamma", 0.3),
+            "inversion_cfg_scale": kwargs.get("inversion_cfg_scale", 1.0),
         }
 
         artifact = Latent(

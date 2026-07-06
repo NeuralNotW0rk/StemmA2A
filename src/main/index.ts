@@ -202,6 +202,23 @@ app.whenReady().then(async () => {
     }
   })
 
+  ipcMain.handle('dialog:selectSavePath', async (_event, defaultName?: string) => {
+    const { canceled, filePath } = await dialog.showSaveDialog({
+      title: 'Export Audio File',
+      defaultPath: defaultName || 'export.wav',
+      buttonLabel: 'Export',
+      filters: [
+        { name: 'Audio Files', extensions: ['wav', 'mp3', 'ogg'] },
+        { name: 'All Files', extensions: ['*'] }
+      ]
+    })
+    if (canceled) {
+      return null
+    } else {
+      return filePath
+    }
+  })
+
   ipcMain.handle('dialog:openFile', async (_event, options) => {
     const { canceled, filePaths } = await dialog.showOpenDialog({
       title: options?.title || 'Open File',
@@ -212,6 +229,18 @@ app.whenReady().then(async () => {
       return null
     }
     return filePaths[0]
+  })
+
+  ipcMain.handle('getSharedModels', async () => {
+    const response = await fetchWithAuth(`${BACKEND_URL}/shared_models`)
+    if (!response.ok) {
+      const errorBody = await response.text()
+      throw new Error(
+        `Failed to fetch shared models. Status: ${response.status}. Error: ${errorBody}`
+      )
+    }
+    const data = await response.json()
+    return data.shared_models || []
   })
 
   ipcMain.handle('importModel', async (_event, modelData) => {
@@ -229,16 +258,16 @@ app.whenReady().then(async () => {
     return await response.json()
   })
 
-  ipcMain.handle('registerLattice', async (_event, latticeData) => {
-    const response = await fetchWithAuth(`${BACKEND_URL}/register_lattice`, {
+  ipcMain.handle('registerGrating', async (_event, gratingData) => {
+    const response = await fetchWithAuth(`${BACKEND_URL}/register_grating`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(latticeData)
+      body: JSON.stringify(gratingData)
     })
     if (!response.ok) {
       const errorBody = await response.text()
       throw new Error(
-        `Failed to register lattice. Status: ${response.status}. Error: ${errorBody}`
+        `Failed to register grating. Status: ${response.status}. Error: ${errorBody}`
       )
     }
     return await response.json()
@@ -259,41 +288,25 @@ app.whenReady().then(async () => {
     return await response.json()
   })
 
-  ipcMain.handle('generate', async (_event, generateData) => {
-    try {
-      const response = await fetchWithAuth(`${BACKEND_URL}/generate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(generateData)
-      })
-      if (!response.ok) {
-        const errorBody = await response.text()
-        let parsedError = `Failed to generate. Status: ${response.status}. Error: ${errorBody}`
-        try {
-          const parsed = JSON.parse(errorBody)
-          if (parsed.error) {
-            parsedError = parsed.error + (parsed.traceback ? `\n\nTraceback:\n${parsed.traceback}` : '')
-          }
-        } catch (_) {}
-        throw new Error(parsedError)
-      }
-      return await response.json()
-    } catch (error) {
-      console.error('Generation Error:', error)
-      throw error
+  ipcMain.handle('getOperations', async () => {
+    const response = await fetchWithAuth(`${BACKEND_URL}/operations`)
+    if (!response.ok) {
+      const errorBody = await response.text()
+      throw new Error(`Failed to get operations. Status: ${response.status}. Error: ${errorBody}`)
     }
+    return await response.json()
   })
 
-  ipcMain.handle('invert', async (_event, invertData) => {
+  ipcMain.handle('executeOperation', async (_event, operationData) => {
     try {
-      const response = await fetchWithAuth(`${BACKEND_URL}/invert`, {
+      const response = await fetchWithAuth(`${BACKEND_URL}/execute_operation`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(invertData)
+        body: JSON.stringify(operationData)
       })
       if (!response.ok) {
         const errorBody = await response.text()
-        let parsedError = `Failed to invert. Status: ${response.status}. Error: ${errorBody}`
+        let parsedError = `Failed to execute operation. Status: ${response.status}. Error: ${errorBody}`
         try {
           const parsed = JSON.parse(errorBody)
           if (parsed.error) {
@@ -304,7 +317,7 @@ app.whenReady().then(async () => {
       }
       return await response.json()
     } catch (error) {
-      console.error('Inversion Error:', error)
+      console.error('Execution Error:', error)
       throw error
     }
   })

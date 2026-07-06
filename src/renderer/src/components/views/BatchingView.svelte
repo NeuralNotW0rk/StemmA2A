@@ -1,7 +1,7 @@
 <script lang="ts">
   import { initiatorNodeStore, cyInstanceStore, type GraphElement } from '../../utils/stores'
   import NodeSelectorList, { type NodeListItem } from '../NodeSelectorList.svelte'
-  import type { NodeData } from '../../utils/forms'
+  import type { NodeData, BatchData } from '../../utils/forms'
   import { BATCHING_CONFIG } from '../../utils/app-config'
   import type { ErrorInfo } from '../../utils/types'
 
@@ -27,25 +27,39 @@
   })
 
   let isUpdate = $derived(initiatorNode?.type === 'batch')
+  let isUpdateTitle = $derived(
+    initiatorNode?.type === 'batch' &&
+      (initiatorNode as unknown as BatchData).member_ids?.length > 0
+  )
 
   let filter = $derived.by(() => {
     let refNode: NodeData | null | undefined = null
     const cy = $cyInstanceStore
 
-    if (isUpdate) {
+    // 1. Try to get reference node from first selected member in members state
+    const firstMemberWithNode = members.find((m) => m.node && typeof m.node !== 'string')
+    if (firstMemberWithNode && firstMemberWithNode.node) {
+      refNode = firstMemberWithNode.node as NodeData
+    }
+
+    // 2. Fallback to children of initiator batch
+    if (!refNode && isUpdate) {
       if (cy && initiatorNode?.id) {
         const children = cy.$id(initiatorNode.id).children()
         if (children.length > 0) {
           refNode = children[0].data() as NodeData
         }
       }
-    } else {
+    }
+
+    // 3. Fallback to initiatorNode itself
+    if (!refNode) {
       refNode = initiatorNode as NodeData | null | undefined
     }
 
-    if (!refNode) return {}
+    if (!refNode || refNode.type === 'batch') return {}
 
-    const newFilter: Record<string, any> = {}
+    const newFilter: Record<string, unknown> = {}
     if (refNode.type) newFilter.type = refNode.type
 
     const ctx = refNode.context as Record<string, unknown> | undefined
@@ -84,9 +98,14 @@
         const cy = $cyInstanceStore
         if (cy) {
           const children = cy.$id(initiatorNode.id).children()
-          const initialMembers = children.map((child) => createMember(child.data() as NodeData))
-          // Pre-populate with existing members
-          members = [...initialMembers]
+          if (children.length > 0) {
+            const initialMembers = children.map((child) => createMember(child.data() as NodeData))
+            // Pre-populate with existing members
+            members = [...initialMembers]
+          } else {
+            // It is an empty batch, pre-populate with one empty slot
+            members = [createMember(null)]
+          }
         }
       } else {
         members = [createMember(initiatorNode as NodeData)]
@@ -98,21 +117,11 @@
     const member_ids = members
       .map((m) => (typeof m.node === 'string' ? m.node : m.node?.id))
       .filter(Boolean)
-    if (member_ids.length < 1) {
-      onerror({
-        title: 'Batching Error',
-        message: 'You must select at least one member for a batch.'
-      })
-      return
-    }
 
     try {
-      if (isUpdate && initiatorNode) {
+      if (initiatorNode) {
         // @ts-ignore (define in dts)
         await window.api.updateBatch(initiatorNode.id, member_ids)
-      } else {
-        // @ts-ignore (define in dts)
-        await window.api.batchElements(member_ids)
       }
       onrefresh()
     } catch (error) {
@@ -132,14 +141,14 @@
       {filter}
       bind:items={members}
       idPrefix="member"
-      minItems={1}
+      minItems={0}
     />
   </div>
 
   <div class="panel-actions">
     <button onclick={onclose}>Cancel</button>
     <button class="primary" onclick={saveBatch}>
-      {isUpdate ? 'Update Batch' : 'Create Batch'}
+      {isUpdateTitle ? 'Update Batch' : 'Create Batch'}
     </button>
   </div>
 </div>
