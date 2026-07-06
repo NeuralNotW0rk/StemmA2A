@@ -25,7 +25,9 @@ from pydantic import ValidationError
 
 from param_graph.graph import ParameterGraph
 from param_graph.elements.models.base_model_element import Model
+from param_graph.elements.models.stylegan_element import StyleGANModel
 from param_graph.elements.artifacts.audio_element import Audio
+from param_graph.elements.artifacts.image_element import Image
 from param_graph.elements.artifacts.grating_element import Grating
 from param_graph.elements.artifacts.latent_element import Latent
 from param_graph.elements.base_elements import Asset

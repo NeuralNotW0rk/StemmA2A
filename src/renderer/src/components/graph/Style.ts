@@ -13,7 +13,7 @@ const gradientColor3 = getCssVar('--graph-gradient-3')
 const gradientColor4 = getCssVar('--graph-gradient-4')
 const gradientColor5 = getCssVar('--graph-gradient-5')
 
-const audioColor = getCssVar('--graph-audio')
+const mediaColor = getCssVar('--graph-media')
 const batchColor = getCssVar('--graph-batch')
 const selectedColor = getCssVar('--graph-selected')
 const modelColor = gradientColor3
@@ -22,7 +22,6 @@ const gratingColor = gradientColor4
 const latentColor = gradientColor5
 const favoriteColor = 'rgb(0, 255, 255)'
 const validColor = '#4CAF50'
-const imageColor = '#FF5722'
 
 
 const defaultStyle: CssStyleDeclaration[] = [
@@ -88,7 +87,7 @@ const defaultStyle: CssStyleDeclaration[] = [
         
         return secondary ? secondary : (name || node.data('id'));
       },
-      'background-color': audioColor,
+      'background-color': mediaColor,
       'background-image': audioIcon,
       'background-fit': 'none',
       'background-clip': 'node',
@@ -133,7 +132,7 @@ const defaultStyle: CssStyleDeclaration[] = [
         
         return secondary ? secondary : (name || node.data('id'));
       },
-      'background-color': imageColor,
+      'background-color': mediaColor,
       'background-image': imageIcon,
       'background-fit': 'none',
       'background-clip': 'node',
@@ -231,13 +230,13 @@ const defaultStyle: CssStyleDeclaration[] = [
   {
     selector: 'node[type="batch"][member_type="audio"]',
     style: {
-      'border-color': audioColor
+      'border-color': mediaColor
     }
   },
   {
     selector: 'node[type="batch"][member_type="image"]',
     style: {
-      'border-color': imageColor
+      'border-color': mediaColor
     }
   },
   {
@@ -341,15 +340,15 @@ const defaultStyle: CssStyleDeclaration[] = [
   {
     selector: 'edge[type="audio"]',
     style: {
-      'line-color': audioColor,
-      'target-arrow-color': audioColor
+      'line-color': mediaColor,
+      'target-arrow-color': mediaColor
     }
   },
   {
     selector: 'edge[type="image"]',
     style: {
-      'line-color': imageColor,
-      'target-arrow-color': imageColor
+      'line-color': mediaColor,
+      'target-arrow-color': mediaColor
     }
   },
   {
