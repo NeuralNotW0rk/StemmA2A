@@ -39,9 +39,11 @@
     "generate": [
         {
             "name": "seed",
-            "label": "Random Seed",
+            "label": "Seed",
             "type": "integer",
-            "placeholder": "Leave empty for random generation"
+            "defaultValue": 0,
+            "placeholder": "Enter seed",
+            "randomizable": true
         },
         {
             "name": "truncation",

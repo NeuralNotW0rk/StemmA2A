@@ -438,11 +438,19 @@ async def import_model():
         config_path = data.get("config_path")
         checkpoint_path = data.get("checkpoint_path")
 
-        if not config_path or not checkpoint_path:
-            return jsonify({"error": "config_path and checkpoint_path are required"}), 400
+        if adapter_name == "stylegan2":
+            if not checkpoint_path:
+                return jsonify({"error": "checkpoint_path is required"}), 400
+            config_path = config_path or ""
+        else:
+            if not config_path or not checkpoint_path:
+                return jsonify({"error": "config_path and checkpoint_path are required"}), 400
 
         # Paths are now expected to be absolute and valid on the server's filesystem.
-        data["config_path"] = str(Path(config_path))
+        if config_path:
+            data["config_path"] = str(Path(config_path))
+        else:
+            data["config_path"] = ""
         data["checkpoint_path"] = str(Path(checkpoint_path))
 
         engine = engine_provider.get_engine()

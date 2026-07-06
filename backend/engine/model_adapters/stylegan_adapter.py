@@ -443,13 +443,17 @@ def _get_cached_uid(file_path: str, uid_generator) -> str:
     if entry and entry.get("size") == file_size and entry.get("mtime") == file_mtime:
         return entry.get("uid")
         
-    print(f"Cache miss for {abs_path}. Computing StyleGAN2 checkpoint UID...")
-    # Read weight metadata or file contents for deterministic hash
-    h = XXH3_64()
-    with open(abs_path, "rb") as f:
-        while chunk := f.read(1024 * 1024):
-            h.update(chunk)
-    uid = h.hexdigest()
+    checkpoint = torch.load(abs_path, map_location="cpu")
+    if not isinstance(checkpoint, dict):
+        raise ValueError("Loaded checkpoint is not a dictionary. Ensure it is a valid PyTorch model file.")
+        
+    state_dict = checkpoint.get('g_ema') or checkpoint.get('g') or checkpoint
+    if not isinstance(state_dict, dict):
+        raise ValueError("Checkpoint weights are not serialized as a dictionary.")
+        
+    filtered_state_dict = {k: v for k, v in state_dict.items() if 'manipulation' not in k}
+    uid = uid_generator.from_state_dict(filtered_state_dict)
+    print(f"Computed weight-based UID: {uid}")
     
     cache[abs_path] = {
         "size": file_size,
@@ -460,8 +464,8 @@ def _get_cached_uid(file_path: str, uid_generator) -> str:
     try:
         with open(cache_file, "w") as f:
             json.dump(cache, f, indent=2)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Warning: Failed to save UID cache: {e}")
         
     return uid
 
@@ -515,17 +519,12 @@ class StyleGANAdapter(ModelAdapter):
         size = info.config.get("size", 256)
         channel_multiplier = info.config.get("channel_multiplier", 2)
 
-        self.model = Generator(
-            size=size,
-            style_dim=self.style_dim,
-            n_mlp=8,
-            channel_multiplier=channel_multiplier
-        )
-
         ckpt_path = info.checkpoint.path
+        loaded_state_dict = None
+
         if ckpt_path and os.path.exists(ckpt_path) and os.path.isfile(ckpt_path):
             try:
-                print(f"Loading StyleGAN2 weights from: {ckpt_path}")
+                print(f"Inspecting checkpoint {ckpt_path} to auto-detect model shape...")
                 checkpoint = torch.load(ckpt_path, map_location="cpu")
                 if 'g_ema' in checkpoint:
                     state_dict = checkpoint['g_ema']
@@ -534,10 +533,46 @@ class StyleGANAdapter(ModelAdapter):
                 else:
                     state_dict = checkpoint
                 
-                filtered_state_dict = {k: v for k, v in state_dict.items() if 'manipulation' not in k}
-                self.model.load_state_dict(filtered_state_dict, strict=False)
+                loaded_state_dict = {k: v for k, v in state_dict.items() if 'manipulation' not in k}
+
+                # Auto-detect size & channel_multiplier from weights keys
+                conv_keys = [k for k in loaded_state_dict.keys() if k.startswith("convs.")]
+                if conv_keys:
+                    indices = [int(k.split(".")[1]) for k in conv_keys if k.split(".")[1].isdigit()]
+                    if indices:
+                        max_idx = max(indices)
+                        log_size = (max_idx // 2) + 3
+                        size = 2 ** log_size
+                        
+                        # Find channel_multiplier from high-res block (res >= 64)
+                        for idx in sorted(list(set(indices))):
+                            res = 2 ** ((idx // 2) + 3)
+                            if res >= 64:
+                                key = f"convs.{idx}.conv.weight"
+                                if key in loaded_state_dict:
+                                    out_channels = loaded_state_dict[key].shape[1]
+                                    channel_multiplier = out_channels // (16384 // res)
+                                    break
+                        print(f"Auto-detected model architecture: size={size}, channel_multiplier={channel_multiplier}")
+                        # Keep the model info config aligned
+                        info.config["size"] = size
+                        info.config["channel_multiplier"] = channel_multiplier
             except Exception as e:
-                print(f"Failed to load weights: {e}. Running StyleGAN2 with random initialization.")
+                print(f"Failed to auto-detect model shape from checkpoint: {e}. Falling back to default/config values.")
+
+        self.model = Generator(
+            size=size,
+            style_dim=self.style_dim,
+            n_mlp=8,
+            channel_multiplier=channel_multiplier
+        )
+
+        if loaded_state_dict is not None:
+            try:
+                print(f"Loading StyleGAN2 weights...")
+                self.model.load_state_dict(loaded_state_dict, strict=False)
+            except Exception as e:
+                print(f"Failed to load weights: {e}. Running with random weights.")
         else:
             print("No valid checkpoint file. Initializing model with random weights.")
 
