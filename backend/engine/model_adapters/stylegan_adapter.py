@@ -131,7 +131,7 @@ def convert_tf_to_pytorch(checkpoint):
     if "4x4/Conv/mod_weight" in tf_vars:
         state_dict["conv1.conv.modulation.weight"] = torch.from_numpy(tf_vars["4x4/Conv/mod_weight"]).t()
     if "4x4/Conv/mod_bias" in tf_vars:
-        state_dict["conv1.conv.modulation.bias"] = torch.from_numpy(tf_vars["4x4/Conv/mod_bias"])
+        state_dict["conv1.conv.modulation.bias"] = torch.from_numpy(tf_vars["4x4/Conv/mod_bias"]) + 1.0
         
     # 4x4 ToRGB
     if "4x4/ToRGB/weight" in tf_vars:
@@ -142,7 +142,7 @@ def convert_tf_to_pytorch(checkpoint):
     if "4x4/ToRGB/mod_weight" in tf_vars:
         state_dict["to_rgb1.conv.modulation.weight"] = torch.from_numpy(tf_vars["4x4/ToRGB/mod_weight"]).t()
     if "4x4/ToRGB/mod_bias" in tf_vars:
-        state_dict["to_rgb1.conv.modulation.bias"] = torch.from_numpy(tf_vars["4x4/ToRGB/mod_bias"])
+        state_dict["to_rgb1.conv.modulation.bias"] = torch.from_numpy(tf_vars["4x4/ToRGB/mod_bias"]) + 1.0
         
     # Resolution convs
     log_size = int(math.log(size, 2))
@@ -159,7 +159,9 @@ def convert_tf_to_pytorch(checkpoint):
         
         if w_key in tf_vars:
             w = tf_vars[w_key].transpose(3, 2, 0, 1)
-            state_dict[f"convs.{idx_0}.conv.weight"] = torch.from_numpy(w).unsqueeze(0)
+            # Flip the weight spatially along the height and width (dimensions 2 and 3) for the upsampling transposed conv
+            w = torch.flip(torch.from_numpy(w), [2, 3])
+            state_dict[f"convs.{idx_0}.conv.weight"] = w.unsqueeze(0)
         if b_key in tf_vars:
             state_dict[f"convs.{idx_0}.activate.bias"] = torch.from_numpy(tf_vars[b_key])
         if ns_key in tf_vars:
@@ -167,7 +169,7 @@ def convert_tf_to_pytorch(checkpoint):
         if mw_key in tf_vars:
             state_dict[f"convs.{idx_0}.conv.modulation.weight"] = torch.from_numpy(tf_vars[mw_key]).t()
         if mb_key in tf_vars:
-            state_dict[f"convs.{idx_0}.conv.modulation.bias"] = torch.from_numpy(tf_vars[mb_key])
+            state_dict[f"convs.{idx_0}.conv.modulation.bias"] = torch.from_numpy(tf_vars[mb_key]) + 1.0
             
         # Conv1
         w_key = f"{res_str}/Conv1/weight"
@@ -187,7 +189,7 @@ def convert_tf_to_pytorch(checkpoint):
         if mw_key in tf_vars:
             state_dict[f"convs.{idx_1}.conv.modulation.weight"] = torch.from_numpy(tf_vars[mw_key]).t()
         if mb_key in tf_vars:
-            state_dict[f"convs.{idx_1}.conv.modulation.bias"] = torch.from_numpy(tf_vars[mb_key])
+            state_dict[f"convs.{idx_1}.conv.modulation.bias"] = torch.from_numpy(tf_vars[mb_key]) + 1.0
             
         # ToRGB
         w_key = f"{res_str}/ToRGB/weight"
@@ -204,7 +206,7 @@ def convert_tf_to_pytorch(checkpoint):
         if mw_key in tf_vars:
             state_dict[f"to_rgbs.{idx_rgb}.conv.modulation.weight"] = torch.from_numpy(tf_vars[mw_key]).t()
         if mb_key in tf_vars:
-            state_dict[f"to_rgbs.{idx_rgb}.conv.modulation.bias"] = torch.from_numpy(tf_vars[mb_key])
+            state_dict[f"to_rgbs.{idx_rgb}.conv.modulation.bias"] = torch.from_numpy(tf_vars[mb_key]) + 1.0
             
     # noise buffers
     for noise_idx in range(log_size * 2 - 1):
