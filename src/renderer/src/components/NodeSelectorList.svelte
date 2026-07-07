@@ -1,6 +1,6 @@
 <!-- src/renderer/src/components/NodeSelectorList.svelte -->
 <script lang="ts">
-  import { onDestroy } from 'svelte'
+  import { onDestroy, type Snippet } from 'svelte'
   import NodeSelector from './NodeSelector.svelte'
   import { selectionStore } from '../utils/stores'
   import type { NodeData } from '../utils/forms'
@@ -10,6 +10,7 @@
     id: number | string
     node: NodeData | string | null
     strength?: number
+    [key: string]: any
   }
 
   let {
@@ -24,7 +25,8 @@
     strengthMax = 1.0,
     strengthStep = 0.01,
     defaultStrength = 1.0,
-    onAdd
+    onAdd,
+    itemExtra
   } = $props<{
     title?: string
     addButtonText?: string
@@ -38,6 +40,7 @@
     strengthStep?: number
     defaultStrength?: number
     onAdd?: () => void
+    itemExtra?: Snippet<[any, number]>
   }>()
 
   let nextId = $state(0)
@@ -128,6 +131,9 @@
             />
             <span class="strength-value">{Number(items[index].strength).toFixed(2)}</span>
           </div>
+        {/if}
+        {#if itemExtra && items[index].node}
+          {@render itemExtra(items[index], index)}
         {/if}
       </div>
     {/each}
