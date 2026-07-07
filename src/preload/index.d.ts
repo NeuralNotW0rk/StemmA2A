@@ -25,6 +25,8 @@ interface API {
     filename: string
   ) => Promise<{ buffer: Buffer; mimeType: string } | null>
   registerGrating: (data: { name: string; checkpoint_path: string; base_model_id: string }) => Promise<any>
+  getModelLayers: (modelId: string) => Promise<any>
+  createGrating: (data: any) => Promise<any>
   openFile: (options?: { title?: string; filters?: { name: string; extensions: string[] }[] }) => Promise<string | null>
   getSharedModels: () => Promise<any>
   importModel: (data: any) => Promise<any>

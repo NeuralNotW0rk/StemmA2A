@@ -25,6 +25,7 @@
     onaudioSelect?: (data: any) => void
     onexport?: (data: { names: string[] }) => void
     onimportGrating?: (data: any) => void
+    onbendModel?: (data: any) => void
     onrescanSource?: (name: string) => void
     onnodeSelect?: (data: any) => void
     onedgeSelect?: (data: any) => void
@@ -52,6 +53,7 @@
     operations: operationsProp = [],
     onaudioSelect,
     onimportGrating,
+    onbendModel,
     onrescanSource,
     onexport,
     onnodeSelect,
@@ -517,6 +519,10 @@
 
     const modelNodeCommands = (ele: Singular): Command[] => [
       ...getPinnedOperations(ele),
+      {
+        content: 'Bend',
+        select: () => onbendModel?.(ele.data())
+      },
       {
         content: 'Import Grating',
         select: () => onimportGrating?.(ele.data())

@@ -13,6 +13,7 @@
   import BatchingView from './components/views/BatchingView.svelte'
   import JobStatusView from './components/views/JobStatusView.svelte'
   import OperationView from './components/views/OperationView.svelte'
+  import BendingView from './components/views/BendingView.svelte'
   import { onMount, onDestroy } from 'svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import {
@@ -46,6 +47,7 @@
   let showDetailedLabels = $derived(showDetailedLabelsToggle || isPeekPressed)
   let selectedElementData: ElementData | null = $state(null)
   let actionPanelView: ActionPanelView = $state('none')
+  let activeModelElement: any = $state(null)
   let errorInInfoPanel: ErrorInfo | null = $state(null)
   let allOperations: any[] = $state([])
   let toolbarComponent: Toolbar
@@ -406,6 +408,11 @@
     actionPanelView = 'import-grating'
   }
 
+  function handleBendModel(modelData: any): void {
+    activeModelElement = modelData
+    actionPanelView = 'bend'
+  }
+
   function handleSelectOperation(op: any, initiatorNode: any, useContext = false): void {
     initiatorNodeStore.set(initiatorNode)
     selectedOperation.set(op)
@@ -493,6 +500,9 @@
     }
     if (actionPanelView === 'import-grating') {
       return 'Import Grating'
+    }
+    if (actionPanelView === 'bend') {
+      return 'Configure Model Bending'
     }
     if (actionPanelView === 'removal') {
       return 'Confirm Removal'
@@ -663,6 +673,20 @@
         />
       {:else if actionPanelView === 'operation'}
         <OperationView onClose={closeActionPanel} onError={handleGenerationError} />
+      {:else if actionPanelView === 'bend'}
+        <BendingView
+          modelElement={activeModelElement}
+          onclose={closeActionPanel}
+          onrefresh={() => {
+            closeActionPanel()
+            refreshGraphData()
+          }}
+          onError={(error) => {
+            console.error('Bending setup error:', error)
+            closeActionPanel()
+            errorInInfoPanel = error
+          }}
+        />
       {/if}
     </ContentPanel>
   {:else if $isCreatingNewProject}
@@ -715,6 +739,7 @@
     operations={allOperations}
     onaudioSelect={handleAudioSelect}
     onimportGrating={handleImportGrating}
+    onbendModel={handleBendModel}
     onnodeSelect={handleElementSelect}
     onexport={handleExport}
     onedgeSelect={handleElementSelect}

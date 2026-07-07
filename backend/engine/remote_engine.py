@@ -243,3 +243,59 @@ class RemoteEngine(Engine):
                         print(f"Warning: failed to clean up temp zip file {temp_zip_path}: {e}")
         
         return True
+
+    async def get_model_layers(self, model_element: GraphElement) -> list[dict]:
+        auth_headers = self._get_auth_headers()
+        timeout = aiohttp.ClientTimeout(total=self.timeout)
+        try:
+            async with aiohttp.ClientSession(headers=auth_headers, timeout=timeout) as session:
+                async with session.get(f"{self.remote_url}/model/{model_element.id}/layers") as response:
+                    response.raise_for_status()
+                    data = await response.json()
+                    return data.get("layers", [])
+        except Exception as e:
+            print(f"Failed to get model layers from remote engine: {e}")
+            raise
+
+    async def create_grating(self, model_element: GraphElement, name: str, elements: list) -> GraphElement:
+        auth_headers = self._get_auth_headers()
+        timeout = aiohttp.ClientTimeout(total=self.timeout)
+        try:
+            payload = {
+                "model_id": model_element.id,
+                "name": name,
+                "elements": elements
+            }
+            async with aiohttp.ClientSession(headers=auth_headers, timeout=timeout) as session:
+                async with session.post(f"{self.remote_url}/create_grating", data=json.dumps(payload),
+                                         headers={'Content-Type': 'application/json'}) as response:
+                    response.raise_for_status()
+                    data = await response.json()
+                    
+                    grating_dict = data.get("grating")
+                    if not grating_dict:
+                        raise Exception("Remote server did not return the created grating element dictionary.")
+                        
+                    from param_graph.registry import resolve_element
+                    grating_artifact = resolve_element(grating_dict)
+                    
+                    async with session.get(f"{self.remote_url}/download_asset/{grating_artifact.id}") as file_response:
+                        if file_response.status == 200:
+                            file_data = await file_response.read()
+                            
+                            tmp_root = Path(__file__).parent.parent / "tmp"
+                            tmp_root.mkdir(exist_ok=True)
+                            
+                            local_path = tmp_root / "generate" / f"{grating_artifact.id}.safetensors"
+                            local_path.parent.mkdir(parents=True, exist_ok=True)
+                            local_path.write_bytes(file_data)
+                            
+                            from dataclasses import replace
+                            new_asset = replace(grating_artifact.file, path=str(local_path.resolve()))
+                            grating_artifact = replace(grating_artifact, file=new_asset)
+                            
+                    return grating_artifact
+                    
+        except Exception as e:
+            print(f"Failed to create remote grating: {e}")
+            raise

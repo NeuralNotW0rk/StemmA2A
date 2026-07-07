@@ -35,6 +35,8 @@ const api = {
   exportAudio: (names: string[], exportDir?: string): Promise<any> =>
     ipcRenderer.invoke('exportAudio', names, exportDir),
   registerGrating: (data: unknown) => ipcRenderer.invoke('registerGrating', data),
+  getModelLayers: (modelId: string) => ipcRenderer.invoke('getModelLayers', modelId),
+  createGrating: (data: unknown) => ipcRenderer.invoke('createGrating', data),
   getOperations: (): Promise<any> => ipcRenderer.invoke('getOperations'),
   executeOperation: (data: unknown): Promise<any> => ipcRenderer.invoke('executeOperation', data),
   removeElement: (elementId: string, keepChildren?: boolean): Promise<any> =>

@@ -105,3 +105,11 @@ class Engine(ABC):
     async def get_shared_models(self) -> list[dict]:
         pass
 
+    @abstractmethod
+    async def get_model_layers(self, model_element: GraphElement) -> list[dict]:
+        pass
+
+    @abstractmethod
+    async def create_grating(self, model_element: GraphElement, name: str, elements: list) -> GraphElement:
+        pass
+

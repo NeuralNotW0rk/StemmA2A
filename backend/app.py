@@ -532,6 +532,67 @@ def register_grating():
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
+@app.route("/model/<model_id>/layers", methods=["GET"])
+async def get_model_layers(model_id):
+    """Inspects a model node and returns a list of its candidate layers for bending."""
+    if param_graph is None or engine_provider is None:
+        return jsonify({"error": "No project loaded"}), 400
+        
+    try:
+        model_element = param_graph.get_element(model_id)
+        if not isinstance(model_element, Model):
+            return jsonify({"error": f"Node '{model_id}' is not a valid model."}), 400
+            
+        engine = engine_provider.get_engine()
+        layers = await engine.get_model_layers(model_element)
+        return jsonify({
+            "success": True,
+            "layers": layers
+        }), 200
+        
+    except Exception as e:
+        print(f"Failed to inspect model layers: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/create_grating", methods=["POST"])
+async def create_grating():
+    """Dynamically creates a new Bending Grating and registers it in the project graph."""
+    if param_graph is None or engine_provider is None:
+        return jsonify({"error": "No project loaded"}), 400
+        
+    try:
+        data = request.get_json()
+        model_id = data.get("model_id")
+        grating_name = data.get("name", "New Grating")
+        elements_input = data.get("elements", [])
+        
+        if not model_id or not elements_input:
+            return jsonify({"error": "model_id and elements list are required"}), 400
+            
+        model_element = param_graph.get_element(model_id)
+        if not isinstance(model_element, Model):
+            return jsonify({"error": f"Node '{model_id}' is not a valid model."}), 400
+            
+        engine = engine_provider.get_engine()
+        grating_artifact = await engine.create_grating(model_element, grating_name, elements_input)
+        
+        with graph_lock:
+            param_graph.add_element(grating_artifact)
+            param_graph.link(model_element, grating_artifact, relation='binds_to')
+            param_graph.save()
+            
+        return jsonify({
+            "success": True,
+            "message": "Grating created successfully",
+            "grating": grating_artifact.to_dict()
+        }), 200
+        
+    except Exception as e:
+        print(f"Failed to create grating: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
 @app.route("/adapter_config/<adapter_name>", methods=["GET"])
 async def get_adapter_config(adapter_name):
     """Get the form configuration for a specific adapter."""
@@ -966,6 +1027,7 @@ async def _dispatch_async_operation(data):
         engine_args = {"model_element": model_element, **node_engine_args}
         if gratings:
             engine_args["grating_strengths"] = grating_strengths
+            engine_args["gratings"] = gratings
         
         # If gratings are used, the model is implied, so we omit the direct edge
         if "grating_elements" in node_engine_args and node_engine_args["grating_elements"]:

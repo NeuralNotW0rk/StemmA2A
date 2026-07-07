@@ -273,6 +273,32 @@ app.whenReady().then(async () => {
     return await response.json()
   })
 
+  ipcMain.handle('getModelLayers', async (_event, modelId) => {
+    const response = await fetchWithAuth(`${BACKEND_URL}/model/${modelId}/layers`)
+    if (!response.ok) {
+      const errorBody = await response.text()
+      throw new Error(
+        `Failed to get model layers. Status: ${response.status}. Error: ${errorBody}`
+      )
+    }
+    return await response.json()
+  })
+
+  ipcMain.handle('createGrating', async (_event, gratingData) => {
+    const response = await fetchWithAuth(`${BACKEND_URL}/create_grating`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(gratingData)
+    })
+    if (!response.ok) {
+      const errorBody = await response.text()
+      throw new Error(
+        `Failed to create grating. Status: ${response.status}. Error: ${errorBody}`
+      )
+    }
+    return await response.json()
+  })
+
   ipcMain.handle('exportAudio', async (_event, names: string[], exportDir?: string) => {
     const response = await fetchWithAuth(`${BACKEND_URL}/export`, {
       method: 'POST',
