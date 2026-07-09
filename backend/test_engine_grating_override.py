@@ -36,8 +36,13 @@ async def test_grating_override():
         # 3. Create a temporary Grating checkpoint file with InvertElement
         print("Creating temporary Grating checkpoint file...")
         grating = Grating()
-        # Invert element initially targeting indices [0, 1, 2, 3]
-        invert_el = InvertElement(address="conv1.conv", indices=[0, 1, 2, 3])
+        # Invert element initially targeting cluster 1
+        cluster_map = [
+            {"cluster_index": 1, "feature_index": 4},
+            {"cluster_index": 1, "feature_index": 5},
+            {"cluster_index": 2, "feature_index": 6}
+        ]
+        invert_el = InvertElement(address="conv1.conv", indices=[], cluster=1, cluster_map=cluster_map)
         grating.add_element(invert_el)
         
         grating_file = os.path.join(tmp_dir, "test_grating.safetensors")
@@ -57,7 +62,7 @@ async def test_grating_override():
             }]
         )
         
-        # 5. Run generation with dynamic overrides (change indices to [4, 5, 6, 7])
+        # 5. Run generation with dynamic overrides (change cluster to 2)
         print("Submitting generate job with dynamic overrides...")
         job_id = await engine.execute(
             "generate",
@@ -70,7 +75,7 @@ async def test_grating_override():
                 "overrides": [{
                     "address": "conv1.conv",
                     "metadata": {
-                        "indices": [4, 5, 6, 7]
+                        "cluster": 2
                     }
                 }]
             }],
@@ -102,7 +107,15 @@ async def test_grating_override():
         assert context["gratings"][0]["id"] == grating_artifact.id, "Context grating ID mismatch!"
         assert "grating_ids" in context, "Context is missing 'grating_ids'!"
         assert context["grating_ids"] == [grating_artifact.id], "Context 'grating_ids' mismatch!"
-        print("Grating parameters successfully verified in generated artifact context!")
+        
+        # Verify resolved_indices are populated
+        overrides = context["gratings"][0].get("overrides")
+        assert overrides is not None and len(overrides) == 1, "Overrides list in context 'gratings' should have 1 element!"
+        override_meta = overrides[0].get("metadata")
+        assert "resolved_indices" in override_meta, "resolved_indices is missing from override metadata!"
+        assert override_meta["resolved_indices"] == [6], f"resolved_indices mismatch! Expected [6], got {override_meta['resolved_indices']}"
+        
+        print("Grating parameters and resolved_indices successfully verified in generated artifact context!")
         
     finally:
         # Clean up temp folder
@@ -196,6 +209,82 @@ def test_flask_endpoints():
         assert el["metadata"]["cluster_map"] is not None
         assert len(el["metadata"]["cluster_map"]) > 0, "Cluster map was not populated!"
         print("Feature clustering and dynamic grating creation verified successfully!")
+        
+        # 3. Test update_batch_labels recursive comparison
+        print("Testing update_batch_labels recursive labeling...")
+        from param_graph.elements.collections.batch_element import Batch
+        from param_graph.elements.artifacts.audio_element import Audio
+        
+        batch_id = "test_batch_id"
+        m1_id = "member_1"
+        m2_id = "member_2"
+        
+        m1 = Audio(
+            id=m1_id,
+            name="Member 1",
+            file=Asset(path="somepath1.wav", uid=m1_id),
+            sample_rate=16000,
+            duration=1.0,
+            context={
+                "gratings": [
+                    {
+                        "id": "grating_1",
+                        "strength": 1.0,
+                        "overrides": [
+                            {
+                                "address": "conv1.conv",
+                                "metadata": {
+                                    "cluster": 1
+                                }
+                            }
+                        ]
+                    }
+                ],
+                "model_id": "some_model"
+            }
+        )
+        m2 = Audio(
+            id=m2_id,
+            name="Member 2",
+            file=Asset(path="somepath2.wav", uid=m2_id),
+            sample_rate=16000,
+            duration=1.0,
+            context={
+                "gratings": [
+                    {
+                        "id": "grating_1",
+                        "strength": 1.0,
+                        "overrides": [
+                            {
+                                "address": "conv1.conv",
+                                "metadata": {
+                                    "cluster": 2
+                                }
+                            }
+                        ]
+                    }
+                ],
+                "model_id": "some_model"
+            }
+        )
+        
+        batch_node = Batch(id=batch_id, member_ids=[m1_id, m2_id], member_type="audio")
+        
+        g.add_element(m1)
+        g.add_element(m2)
+        g.add_element(batch_node)
+        
+        # Trigger update_batch_labels
+        from app import update_batch_labels
+        update_batch_labels(batch_id)
+        
+        # Verify labels/aliases
+        m1_alias = g.G.nodes[m1_id].get("alias")
+        m2_alias = g.G.nodes[m2_id].get("alias")
+        
+        assert m1_alias == "conv1.conv.cluster: 1", f"Expected 'conv1.conv.cluster: 1', got '{m1_alias}'"
+        assert m2_alias == "conv1.conv.cluster: 2", f"Expected 'conv1.conv.cluster: 2', got '{m2_alias}'"
+        print("Recursive batch member labeling verified successfully!")
         
     finally:
         app_module.param_graph = old_graph

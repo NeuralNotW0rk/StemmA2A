@@ -1399,35 +1399,116 @@ def update_batch_labels(batch_id: str):
         except Exception:
             contexts.append({})
     
+    def diff_recursive(vals: list):
+        if not vals:
+            return None, []
+        if all(v == vals[0] for v in vals):
+            return vals[0], [None] * len(vals)
+            
+        if all(isinstance(v, dict) for v in vals):
+            shared_dict = {}
+            diff_dicts = [{} for _ in vals]
+            all_keys = set().union(*(d.keys() for d in vals))
+            
+            for k in all_keys:
+                if not all(k in d for d in vals):
+                    for idx, d in enumerate(vals):
+                        if k in d:
+                            diff_dicts[idx][k] = d[k]
+                    continue
+                    
+                k_vals = [d[k] for d in vals]
+                shared_k, diff_k = diff_recursive(k_vals)
+                
+                if shared_k is not None or any(dk is not None for dk in diff_k):
+                    if shared_k is not None:
+                        shared_dict[k] = shared_k
+                    for idx, dk in enumerate(diff_k):
+                        if dk is not None:
+                            diff_dicts[idx][k] = dk
+            return (shared_dict if shared_dict else None), (diff_dicts if any(d for d in diff_dicts) else [None]*len(vals))
+            
+        if all(isinstance(v, list) for v in vals) and all(len(v) == len(vals[0]) for v in vals):
+            shared_list = []
+            diff_lists = [[] for _ in vals]
+            has_diff = False
+            
+            for i in range(len(vals[0])):
+                i_vals = [v[i] for v in vals]
+                shared_i, diff_i = diff_recursive(i_vals)
+                
+                shared_list.append(shared_i)
+                for idx, di in enumerate(diff_i):
+                    diff_lists[idx].append(di)
+                if any(di is not None for di in diff_i):
+                    has_diff = True
+                    
+            if has_diff:
+                return (shared_list if any(x is not None for x in shared_list) else None), diff_lists
+            else:
+                return shared_list, [None] * len(vals)
+                
+        return None, vals
+
+    def flatten_diff(val, path="") -> list[tuple[str, any]]:
+        if isinstance(val, dict):
+            items = []
+            for k, v in val.items():
+                new_path = f"{path}.{k}" if path else k
+                items.extend(flatten_diff(v, new_path))
+            return items
+        elif isinstance(val, list):
+            items = []
+            for i, v in enumerate(val):
+                if v is not None:
+                    new_path = f"{path}[{i}]"
+                    items.extend(flatten_diff(v, new_path))
+            return items
+        else:
+            return [(path, val)]
+
+    def clean_path(path: str, ctx: dict) -> str:
+        import re
+        def replace_override(match):
+            g_idx = int(match.group(1))
+            o_idx = int(match.group(2))
+            try:
+                return ctx["gratings"][g_idx]["overrides"][o_idx]["address"]
+            except (KeyError, IndexError, TypeError):
+                return f"grating[{g_idx}]"
+                
+        path = re.sub(r'gratings\[(\d+)\]\.overrides\[(\d+)\]', replace_override, path)
+        path = path.replace('.metadata.', '.')
+        path = re.sub(r'gratings\[(\d+)\]', r'grating[\1]', path)
+        return path
+
+    shared_context = {}
+    member_diffs_list = [{} for _ in member_ids]
+    
     if contexts:
-        # Find intersection of all keys and values
-        common_keys = set.intersection(*(set(c.keys()) for c in contexts))
-        for k in common_keys:
-            if all(c[k] == contexts[0][k] for c in contexts):
-                shared_context[k] = contexts[0][k]
-        
-        # Calculate what makes each member unique
-        for m_id, ctx in zip(member_ids, contexts):
-            diff = {k: v for k, v in ctx.items() if k not in shared_context or shared_context[k] != v}
-            member_diffs[m_id] = diff
+        shared_res, diff_res = diff_recursive(contexts)
+        shared_context = shared_res or {}
+        member_diffs_list = [d or {} for d in diff_res]
 
     print(f"Shared context: {shared_context}")
-    print(f"Member diffs: {member_diffs}")
+    print(f"Member diffs list: {member_diffs_list}")
 
     # Generate a label for the batch based on the shared prompt/context
-    member_type = batch_node_attrs.get('member_type') or 'element'
-    batch_alias = shared_context.get('prompt', f"{member_type.capitalize()} Batch")
+    batch_alias = shared_context.get('prompt', "Artifact Batch")
     if len(str(batch_alias)) > 30:
         batch_alias = str(batch_alias)[:27] + "..."
 
     param_graph.update_element(batch_id, {"shared_context": shared_context, "alias": batch_alias})
 
     # Update member aliases
-    for member_id in member_ids:
-        diff = member_diffs.get(member_id, {})
-        diff_items = [f"{k}: {v}" for k, v in diff.items()]
+    for member_id, ctx, diff_dict in zip(member_ids, contexts, member_diffs_list):
+        flat_diff = flatten_diff(diff_dict)
+        diff_items = []
+        for path, val in flat_diff:
+            cleaned = clean_path(path, ctx)
+            diff_items.append(f"{cleaned}: {val}")
+            
         diff_label = "\n".join(diff_items) if diff_items else "Base"
-        
         if len(diff_label) > 40:
             diff_label = diff_label[:37] + "..."
             

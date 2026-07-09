@@ -476,7 +476,7 @@
       if (!targetOpName) {
         // Fallback for legacy elements
         const type = ele.data('type')
-        if (type === 'audio') {
+        if (type === 'audio' || type === 'image') {
           targetOpName = 'generate'
         } else if (type === 'latent') {
           targetOpName = 'invert'
@@ -579,6 +579,34 @@
       return [...specificCommands, ...nodeCommands(ele)]
     }
 
+    const imageNodeCommands = (ele: Singular): Command[] => {
+      const specificCommands: Command[] = [
+        {
+          content: ele.data('favorite') ? 'Unfavorite' : 'Favorite',
+          select: () => {
+            const newState = !ele.data('favorite')
+            ele.data('favorite', newState)
+            ontoggleFavorite?.(ele.data(), newState)
+          }
+        }
+      ]
+
+      const replicateCmd = getReplicateCommand(ele)
+      if (replicateCmd) {
+        specificCommands.push(replicateCmd)
+      }
+
+      specificCommands.push(...getPinnedOperations(ele))
+
+      specificCommands.push({
+        content: 'Operations...',
+        select: () => openOperationsMenu(ele)
+      })
+
+      // Inherits from nodeCommands
+      return [...specificCommands, ...nodeCommands(ele)]
+    }
+
     const externalNodeCommands = (ele: Singular): Command[] => [
       // Inherits from elementCommands (cannot be grouped)
       {
@@ -655,6 +683,8 @@
             return gratingNodeCommands(ele)
           case 'audio':
             return audioNodeCommands(ele)
+          case 'image':
+            return imageNodeCommands(ele)
           case 'external':
             return externalNodeCommands(ele)
           case 'local_path':

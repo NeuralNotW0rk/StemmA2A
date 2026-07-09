@@ -984,7 +984,7 @@
               </div>
             {:else if ov.targetType === 'cluster'}
               {@const clusterMap = item.node.elements?.[ovIdx]?.metadata?.cluster_map}
-              {@const maxClusterId = Math.max(...Object.values(clusterMap || {}).map(Number))}
+              {@const maxClusterId = Math.max(0, ...(clusterMap || []).map(item => Number(item?.cluster_index ?? 0)))}
               <span class="sub-label">Target Cluster ID (0 to {maxClusterId})</span>
               <div class="sub-input-row">
                 {#if ov.batchFields?.cluster}

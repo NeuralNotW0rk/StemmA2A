@@ -166,17 +166,44 @@ class LocalEngine(Engine):
                 print(f"Engine: Applying Grating '{grating_element.id}' with strength {strength}...")
                 grating = DiffractureGrating.load(grating_element.file.path)
                 
-                # Apply dynamic overrides if present in the payload
+                # Apply dynamic overrides if present in the payload and resolve cluster indices
                 gratings_input = kwargs.get("gratings") or []
                 for g_in in gratings_input:
                     if g_in.get("id") == grating_element.id:
-                        overrides = g_in.get("overrides") or []
-                        for o in overrides:
-                            addr = o.get("address")
-                            meta_overrides = o.get("metadata") or {}
-                            if addr in grating.nodes:
-                                print(f"Engine: Overriding grating element '{addr}' metadata with: {meta_overrides}")
-                                grating.nodes[addr].metadata.update(meta_overrides)
+                        overrides = g_in.get("overrides")
+                        if overrides is None:
+                            overrides = []
+                            g_in["overrides"] = overrides
+                        
+                        override_map = {o.get("address"): o for o in overrides}
+                        
+                        # Process all nodes in the grating to populate resolved_indices for any cluster
+                        for addr, base_el in grating.nodes.items():
+                            override = override_map.get(addr)
+                            if override is None and base_el.metadata.get("cluster") is not None:
+                                override = {"address": addr, "metadata": {}}
+                                overrides.append(override)
+                                override_map[addr] = override
+                            
+                            if override is not None:
+                                addr = override.get("address")
+                                meta_overrides = override.get("metadata") or {}
+                                override["metadata"] = meta_overrides
+                                
+                                # Apply the override to grating first so we get the merged values
+                                if addr in grating.nodes:
+                                    grating.nodes[addr].metadata.update(meta_overrides)
+                                    
+                                # Resolve indices
+                                full_meta = grating.nodes[addr].metadata
+                                cluster = full_meta.get("cluster")
+                                cluster_map = full_meta.get("cluster_map")
+                                if cluster is not None and cluster_map is not None:
+                                    resolved = []
+                                    for item in cluster_map:
+                                        if item.get("cluster_index") == cluster:
+                                            resolved.append(item.get("feature_index"))
+                                    meta_overrides["resolved_indices"] = resolved
                 
                 grating.to(model_device)
                 adapter.actant.activate(grating, injection_strategy="hook", strength=strength)

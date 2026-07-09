@@ -178,11 +178,6 @@
     // Close any selection process
     initiatorNodeStore.set(null)
     selectedForRemoval.set(null)
-
-    errorInInfoPanel = {
-      title: 'Backend Restarted',
-      message: 'The backend server has restarted. Please reload your project.'
-    }
   }
 
   async function handleUpdateEmbeddings(): Promise<void> {
@@ -901,8 +896,9 @@
 
   .image-preview-card {
     position: absolute;
-    bottom: 2rem;
-    left: 2rem;
+    bottom: 1rem;
+    left: 50%;
+    transform: translateX(-50%);
     width: 256px;
     background: var(--color-background-glass-2, rgba(20, 20, 25, 0.7));
     backdrop-filter: blur(12px);
