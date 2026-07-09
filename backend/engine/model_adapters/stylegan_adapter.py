@@ -867,6 +867,7 @@ class StyleGANAdapter(ModelAdapter):
     def generate(self, **kwargs) -> tuple[Image, torch.Tensor]:
         truncation = float(kwargs.get("truncation", 0.7))
         seed = kwargs.get("seed", None)
+        randomize_noise = bool(kwargs.get("randomize_noise", False))
 
         if seed is not None:
             torch.manual_seed(seed)
@@ -875,7 +876,7 @@ class StyleGANAdapter(ModelAdapter):
         
         with torch.no_grad():
             z = torch.randn(1, self.style_dim, device=self.device)
-            img, _ = self.model([z], truncation=truncation, truncation_latent=self.mean_latent)
+            img, _ = self.model([z], truncation=truncation, truncation_latent=self.mean_latent, randomize_noise=randomize_noise)
             img = img.squeeze(0) # Shape: [3, H, W]
 
         # Generate unique IDs

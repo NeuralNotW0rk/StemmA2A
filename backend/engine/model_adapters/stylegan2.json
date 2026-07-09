@@ -33,6 +33,12 @@
             "type": "float",
             "defaultValue": 0.7,
             "placeholder": "Between 0.0 and 1.0 (truncation trick)"
+        },
+        {
+            "name": "randomize_noise",
+            "label": "Randomize Noise",
+            "type": "boolean",
+            "defaultValue": false
         }
     ],
     "invert": [

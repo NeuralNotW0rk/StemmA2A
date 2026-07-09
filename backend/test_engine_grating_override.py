@@ -108,14 +108,13 @@ async def test_grating_override():
         assert "grating_ids" in context, "Context is missing 'grating_ids'!"
         assert context["grating_ids"] == [grating_artifact.id], "Context 'grating_ids' mismatch!"
         
-        # Verify resolved_indices are populated
+        # Verify grating override parameters
         overrides = context["gratings"][0].get("overrides")
         assert overrides is not None and len(overrides) == 1, "Overrides list in context 'gratings' should have 1 element!"
         override_meta = overrides[0].get("metadata")
-        assert "resolved_indices" in override_meta, "resolved_indices is missing from override metadata!"
-        assert override_meta["resolved_indices"] == [6], f"resolved_indices mismatch! Expected [6], got {override_meta['resolved_indices']}"
+        assert "resolved_indices" not in override_meta, "resolved_indices should not be in override metadata!"
         
-        print("Grating parameters and resolved_indices successfully verified in generated artifact context!")
+        print("Grating parameters successfully verified in generated artifact context!")
         
     finally:
         # Clean up temp folder
