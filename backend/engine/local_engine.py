@@ -201,6 +201,16 @@ class LocalEngine(Engine):
         new_file_asset = replace(artifact.file, path=str(local_path))
         artifact = replace(artifact, file=new_file_asset)
 
+        # Include grating parameters in the artifact context
+        if hasattr(artifact, 'context'):
+            new_context = dict(artifact.context) if artifact.context is not None else {}
+            gratings = kwargs.get("gratings")
+            if gratings:
+                new_context["gratings"] = gratings
+            if grating_elements:
+                new_context["grating_ids"] = [el.id for el in grating_elements]
+            artifact = replace(artifact, context=new_context)
+
         if self.encoder and artifact.type == "audio":
             try:
                 embedding = self.encoder.get_embedding(local_path)

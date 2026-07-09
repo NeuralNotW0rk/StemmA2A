@@ -94,6 +94,16 @@ async def test_grating_override():
         result_artifact = status["result"]
         print(f"Output generated successfully! ID={result_artifact['id']}, Path={result_artifact['file']['path']}")
         
+        # Verify context contains the grating parameters
+        assert "context" in result_artifact, "Result artifact is missing 'context'!"
+        context = result_artifact["context"]
+        assert "gratings" in context, "Context is missing 'gratings' parameters!"
+        assert len(context["gratings"]) == 1, "Context 'gratings' length is not 1!"
+        assert context["gratings"][0]["id"] == grating_artifact.id, "Context grating ID mismatch!"
+        assert "grating_ids" in context, "Context is missing 'grating_ids'!"
+        assert context["grating_ids"] == [grating_artifact.id], "Context 'grating_ids' mismatch!"
+        print("Grating parameters successfully verified in generated artifact context!")
+        
     finally:
         # Clean up temp folder
         try:

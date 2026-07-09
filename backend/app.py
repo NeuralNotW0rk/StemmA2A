@@ -673,9 +673,11 @@ async def get_job_status(job_id):
             output_dir = param_graph.root / "generate"
             final_artifact = save_artifact_asset(temp_artifact, output_dir, asset_name="file")
             
-            # Ensure context is populated for labelling
-            if hasattr(final_artifact, 'context') and not final_artifact.context:
-                final_artifact = replace(final_artifact, context=job_context.get("validated_params", {}))
+            # Ensure context is populated for labelling, and merge job-level validated params (like model_id, operation, gratings)
+            if hasattr(final_artifact, 'context'):
+                current_context = final_artifact.context or {}
+                merged_context = {**job_context.get("validated_params", {}), **current_context}
+                final_artifact = replace(final_artifact, context=merged_context)
             
             with graph_lock:
                 param_graph.add_element(final_artifact)
