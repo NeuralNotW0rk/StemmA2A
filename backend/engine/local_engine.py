@@ -20,18 +20,11 @@ from utils.audio import save_audio
 
 from diffracture import Actant
 from diffracture.topology.grating import Grating as DiffractureGrating
+from diffracture.analysis.clustering import FeatureClusteringPipeline
 
 class LocalEngine(Engine):
     def __init__(self, data_root: str = None):
-        super().__init__()
-        cache_capacity = int(os.environ.get("MODEL_CACHE_CAPACITY", 1))
-        self.model_cache = ModelCache(capacity=cache_capacity)
-        
-        if data_root:
-            self.data_root = Path(data_root)
-        else:
-            # If no data root is provided, create a temporary one for this session.
-            self.data_root = Path(tempfile.mkdtemp())
+        super().__init__(data_root=data_root)
         
         self.data_root.mkdir(parents=True, exist_ok=True)
         print(f"LocalEngine initialized with data root: {self.data_root}")
@@ -389,117 +382,38 @@ class LocalEngine(Engine):
         if not hasattr(adapter, 'model') or adapter.model is None:
             raise RuntimeError("Model failed to load or does not expose PyTorch module.")
             
-        layers = []
-        for name, module in adapter.model.named_modules():
-            if not name:
-                continue
-            cls_name = module.__class__.__name__
-            if cls_name in ["Linear", "Conv1d", "Conv2d", "Conv3d", "ModulatedConv2d", "StyledConv"] or "Conv" in cls_name or "Linear" in cls_name:
-                shape = None
-                if hasattr(module, 'weight') and isinstance(module.weight, torch.Tensor):
-                    shape = list(module.weight.shape)
-                elif hasattr(module, 'conv') and hasattr(module.conv, 'weight') and isinstance(module.conv.weight, torch.Tensor):
-                    shape = list(module.conv.weight.shape)
-                    
-                in_features = getattr(module, 'in_features', getattr(module, 'in_channels', getattr(module, 'in_channel', None)))
-                out_features = getattr(module, 'out_features', getattr(module, 'out_channels', getattr(module, 'out_channel', None)))
-                
-                layers.append({
-                    "address": name,
-                    "type": cls_name,
-                    "shape": shape,
-                    "in_features": in_features,
-                    "out_features": out_features
-                })
-        return layers
+        return self._extract_model_layers(adapter.model)
 
-    async def create_grating(self, model_element: GraphElement, name: str, elements: list) -> GraphElement:
+    async def cluster_features(self, model_element: GraphElement, address: str, num_clusters: int) -> list[int]:
         adapter_class = self._get_adapter_class(model_element.adapter)
         adapter = self.model_cache.get(model_element, adapter_class)
         
-        from diffracture.topology.grating import Grating as DiffractureGrating
-        from diffracture.registry import get_element as get_bending_element_cls
-        from param_graph.elements.artifacts.grating_element import Grating as GratingArtifact
-        from param_graph.elements.base_elements import Asset
+
+        print(f"Running dynamic FeatureClusteringPipeline on layer '{address}' with {num_clusters} clusters...")
+        pipeline = FeatureClusteringPipeline(adapter.model, strategy_name="cnn")
+        pipeline.collector.start_collecting([address])
         
-        grating = DiffractureGrating()
+        # Run dummy forward passes on StyleGAN/StableAudio to collect activations
+        with torch.no_grad():
+            if "stylegan2" in model_element.adapter:
+                for _ in range(16):
+                    z = torch.randn(1, 512, device=adapter.device)
+                    adapter.model([z], truncation=1.0)
+            elif "stable_audio" in model_element.adapter:
+                pass
+                
+        pipeline.collector.stop_collecting()
         
-        # Build the elements
-        for el_data in elements:
-            addr = el_data.get("address")
-            ktype = el_data.get("kernel_type")
-            params = el_data.get("params", {})
-            indices = el_data.get("indices") or []
-            
-            # Optional Feature Clustering
-            cluster = el_data.get("cluster")
-            cluster_map = None
-            if el_data.get("perform_clustering"):
-                from diffracture.analysis.clustering import FeatureClusteringPipeline
-                num_clusters = el_data.get("num_clusters", 5)
-                
-                print(f"Running dynamic FeatureClusteringPipeline on layer '{addr}' with {num_clusters} clusters...")
-                pipeline = FeatureClusteringPipeline(adapter.model, strategy_name="cnn")
-                pipeline.collector.start_collecting([addr])
-                
-                # Run dummy forward passes on StyleGAN/StableAudio to collect activations
-                with torch.no_grad():
-                    if "stylegan2" in model_element.adapter:
-                        for _ in range(16):
-                            z = torch.randn(1, 512, device=adapter.device)
-                            adapter.model([z], truncation=1.0)
-                    elif "stable_audio" in model_element.adapter:
-                        pass
-                
-                pipeline.collector.stop_collecting()
-                
-                # For 2D convolutions/ModulatedConv2d, channel_dim is 1
-                channel_dim = 1
-                # Run the clustering pipeline
-                cluster_map = pipeline.run_clustering(
-                    address=addr,
-                    channel_dim=channel_dim,
-                    num_clusters=num_clusters,
-                    epochs=5,
-                    device=str(adapter.device)
-                )
-                
-            # Lookup element class and instantiate
-            el_cls = get_bending_element_cls(ktype)
-            metadata = {
-                "indices": indices,
-                "cluster": cluster,
-                "cluster_map": cluster_map,
-                **params
-            }
-            element = el_cls.from_metadata(addr, metadata)
-            grating.add_element(element)
-            
-        # Create output directory for the grating file
-        output_dir = self.data_root / "generate"
-        output_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Save Grating safetensors file
-        import uuid
-        grating_uid = "grating_" + str(uuid.uuid4())[:8]
-        file_name = f"{grating_uid}.safetensors"
-        grating_path = output_dir / file_name
-        grating.save(str(grating_path))
-        
-        # Add Grating Artifact to project graph
-        elements_config = [{
-            "address": element.address,
-            "kernel_type": element.kernel_type,
-            "metadata": element.metadata
-        } for element in grating._nodes]
-        
-        asset = Asset(path=str(grating_path.resolve()), uid=grating_uid, extension=".safetensors")
-        grating_artifact = GratingArtifact(
-            id=grating_uid,
-            name=name,
-            context={},
-            file=asset,
-            base_model_id=model_element.id,
-            elements=elements_config
+        # For 2D convolutions/ModulatedConv2d, channel_dim is 1
+        channel_dim = 1
+        # Run the clustering pipeline
+        cluster_map = pipeline.run_clustering(
+            address=address,
+            channel_dim=channel_dim,
+            num_clusters=num_clusters,
+            epochs=5,
+            device=str(adapter.device)
         )
-        return grating_artifact
+        return cluster_map
+
+

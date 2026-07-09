@@ -13,8 +13,8 @@ from utils.uid import path_from_uid
 
 
 class RemoteEngine(Engine):
-    def __init__(self, remote_url: str, timeout: int = 300):
-        super().__init__()
+    def __init__(self, remote_url: str, timeout: int = 300, data_root: str = None):
+        super().__init__(data_root=data_root)
         self.remote_url = remote_url
         self.timeout = timeout
         self.cf_client_id = os.environ.get("CF_ACCESS_CLIENT_ID")
@@ -245,57 +245,41 @@ class RemoteEngine(Engine):
         return True
 
     async def get_model_layers(self, model_element: GraphElement) -> list[dict]:
-        auth_headers = self._get_auth_headers()
-        timeout = aiohttp.ClientTimeout(total=self.timeout)
+        """Inspects the model element locally to extract layers, avoiding remote queries for anonymized CAS."""
+        adapter_class = self._get_adapter_class(model_element.adapter)
+        adapter = adapter_class()
         try:
-            async with aiohttp.ClientSession(headers=auth_headers, timeout=timeout) as session:
-                async with session.get(f"{self.remote_url}/model/{model_element.id}/layers") as response:
-                    response.raise_for_status()
-                    data = await response.json()
-                    return data.get("layers", [])
-        except Exception as e:
-            print(f"Failed to get model layers from remote engine: {e}")
-            raise
+            adapter.load_model(model_element)
+            if not hasattr(adapter, 'model') or adapter.model is None:
+                raise RuntimeError("Model failed to load or does not expose PyTorch module.")
+            return self._extract_model_layers(adapter.model)
+        finally:
+            if hasattr(adapter, 'cleanup'):
+                adapter.cleanup()
 
-    async def create_grating(self, model_element: GraphElement, name: str, elements: list) -> GraphElement:
-        auth_headers = self._get_auth_headers()
-        timeout = aiohttp.ClientTimeout(total=self.timeout)
-        try:
-            payload = {
-                "model_id": model_element.id,
-                "name": name,
-                "elements": elements
-            }
-            async with aiohttp.ClientSession(headers=auth_headers, timeout=timeout) as session:
-                async with session.post(f"{self.remote_url}/create_grating", data=json.dumps(payload),
-                                         headers={'Content-Type': 'application/json'}) as response:
-                    response.raise_for_status()
-                    data = await response.json()
-                    
-                    grating_dict = data.get("grating")
-                    if not grating_dict:
-                        raise Exception("Remote server did not return the created grating element dictionary.")
-                        
-                    from param_graph.registry import resolve_element
-                    grating_artifact = resolve_element(grating_dict)
-                    
-                    async with session.get(f"{self.remote_url}/download_asset/{grating_artifact.id}") as file_response:
-                        if file_response.status == 200:
-                            file_data = await file_response.read()
-                            
-                            tmp_root = Path(__file__).parent.parent / "tmp"
-                            tmp_root.mkdir(exist_ok=True)
-                            
-                            local_path = tmp_root / "generate" / f"{grating_artifact.id}.safetensors"
-                            local_path.parent.mkdir(parents=True, exist_ok=True)
-                            local_path.write_bytes(file_data)
-                            
-                            from dataclasses import replace
-                            new_asset = replace(grating_artifact.file, path=str(local_path.resolve()))
-                            grating_artifact = replace(grating_artifact, file=new_asset)
-                            
-                    return grating_artifact
-                    
-        except Exception as e:
-            print(f"Failed to create remote grating: {e}")
-            raise
+    async def cluster_features(self, model_element: GraphElement, address: str, num_clusters: int) -> list[int]:
+        """Dispatches feature clustering to the remote engine via the async job queue."""
+        # 1. Execute the remote job
+        job_id = await self.execute(
+            "cluster_features",
+            model_element=model_element,
+            address=address,
+            num_clusters=num_clusters
+        )
+        
+        # 2. Poll for job completion
+        print(f"RemoteEngine: submitted cluster_features job {job_id}. Polling for completion...")
+        while True:
+            status = await self.get_job_status(job_id)
+            status_name = status.get("status")
+            if status_name == "completed":
+                result = status.get("result")
+                if not isinstance(result, list):
+                    raise Exception("Remote server did not return the cluster map list.")
+                return result
+            elif status_name == "failed":
+                raise Exception(f"Remote feature clustering job failed: {status.get('error')}")
+            elif status_name == "cancelled":
+                raise Exception("Remote feature clustering job was cancelled.")
+                
+            await asyncio.sleep(1.0)

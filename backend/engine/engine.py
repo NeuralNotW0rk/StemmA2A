@@ -1,22 +1,68 @@
+import os
+import tempfile
+import uuid
+import inspect
+import torch
 from abc import ABC, abstractmethod
+from pathlib import Path
 from typing import Any
-from param_graph.elements.base_elements import GraphElement
+
+from param_graph.elements.base_elements import GraphElement, Asset
+from param_graph.elements.artifacts.grating_element import Grating as GratingArtifact
+from diffracture.topology.grating import Grating as DiffractureGrating
+from diffracture.registry import get_element as get_bending_element_cls
 
 from .model_adapters.stable_audio_adapter import StableAudioAdapter
 from .model_adapters.stylegan_adapter import StyleGANAdapter
+from .model_cache import ModelCache
 
 class Engine(ABC):
-    def __init__(self):
+    def __init__(self, data_root: str = None):
         self.adapter_registry = {
             'stable_audio_tools': StableAudioAdapter,
             'stylegan2': StyleGANAdapter
         }
+
+        if data_root:
+            self.data_root = Path(data_root)
+        else:
+            self.data_root = Path(tempfile.mkdtemp())
+
+        cache_capacity = int(os.environ.get("MODEL_CACHE_CAPACITY", 1))
+        self.model_cache = ModelCache(capacity=cache_capacity)
 
     def _get_adapter_class(self, adapter_name: str):
         adapter_class = self.adapter_registry.get(adapter_name)
         if not adapter_class:
             raise Exception(f"Adapter '{adapter_name}' not found in adapter_registry.")
         return adapter_class
+
+    def _extract_model_layers(self, model) -> list[dict]:
+        """Helper to extract model layers locally from a loaded PyTorch model."""
+        import torch
+        layers = []
+        for name, module in model.named_modules():
+            if not name:
+                continue
+            cls_name = module.__class__.__name__
+            if cls_name in ["Linear", "Conv1d", "Conv2d", "Conv3d", "ModulatedConv2d", "StyledConv"] or "Conv" in cls_name or "Linear" in cls_name:
+                shape = None
+                if hasattr(module, 'weight') and isinstance(module.weight, torch.Tensor):
+                    shape = list(module.weight.shape)
+                elif hasattr(module, 'conv') and hasattr(module.conv, 'weight') and isinstance(module.conv.weight, torch.Tensor):
+                    shape = list(module.conv.weight.shape)
+                    
+                in_features = getattr(module, 'in_features', getattr(module, 'in_channels', getattr(module, 'in_channel', None)))
+                out_features = getattr(module, 'out_features', getattr(module, 'out_channels', getattr(module, 'out_channel', None)))
+                
+                layers.append({
+                    "address": name,
+                    "type": cls_name,
+                    "shape": shape,
+                    "in_features": in_features,
+                    "out_features": out_features
+                })
+        return layers
 
     async def get_adapter_config(self, adapter_name: str) -> dict:
         """Get the form configuration for a specific adapter."""
@@ -110,6 +156,69 @@ class Engine(ABC):
         pass
 
     @abstractmethod
-    async def create_grating(self, model_element: GraphElement, name: str, elements: list) -> GraphElement:
+    async def cluster_features(self, model_element: GraphElement, address: str, num_clusters: int) -> list[int]:
         pass
+
+    async def _cluster_features_logic(self, **kwargs) -> list[int]:
+        """Logic wrapper used by the worker queue to execute feature clustering."""
+        model_element = kwargs["model_element"]
+        address = kwargs["address"]
+        num_clusters = kwargs["num_clusters"]
+        return await self.cluster_features(model_element, address, num_clusters)
+
+    async def create_grating(self, model_element: GraphElement, name: str, elements: list) -> GraphElement:
+        grating = DiffractureGrating()
+        
+        # Build the elements
+        for el_data in elements:
+            addr = el_data.get("address")
+            ktype = el_data.get("kernel_type")
+            params = el_data.get("params", {})
+            indices = el_data.get("indices") or []
+            
+            cluster = el_data.get("cluster")
+            cluster_map = None
+            if el_data.get("perform_clustering"):
+                num_clusters = el_data.get("num_clusters", 5)
+                # Request atomic feature clustering from the executor (self)
+                cluster_map = await self.cluster_features(model_element, addr, num_clusters)
+                
+            # Lookup element class and instantiate
+            el_cls = get_bending_element_cls(ktype)
+            metadata = {
+                "indices": indices,
+                "cluster": cluster,
+                "cluster_map": cluster_map,
+                **params
+            }
+            element = el_cls.from_metadata(addr, metadata)
+            grating.add_element(element)
+            
+        # Create output directory for the grating file
+        output_dir = self.data_root / "generate"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Save Grating safetensors file
+        grating_uid = "grating_" + str(uuid.uuid4())[:8]
+        file_name = f"{grating_uid}.safetensors"
+        grating_path = output_dir / file_name
+        grating.save(str(grating_path))
+        
+        # Add Grating Artifact to project graph
+        elements_config = [{
+            "address": element.address,
+            "kernel_type": element.kernel_type,
+            "metadata": element.metadata
+        } for element in grating._nodes]
+        
+        asset = Asset(path=str(grating_path.resolve()), uid=grating_uid, extension=".safetensors")
+        grating_artifact = GratingArtifact(
+            id=grating_uid,
+            name=name,
+            context={},
+            file=asset,
+            base_model_id=model_element.id,
+            elements=elements_config
+        )
+        return grating_artifact
 

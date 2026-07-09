@@ -426,6 +426,16 @@ async def import_model():
         if "model_element" in data:
             model_dict = data["model_element"]
             model_artifact = resolve_element(model_dict)
+            
+            # Populate layers if missing
+            if not getattr(model_artifact, 'layers', None):
+                try:
+                    engine = engine_provider.get_engine()
+                    layers = await engine.get_model_layers(model_artifact)
+                    model_artifact.layers = layers
+                except Exception as layer_err:
+                    print(f"Warning: Failed to extract layers for shared model during registration: {layer_err}")
+
             with graph_lock:
                 param_graph.add_element(model_artifact)
                 param_graph.save()
@@ -457,6 +467,13 @@ async def import_model():
 
         engine = engine_provider.get_engine()
         model_artifact = await engine.register_model(adapter_name, **data)
+
+        # Populate layers list on model registration
+        try:
+            layers = await engine.get_model_layers(model_artifact)
+            model_artifact.layers = layers
+        except Exception as layer_err:
+            print(f"Warning: Failed to extract layers during model registration: {layer_err}")
 
         with graph_lock:
             param_graph.add_element(model_artifact)
@@ -543,8 +560,21 @@ async def get_model_layers(model_id):
         if not isinstance(model_element, Model):
             return jsonify({"error": f"Node '{model_id}' is not a valid model."}), 400
             
+        # Return cached layers directly if they exist
+        if hasattr(model_element, 'layers') and model_element.layers is not None:
+            return jsonify({
+                "success": True,
+                "layers": model_element.layers
+            }), 200
+            
         engine = engine_provider.get_engine()
         layers = await engine.get_model_layers(model_element)
+        
+        # Cache the layers in the graph element
+        with graph_lock:
+            param_graph.update_element(model_id, {"layers": layers})
+            param_graph.save()
+            
         return jsonify({
             "success": True,
             "layers": layers

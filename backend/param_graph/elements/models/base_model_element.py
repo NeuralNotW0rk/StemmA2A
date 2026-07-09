@@ -6,3 +6,4 @@ from param_graph.elements.base_elements import Artifact
 class Model(Artifact):
     adapter: str
     type: str = 'model'
+    layers: list[dict] | None = None

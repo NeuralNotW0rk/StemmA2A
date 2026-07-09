@@ -48,24 +48,21 @@
     }
   })
 
-  // Auto-generate name based on config
-  $effect(() => {
-    if (selectedAddress) {
-      const shortAddr = selectedAddress.split('.').pop() || selectedAddress
-      name = `${modelElement.name || 'Model'} - ${shortAddr} [${kernelType}]`
-    }
-  })
-
-  let isFormValid = $derived(name.trim() !== '' && selectedAddress !== '' && !loadingLayers)
+  let isFormValid = $derived(selectedAddress !== '' && !loadingLayers)
 
   async function createGrating(): Promise<void> {
     if (!isFormValid || !modelElement) return
 
     inProgress = true
     try {
+      let finalName = name.trim()
+      if (!finalName) {
+        finalName = `${modelElement.name || 'Model'} - ${selectedAddress} [${kernelType}]`
+      }
+
       const payload = {
         model_id: modelElement.id,
-        name: name,
+        name: finalName,
         elements: [
           {
             address: selectedAddress,
