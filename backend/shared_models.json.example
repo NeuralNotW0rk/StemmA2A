@@ -1,0 +1,22 @@
+[
+  {
+    "name": "Example CAS-based StyleGAN2",
+    "adapter": "stylegan2",
+    "model_type": "stylegan2",
+    "checkpoint_uid": "05e551b029663498.xxh3_64"
+  },
+  {
+    "name": "Example CAS-based Stable Audio",
+    "adapter": "stable_audio_tools",
+    "model_type": "stable_audio",
+    "config_uid": "49ba628df2b94e31.xxh3_64",
+    "checkpoint_uid": "c0182fa39b71d64c.xxh3_64",
+    "encoder_uid": "5e8df31cb7d6c29a.xxh3_64"
+  },
+  {
+    "name": "Example Path-based StyleGAN2",
+    "adapter": "stylegan2",
+    "model_type": "stylegan2",
+    "checkpoint_path": "/app/models/stylegan2_checkpoint.pkl"
+  }
+]

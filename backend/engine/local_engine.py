@@ -74,23 +74,53 @@ class LocalEngine(Engine):
             print(f"Failed to read shared models config: {e}")
             return
 
+        is_container = os.environ.get("RUNNING_IN_CONTAINER") == "true"
+        if is_container:
+            data_path_str = os.environ.get("CONTAINER_DATA_PATH")
+            if not data_path_str:
+                data_path_str = "/data"
+        else:
+            data_path_str = os.environ.get("LOCAL_DATA_PATH")
+            if not data_path_str:
+                data_path_str = "~/.stemma2a_data"
+        data_cache_root = Path(data_path_str).expanduser()
+
         for entry in config_data:
             name = entry.get("name")
             adapter_name = entry.get("adapter")
             model_type = entry.get("model_type")
+            
             config_file_path = entry.get("config_path")
             checkpoint_file_path = entry.get("checkpoint_path")
             encoder_file_path = entry.get("encoder_path")
 
-            if not name or not adapter_name or not config_file_path or not checkpoint_file_path:
+            config_uid = entry.get("config_uid")
+            checkpoint_uid = entry.get("checkpoint_uid")
+            encoder_uid = entry.get("encoder_uid")
+
+            # Resolve paths using CAS UIDs if provided
+            if config_uid:
+                config_file_path = str(data_cache_root / path_from_uid(config_uid))
+            if checkpoint_uid:
+                checkpoint_file_path = str(data_cache_root / path_from_uid(checkpoint_uid))
+            if encoder_uid:
+                encoder_file_path = str(data_cache_root / path_from_uid(encoder_uid))
+
+            # StyleGAN config is optional inside the adapter, but let's keep it optional in entry if specified
+            is_stylegan = adapter_name == "stylegan2"
+            
+            if not name or not adapter_name or not checkpoint_file_path or (not is_stylegan and not config_file_path):
                 print(f"Skipping invalid shared model entry: {entry}")
                 continue
 
-            if not os.path.exists(config_file_path):
+            if config_file_path and not os.path.exists(config_file_path):
                 print(f"Skipping shared model '{name}' because config path does not exist: {config_file_path}")
                 continue
             if not os.path.exists(checkpoint_file_path):
                 print(f"Skipping shared model '{name}' because checkpoint path does not exist: {checkpoint_file_path}")
+                continue
+            if encoder_file_path and not os.path.exists(encoder_file_path):
+                print(f"Skipping shared model '{name}' because encoder path does not exist: {encoder_file_path}")
                 continue
 
             try:
