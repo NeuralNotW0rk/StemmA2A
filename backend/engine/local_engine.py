@@ -86,30 +86,59 @@ class LocalEngine(Engine):
         data_cache_root = Path(data_path_str).expanduser()
 
         for entry in config_data:
+            # Support copy-pasting a node directly from graph.json (which wraps attributes in a 'data' key)
+            if "data" in entry and isinstance(entry["data"], dict):
+                entry = entry["data"]
+
             name = entry.get("name")
             adapter_name = entry.get("adapter")
             model_type = entry.get("model_type")
-            
-            config_file_path = entry.get("config_path")
-            checkpoint_file_path = entry.get("checkpoint_path")
-            encoder_file_path = entry.get("encoder_path")
 
-            config_uid = entry.get("config_uid")
-            checkpoint_uid = entry.get("checkpoint_uid")
-            encoder_uid = entry.get("encoder_uid")
+            # Extract checkpoint details
+            checkpoint_entry = entry.get("checkpoint")
+            if isinstance(checkpoint_entry, dict):
+                checkpoint_uid = checkpoint_entry.get("uid")
+                checkpoint_file_path = checkpoint_entry.get("path")
+            else:
+                checkpoint_uid = entry.get("checkpoint_uid")
+                checkpoint_file_path = entry.get("checkpoint_path")
 
-            # Resolve paths using CAS UIDs if provided
-            if config_uid:
-                config_file_path = str(data_cache_root / path_from_uid(config_uid))
+            # Extract config details
+            config_entry = entry.get("config")
+            if isinstance(config_entry, dict):
+                config = config_entry
+                config_file_path = None
+            else:
+                config = None
+                config_uid = entry.get("config_uid")
+                config_file_path = entry.get("config_path")
+                if config_uid:
+                    config_file_path = str(data_cache_root / path_from_uid(config_uid))
+
+            # Extract encoder details
+            encoder_entry = entry.get("encoder")
+            if isinstance(encoder_entry, dict):
+                encoder_uid = encoder_entry.get("uid")
+                encoder_file_path = encoder_entry.get("path")
+            else:
+                encoder_uid = entry.get("encoder_uid")
+                encoder_file_path = entry.get("encoder_path")
+
+            # Resolve paths using CAS UIDs if provided and they exist in the cache
             if checkpoint_uid:
-                checkpoint_file_path = str(data_cache_root / path_from_uid(checkpoint_uid))
+                checkpoint_resolved = data_cache_root / path_from_uid(checkpoint_uid)
+                if checkpoint_resolved.exists():
+                    checkpoint_file_path = str(checkpoint_resolved)
             if encoder_uid:
-                encoder_file_path = str(data_cache_root / path_from_uid(encoder_uid))
+                encoder_resolved = data_cache_root / path_from_uid(encoder_uid)
+                if encoder_resolved.exists():
+                    encoder_file_path = str(encoder_resolved)
 
             # StyleGAN config is optional inside the adapter, but let's keep it optional in entry if specified
             is_stylegan = adapter_name == "stylegan2"
+            has_inline_config = config is not None
             
-            if not name or not adapter_name or not checkpoint_file_path or (not is_stylegan and not config_file_path):
+            if not name or not adapter_name or not checkpoint_file_path or (not is_stylegan and not config_file_path and not has_inline_config):
                 print(f"Skipping invalid shared model entry: {entry}")
                 continue
 
@@ -132,6 +161,7 @@ class LocalEngine(Engine):
                     checkpoint_path=checkpoint_file_path,
                     encoder_path=encoder_file_path,
                     model_type=model_type,
+                    config=config,
                 )
 
                 # Cache/symlink assets
