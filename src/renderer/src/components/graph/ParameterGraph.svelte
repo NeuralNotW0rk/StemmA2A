@@ -144,7 +144,7 @@
     initiatorType?: string,
     outputType?: string
   ): { name: string; description?: string } {
-    if (initiatorType === 'model') {
+    if (op.name === 'generate' && initiatorType === 'model') {
       if (outputType) {
         return {
           name: `Generate ${toTitleCase(outputType)}`,

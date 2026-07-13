@@ -338,7 +338,12 @@
       if (result && result.buffer) {
         const { buffer, mimeType } = result
         let dataArray: Uint8Array
-        if (buffer && typeof buffer === 'object' && 'data' in buffer && Array.isArray((buffer as any).data)) {
+        if (
+          buffer &&
+          typeof buffer === 'object' &&
+          'data' in buffer &&
+          Array.isArray((buffer as any).data)
+        ) {
           dataArray = new Uint8Array((buffer as any).data)
         } else {
           dataArray = new Uint8Array(buffer)
@@ -377,7 +382,12 @@
         if (result && result.buffer) {
           const { buffer, mimeType } = result
           let dataArray: Uint8Array
-          if (buffer && typeof buffer === 'object' && 'data' in buffer && Array.isArray((buffer as any).data)) {
+          if (
+            buffer &&
+            typeof buffer === 'object' &&
+            'data' in buffer &&
+            Array.isArray((buffer as any).data)
+          ) {
             dataArray = new Uint8Array((buffer as any).data)
           } else {
             dataArray = new Uint8Array(buffer)
@@ -501,7 +511,9 @@
         } else if (graphData.elements.nodes) {
           elements = graphData.elements.nodes
         }
-        const firstMember = elements.find((ele) => (ele.data?.id === memberIds[0] || ele.id === memberIds[0]))
+        const firstMember = elements.find(
+          (ele) => ele.data?.id === memberIds[0] || ele.id === memberIds[0]
+        )
         if (firstMember) {
           const firstMemberData = firstMember.data || firstMember
           return firstMemberData.output_type || null
@@ -536,7 +548,11 @@
       if ($selectedOperation) {
         let initiatorType = $initiatorNodeStore?.type
         if ($contextStore) {
-          if ($contextStore.init_audio || $contextStore.source_audio || $contextStore.source_audio_id) {
+          if (
+            $contextStore.init_audio ||
+            $contextStore.source_audio ||
+            $contextStore.source_audio_id
+          ) {
             initiatorType = 'audio'
           } else if ($contextStore.init_latent) {
             initiatorType = 'latent'
@@ -548,7 +564,7 @@
         }
         let displayName = $selectedOperation.name
         const outputType = getInitiatorOutputType()
-        if (initiatorType === 'model') {
+        if ($selectedOperation.name === 'generate' && initiatorType === 'model') {
           if (outputType) {
             const capitalizedType = outputType.charAt(0).toUpperCase() + outputType.slice(1)
             displayName = `Generate ${capitalizedType}`
@@ -786,7 +802,15 @@
     <div class="image-preview-card">
       <div class="preview-header">
         <span>{imageTitle}</span>
-        <button class="close-btn" onclick={() => { if (imageSrc && imageSrc.startsWith('blob:')) { URL.revokeObjectURL(imageSrc); } imageSrc = null; }}>×</button>
+        <button
+          class="close-btn"
+          onclick={() => {
+            if (imageSrc && imageSrc.startsWith('blob:')) {
+              URL.revokeObjectURL(imageSrc)
+            }
+            imageSrc = null
+          }}>×</button
+        >
       </div>
       <div class="preview-body">
         <img src={imageSrc} alt={imageTitle} />

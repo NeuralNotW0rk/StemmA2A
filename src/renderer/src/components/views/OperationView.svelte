@@ -56,7 +56,7 @@
 
   let activeDescription = $derived.by(() => {
     if (!$selectedOperation) return ''
-    if (initiatorType === 'model') {
+    if ($selectedOperation.name === 'generate' && initiatorType === 'model') {
       if (outputType) {
         return `Generate ${outputType} from the selected model`
       } else {
