@@ -121,14 +121,14 @@
 
         await window.api.importModel({
           model_element: {
-            ...selectedModel,
+            ...$state.snapshot(selectedModel),
             name: customModelName
           }
         })
       } else {
         await window.api.importModel({
           adapter: selectedAdapter,
-          ...formData
+          ...$state.snapshot(formData)
         })
       }
       formData = {}
