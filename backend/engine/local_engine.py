@@ -475,7 +475,7 @@ class LocalEngine(Engine):
 
         except Exception as e:
             print(f"Error during embedding update: {e}")
-            return audio_artifact
+            return artifact
 
     async def get_model_layers(self, model_element: GraphElement) -> list[dict]:
         adapter_class = self._get_adapter_class(model_element.adapter)

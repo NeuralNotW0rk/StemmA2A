@@ -40,7 +40,7 @@ def operation(name: str, is_standard: bool = True, description: str = "", initia
         return wrapper
     return decorator
 
-class ModelAdapter(ABC):
+class ModelAdapter(ABC, Generic[ModelT]):
     def __init__(self, uid_generator: UIDGenerator = None) -> None:
         if uid_generator is None:
             # Set default uid generator (XXH3_64)
@@ -57,11 +57,11 @@ class ModelAdapter(ABC):
             return json.load(f)
 
     @abstractmethod
-    def register_model(self, **kwargs) -> Model:
+    def register_model(self, **kwargs) -> ModelT:
         pass
     
     @abstractmethod
-    def load_model(self, info: Model, verify: bool = True):
+    def load_model(self, info: ModelT, verify: bool = True):
         pass
 
     @abstractmethod

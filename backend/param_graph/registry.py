@@ -1,13 +1,14 @@
 from typing import Dict, Type, Any, get_type_hints
 import inspect
 
+from .elements.base_elements import GraphElement
 
 # The global registry mapping keys to dataclass types
-_DATACLASS_REGISTRY: Dict[str, Type[Any]] = {}
+_DATACLASS_REGISTRY: Dict[str, Type[GraphElement]] = {}
 
 def register(key: str):
     """A decorator to register a dataclass with a given key."""
-    def decorator(cls: Type[Any]):
+    def decorator(cls: Type[GraphElement]) -> Type[GraphElement]:
         print(f"DEBUG: Registering '{cls.__name__}' with key '{key}'")
         if key in _DATACLASS_REGISTRY:
             # This can help catch copy/paste errors during development
@@ -16,7 +17,7 @@ def register(key: str):
         return cls
     return decorator
 
-def get_class(key: str) -> Type[Any]:
+def get_class(key: str) -> Type[GraphElement]:
     """Looks up a dataclass in the registry by its key."""
     cls = _DATACLASS_REGISTRY.get(key)
     if cls is None:
@@ -39,7 +40,7 @@ def get_key_from_attrs(attrs: Dict[str, Any]) -> str:
         # For all other elements, the 'type' field is the key
         return node_type
     
-def resolve_element(attrs: Dict[str, Any]) -> Type[Any]:
+def resolve_element(attrs: Dict[str, Any]) -> GraphElement:
     # Determine the correct class and instantiate it
     key = get_key_from_attrs(attrs)
     TargetClass = get_class(key)

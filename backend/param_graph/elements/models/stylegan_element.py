@@ -7,6 +7,6 @@ from param_graph.elements.base_elements import Asset
 @dataclass(kw_only=True)
 class StyleGANModel(Model):
     checkpoint: Asset
-    config: dict = None
+    config: dict | None = None
     adapter: str = 'stylegan2'
     output_type: str = 'image'

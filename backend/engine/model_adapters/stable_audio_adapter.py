@@ -117,7 +117,7 @@ def _get_cached_uid(file_path: str, uid_generator) -> str:
     return uid
 
 
-class StableAudioAdapter(ModelAdapter):
+class StableAudioAdapter(ModelAdapter[StableAudioModel]):
     def __init__(self) -> None:
         super().__init__()
         self.name = 'stable_audio_tools'
@@ -130,14 +130,20 @@ class StableAudioAdapter(ModelAdapter):
         checkpoint_path = kwargs.get("checkpoint_path")
         encoder_path = kwargs.get("encoder_path")
         config = kwargs.get("config")
+        name = kwargs.get("name")
+        if not name or not isinstance(name, str):
+            name = "StableAudio"
 
         if config is None:
-            if not config_path:
-                raise ValueError("Either 'config' dictionary or 'config_path' must be provided.")
+            if not config_path or not isinstance(config_path, str):
+                raise ValueError("Either 'config' dictionary or a valid 'config_path' string must be provided.")
             # Load the config
             with open(config_path, 'r') as cf:
                 config_json = cf.read()
                 config = json.loads(config_json)
+
+        if not checkpoint_path or not isinstance(checkpoint_path, str):
+            raise ValueError("A valid 'checkpoint_path' string must be provided.")
 
         # Generate the checkpoint ID using the persistent cache or by computing it
         checkpoint_uid = _get_cached_uid(checkpoint_path, self.uid_generator)
@@ -157,7 +163,7 @@ class StableAudioAdapter(ModelAdapter):
 
         return StableAudioModel(
             id=model_id,
-            name=kwargs.get("name"),
+            name=name,
             checkpoint=Asset(path=checkpoint_path, uid=checkpoint_uid),
             config=config,
             model_type=kwargs.get("model_type"),
@@ -167,13 +173,14 @@ class StableAudioAdapter(ModelAdapter):
         
     def load_model(self, info: StableAudioModel, verify: bool = True):
         # If a model is loaded, check if it's the same one
-        if self.model and self.model_info.id == info.id:
+        if self.model and self.model_info and self.model_info.id == info.id:
             return # Same model, do nothing
 
         # Unload existing model if there is one
         if self.model:
             del self.model
             self.model = None
+            self.model_info = None
 
         if verify:
             checkpoint_uid = _get_cached_uid(info.checkpoint.path, self.uid_generator)
@@ -224,6 +231,7 @@ class StableAudioAdapter(ModelAdapter):
         if self.model:
             del self.model
             self.model = None
+            self.model_info = None
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
