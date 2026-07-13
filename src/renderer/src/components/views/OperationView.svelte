@@ -23,6 +23,57 @@
   let adapterFields = $state<FormField[]>([])
   let fieldsConfig = $derived([...baseFields, ...adapterFields])
 
+  let initiatorType = $derived.by(() => {
+    let type = $initiatorNodeStore?.type
+    if ($contextStore) {
+      if ($contextStore.init_audio || $contextStore.source_audio || $contextStore.source_audio_id) {
+        type = 'audio'
+      } else if ($contextStore.init_latent) {
+        type = 'latent'
+      } else if ($contextStore.gratings && $contextStore.gratings.length > 0) {
+        type = 'grating'
+      } else {
+        type = 'model'
+      }
+    }
+    return type
+  })
+
+  let outputType = $derived.by(() => {
+    const node = $initiatorNodeStore
+    if (!node) return null
+    if (node.type === 'batch') {
+      const memberIds = node.member_ids || []
+      if (memberIds.length > 0 && $cyInstanceStore) {
+        const firstMember = $cyInstanceStore.getElementById(memberIds[0])
+        if (firstMember && firstMember.length > 0) {
+          return firstMember.data('output_type') || null
+        }
+      }
+    }
+    return node.output_type || null
+  })
+
+  let activeDescription = $derived.by(() => {
+    if (!$selectedOperation) return ''
+    if (initiatorType === 'model') {
+      if (outputType) {
+        return `Generate ${outputType} from the selected model`
+      } else {
+        return $selectedOperation.description || `Generate output from the selected model`
+      }
+    }
+    if (
+      initiatorType &&
+      $selectedOperation.context_overrides &&
+      $selectedOperation.context_overrides[initiatorType]
+    ) {
+      const override = $selectedOperation.context_overrides[initiatorType]
+      return override.description || $selectedOperation.description
+    }
+    return $selectedOperation.description
+  })
+
   let formData: Record<string, unknown> = $state({})
   let isLoading = $state(true)
   let isRunning = $state(false)
@@ -1029,7 +1080,7 @@
         <p>Error: {error}</p>
       </div>
     {:else if $selectedOperation}
-      <p class="op-description">{$selectedOperation.description || 'No description available.'}</p>
+      <p class="op-description">{activeDescription || 'No description available.'}</p>
 
       {#if fieldsConfig && fieldsConfig.length > 0}
         <DynamicForm

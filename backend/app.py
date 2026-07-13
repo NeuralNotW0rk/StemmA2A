@@ -37,6 +37,7 @@ from param_graph.elements.local_path import LocalPath
 from param_graph.utils import save_artifact_asset, resolve_element
 from engine.engine_provider import EngineProvider
 from engine.encoders.clap_encoder import CLAPEncoder
+from engine.encoders.clip_encoder import CLIPEncoder
 from utils.audio import load_audio, save_audio_to_buffer, save_audio
 from utils.form import create_dynamic_model
 from utils.uid import XXH3_64, path_from_uid
@@ -99,7 +100,8 @@ device_accelerator = torch.device(device_type_accelerator)
 # A default sample rate for processing and playback
 APP_SAMPLE_RATE = 48000
 SIMILARITY_GROUPS = {
-    "audio": "clap"
+    "audio": "clap",
+    "image": "clip"
 }
 
 param_graph: ParameterGraph = None
@@ -1542,8 +1544,9 @@ def trigger_embedding_update(force_recalculate=False, background=True):
 
     def update_embeddings_task():
         try:
-            # Instantiate encoder only once per task run
-            clap_encoder = CLAPEncoder()
+            # Instantiate encoders lazily per task run
+            clap_encoder = None
+            clip_encoder = None
             
             # Initialize interrogator for semantic edge labels
             interrogator = SemanticInterrogator(device_accelerator)
@@ -1553,6 +1556,20 @@ def trigger_embedding_update(force_recalculate=False, background=True):
                 interrogator.load_bank_from_disk(str(bank_path))
             
             for group_type, embedding_type in SIMILARITY_GROUPS.items():
+                if group_type == "audio":
+                    if clap_encoder is None:
+                        clap_encoder = CLAPEncoder()
+                    encoder = clap_encoder
+                    resolver = resolve_audio_path
+                elif group_type == "image":
+                    if clip_encoder is None:
+                        clip_encoder = CLIPEncoder()
+                    encoder = clip_encoder
+                    resolver = resolve_image_path
+                else:
+                    print(f"Unknown similarity group type: {group_type}")
+                    continue
+
                 # 1. Compute embeddings ONLY for nodes that need them
                 with graph_lock:
                     nodes_to_process = []
@@ -1567,11 +1584,11 @@ def trigger_embedding_update(force_recalculate=False, background=True):
                         continue
 
                     try:
-                        audio_path = resolve_audio_path(node)
-                        if not audio_path:
+                        file_path = resolver(node)
+                        if not file_path:
                             continue
                             
-                        embedding = clap_encoder.get_embedding(str(audio_path))
+                        embedding = encoder.get_embedding(str(file_path))
                         
                         with graph_lock:
                             current_data = param_graph.G.nodes[node]
@@ -1640,7 +1657,7 @@ def trigger_embedding_update(force_recalculate=False, background=True):
                                 continue
                                 
                             source_label = ""
-                            if has_label_bank:
+                            if has_label_bank and group_type == "audio":
                                 emb_B = all_latents[neighbor_idx]
                                 diff_A_to_B = torch.tensor(emb_B - emb_A, dtype=torch.float32)
                                 
@@ -1667,7 +1684,7 @@ def trigger_embedding_update(force_recalculate=False, background=True):
                                 continue  # Prevent overlap on small graphs
                             
                             source_label = ""
-                            if has_label_bank:
+                            if has_label_bank and group_type == "audio":
                                 emb_B = all_latents[neighbor_idx]
                                 diff_A_to_B = torch.tensor(emb_B - emb_A, dtype=torch.float32)
                                 

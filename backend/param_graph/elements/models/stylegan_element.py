@@ -9,3 +9,4 @@ class StyleGANModel(Model):
     checkpoint: Asset
     config: dict = None
     adapter: str = 'stylegan2'
+    output_type: str = 'image'

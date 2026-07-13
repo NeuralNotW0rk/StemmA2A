@@ -39,14 +39,26 @@ class LocalEngine(Engine):
 
         # --- Encoder Setup ---
         self.encoder = None
+        self.encoders = {}
         try:
             from .encoders.clap_encoder import CLAPEncoder
-            self.encoder = CLAPEncoder()
+            clap = CLAPEncoder()
+            self.encoder = clap
+            self.encoders["clap"] = clap
             print("CLAPEncoder initialized.")
         except ImportError:
-            print("CLAPEncoder not found, skipping embedding functionality.")
+            print("CLAPEncoder not found, skipping CLAP embedding functionality.")
         except Exception as e:
             print(f"Error initializing CLAPEncoder: {e}")
+
+        try:
+            from .encoders.clip_encoder import CLIPEncoder
+            self.encoders["clip"] = CLIPEncoder()
+            print("CLIPEncoder initialized.")
+        except ImportError:
+            print("CLIPEncoder not found, skipping CLIP embedding functionality.")
+        except Exception as e:
+            print(f"Error initializing CLIPEncoder: {e}")
 
         # --- Shared Models Setup ---
         self.shared_models = []
@@ -426,29 +438,39 @@ class LocalEngine(Engine):
             self.job_statuses[job_id] = {"status": "cancelled"}
             print(f"Job {job_id} cancellation requested. Status set to 'cancelled'.")
 
-    async def update_embedding(self, audio_artifact: GraphElement) -> GraphElement:
+    async def update_embedding(self, artifact: GraphElement) -> GraphElement:
         """
-        Calculates and adds embeddings to an existing audio artifact.
+        Calculates and adds embeddings to an existing audio or image artifact.
         """
-        if not self.encoder:
-            print("CLAPEncoder not available, cannot update embeddings.")
-            return audio_artifact
+        if not artifact or not hasattr(artifact, 'file'):
+            raise ValueError("A valid artifact with a file asset is required.")
 
-        if not audio_artifact or not hasattr(audio_artifact, 'file'):
-            raise ValueError("A valid audio artifact with a file asset is required.")
+        artifact_type = getattr(artifact, 'type', None)
+        if artifact_type == "audio":
+            encoder = self.encoders.get("clap")
+            encoder_name = "CLAPEncoder"
+        elif artifact_type == "image":
+            encoder = self.encoders.get("clip")
+            encoder_name = "CLIPEncoder"
+        else:
+            print(f"Unsupported artifact type '{artifact_type}' for embedding update.")
+            return artifact
 
-        audio_path = Path(audio_artifact.file.path)
-        if not audio_path.exists():
-            raise FileNotFoundError(f"Audio file not found at {audio_path}")
+        if not encoder:
+            print(f"{encoder_name} not available, cannot update embeddings.")
+            return artifact
+
+        file_path = Path(artifact.file.path)
+        if not file_path.exists():
+            raise FileNotFoundError(f"File not found at {file_path}")
 
         try:
-            embedding = self.encoder.get_embedding(str(audio_path))
+            embedding = encoder.get_embedding(str(file_path))
             
-            new_embeddings = audio_artifact.embeddings.copy()
-            new_embeddings[self.encoder.embedding_type] = embedding.tolist()
+            new_embeddings = getattr(artifact, 'embeddings', {}).copy()
+            new_embeddings[encoder.embedding_type] = embedding.tolist()
             
-            updated_artifact = replace(audio_artifact, embeddings=new_embeddings)
-
+            updated_artifact = replace(artifact, embeddings=new_embeddings)
             return updated_artifact
 
         except Exception as e:

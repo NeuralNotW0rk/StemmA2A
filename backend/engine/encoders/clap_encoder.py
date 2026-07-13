@@ -51,11 +51,11 @@ class CLAPEncoder(Encoder):
     def embedding_type(self) -> str:
         return "clap"
 
-    def get_embedding(self, audio_path: str) -> torch.Tensor:
+    def get_embedding(self, file_path: str) -> torch.Tensor:
         if self._model is None:
             self.load_model()
             
-        waveform, sr = torchaudio.load(audio_path)
+        waveform, sr = torchaudio.load(file_path)
         
         # Convert to mono if necessary
         if waveform.shape[0] > 1:

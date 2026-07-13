@@ -36,6 +36,16 @@ class ParameterGraph:
                 ]
                 if legacy_edge_nodes:
                     self.G.remove_nodes_from(legacy_edge_nodes)
+
+                # Ensure all model nodes have output_type populated
+                for node, d in self.G.nodes(data=True):
+                    if d.get('type') == 'model':
+                        if 'output_type' not in d:
+                            adapter = d.get('adapter')
+                            if adapter == 'stable_audio_tools':
+                                d['output_type'] = 'audio'
+                            elif adapter == 'stylegan2':
+                                d['output_type'] = 'image'
             return True
         return False
 
@@ -64,6 +74,12 @@ class ParameterGraph:
         
     def add_element(self, ele: GraphElement):
         ele_attrs = ele.to_dict()
+        if ele_attrs.get('type') == 'model' and not ele_attrs.get('output_type'):
+            adapter = ele_attrs.get('adapter')
+            if adapter == 'stable_audio_tools':
+                ele_attrs['output_type'] = 'audio'
+            elif adapter == 'stylegan2':
+                ele_attrs['output_type'] = 'image'
         ele_id = ele_attrs.get('id', None)
         self.G.add_node(ele_id, **ele_attrs)
 

@@ -489,6 +489,28 @@
     }
   }
 
+  function getInitiatorOutputType(): string | null {
+    const node = $initiatorNodeStore
+    if (!node) return null
+    if (node.type === 'batch') {
+      const memberIds = node.member_ids || []
+      if (memberIds.length > 0 && graphData && graphData.elements) {
+        let elements: any[] = []
+        if (Array.isArray(graphData.elements)) {
+          elements = graphData.elements
+        } else if (graphData.elements.nodes) {
+          elements = graphData.elements.nodes
+        }
+        const firstMember = elements.find((ele) => (ele.data?.id === memberIds[0] || ele.id === memberIds[0]))
+        if (firstMember) {
+          const firstMemberData = firstMember.data || firstMember
+          return firstMemberData.output_type || null
+        }
+      }
+    }
+    return node.output_type || null
+  }
+
   function getActionPanelTitle(): string {
     if (actionPanelView === 'import-model') {
       return 'Import Model'
@@ -525,13 +547,21 @@
           }
         }
         let displayName = $selectedOperation.name
-        if (
+        const outputType = getInitiatorOutputType()
+        if (initiatorType === 'model') {
+          if (outputType) {
+            const capitalizedType = outputType.charAt(0).toUpperCase() + outputType.slice(1)
+            displayName = `Generate ${capitalizedType}`
+          } else {
+            displayName = `Generate`
+          }
+        } else if (
           initiatorType &&
           $selectedOperation.context_overrides &&
           $selectedOperation.context_overrides[initiatorType]
         ) {
-          displayName =
-            $selectedOperation.context_overrides[initiatorType].name || $selectedOperation.name
+          const override = $selectedOperation.context_overrides[initiatorType]
+          displayName = override.name || $selectedOperation.name
         }
         return `Operation: ${displayName.toUpperCase()}`
       }

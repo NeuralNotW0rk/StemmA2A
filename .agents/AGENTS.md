@@ -25,4 +25,3 @@
 - **Do Not Mask Failures:** Avoid implementing silent fallback blocks or catch-default statements that hide underlying errors (e.g., catching file loading errors and returning random or empty data).
 - **Raise Errors Immediately:** If a resource (like a model weight file or configuration) is missing, malformed, or incompatible, raise an explicit exception immediately during the validation/import phase so that the developer gets instant feedback.
 - **Fail Fast over Graceful Degradation:** Prefer throwing descriptive errors early rather than attempting to recover silently with degraded or mocked behaviors, which complicates downstream debugging.
-
