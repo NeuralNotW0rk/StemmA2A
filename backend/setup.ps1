@@ -14,7 +14,8 @@ Write-Host "Step 1: Checking for Python 3.10..."
 try {
     py -3.10 -c "import sys; print('Found compatible Python version: ' + sys.version)"
     Write-Host "Python check passed."
-} catch {
+}
+catch {
     Write-Error "ERROR: Python 3.10 not found. Please install it and ensure 'py -3.10' command works."
     exit 1
 }
@@ -26,11 +27,13 @@ if (-not (Test-Path (Join-Path $VenvPath "pyvenv.cfg"))) {
     try {
         py -3.10 -m venv $VenvPath
         Write-Host "Virtual environment created at $VenvPath"
-    } catch {
+    }
+    catch {
         Write-Error "ERROR: Failed to create virtual environment."
         exit 1
     }
-} else {
+}
+else {
     Write-Host "Step 2: Virtual environment already exists."
 }
 
@@ -45,7 +48,8 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw "pip install failed with exit code $LASTEXITCODE"
     }
-} catch {
+}
+catch {
     Write-Error "ERROR: Failed to upgrade pip and wheel."
     exit 1
 }
@@ -55,17 +59,20 @@ if (-not $CudaVersion) {
     Write-Host "Step 4: CUDA version not specified, attempting to auto-detect..."
     try {
         $nvidiaSmiOutput = nvidia-smi
-        $match = $nvidiaSmiOutput | Select-String -Pattern "CUDA Version: (\d+\.\d+)"
+        $match = $nvidiaSmiOutput | Select-String -Pattern "CUDA (?:UMD )?Version:?\s*(\d+\.\d+)"
         if ($match) {
             $CudaVersion = $match.Matches[0].Groups[1].Value
             Write-Host "Auto-detected CUDA Version: $CudaVersion"
-        } else {
+        }
+        else {
             Write-Host "Could not determine CUDA version from nvidia-smi. Assuming CPU-only."
         }
-    } catch {
+    }
+    catch {
         Write-Host "nvidia-smi command not found or failed to run. Assuming CPU-only."
     }
-} else {
+}
+else {
     Write-Host "Step 4: Using user-specified CUDA version: $CudaVersion"
 }
 
@@ -82,7 +89,8 @@ if ($CudaVersion) {
     # Overwrite arguments for CUDA
     $arguments = @("install", "torch", "torchvision", "torchaudio", "--default-timeout=1000", "--retries", "20", "--index-url", $IndexUrl)
     Write-Host "Preparing to install PyTorch for CUDA $CudaVersion..."
-} else {
+}
+else {
     Write-Host "Preparing to install CPU-optimized version of PyTorch..."
 }
 
@@ -92,7 +100,8 @@ try {
         throw "pip install failed with exit code $LASTEXITCODE"
     }
     Write-Host "PyTorch installed successfully."
-} catch {
+}
+catch {
     Write-Error "ERROR: Failed to install PyTorch. If using a CUDA version, please ensure the NVIDIA drivers and toolkit are correctly installed."
     Write-Error "PIP ERROR: $_"
     exit 1
@@ -103,13 +112,15 @@ Write-Host "Step 6: Installing other dependencies from requirements.txt..."
 try {
     if ($CudaVersion) {
         & $PythonExe -m pip install -r (Join-Path $ProjectRoot "backend/requirements.txt") --extra-index-url $IndexUrl
-    } else {
+    }
+    else {
         & $PythonExe -m pip install -r (Join-Path $ProjectRoot "backend/requirements.txt") --extra-index-url "https://download.pytorch.org/whl/cpu"
     }
     if ($LASTEXITCODE -ne 0) {
         throw "pip install failed with exit code $LASTEXITCODE"
     }
-} catch {
+}
+catch {
     Write-Error "ERROR: Failed to install dependencies from requirements.txt."
     Write-Error "PIP ERROR: $_"
     exit 1
@@ -130,10 +141,12 @@ if ($CudaVersion) {
         & $PythonExe -m pip install flash-attn --no-build-isolation
         if ($LASTEXITCODE -ne 0) {
             Write-Warning "flash-attn installation failed or skipped (this is common on Windows due to compiler requirements). The system will still function using default PyTorch SDPA."
-        } else {
+        }
+        else {
             Write-Host "flash-attn installed successfully."
         }
-    } catch {
+    }
+    catch {
         Write-Warning "Could not install flash-attn. Error: $_"
     }
 }
@@ -150,22 +163,26 @@ if ($DiffracturePath) {
         try {
             if ($CudaVersion) {
                 & $PythonExe -m pip install -e $DiffracturePath --extra-index-url $IndexUrl
-            } else {
+            }
+            else {
                 & $PythonExe -m pip install -e $DiffracturePath --extra-index-url "https://download.pytorch.org/whl/cpu"
             }
             if ($LASTEXITCODE -ne 0) {
                 throw "pip install failed with exit code $LASTEXITCODE"
             }
             Write-Host "Diffracture installed successfully."
-        } catch {
+        }
+        catch {
             Write-Error "ERROR: Failed to install Diffracture."
             Write-Error "PIP ERROR: $_"
             exit 1
         }
-    } else {
+    }
+    else {
         Write-Host "Diffracture directory found, but no setup.py or pyproject.toml present. Skipping."
     }
-} else {
+}
+else {
     Write-Host "Diffracture not found at ../Diffracture. Skipping."
 }
 
