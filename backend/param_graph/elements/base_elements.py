@@ -2,7 +2,7 @@ from __future__ import annotations
 from dataclasses import dataclass, asdict, field, fields, replace
 from pathlib import Path
 from time import time
-from typing import Iterator, Tuple, Any
+from typing import Iterator, Tuple
 
 from utils.uid import path_from_uid
 
@@ -18,18 +18,6 @@ class GraphElement:
     id: str
     type: str
     created: int = field(default_factory=lambda: int(time()))
-
-    def __replace__(self, **changes: Any) -> GraphElement:
-        field_vals = {}
-        for f in fields(self):
-            if f.init:
-                field_vals[f.name] = getattr(self, f.name)
-        for k, v in changes.items():
-            if k in field_vals:
-                field_vals[k] = v
-            else:
-                raise TypeError(f"Unexpected keyword argument {k!r} in function {self.__class__.__name__}.__replace__")
-        return self.__class__(**field_vals)
 
     def to_dict(self):
         return asdict(self)

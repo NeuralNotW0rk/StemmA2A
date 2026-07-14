@@ -679,7 +679,7 @@ def _get_cached_uid(file_path: str, uid_generator) -> str:
 # StyleGAN2 Model Adapter Implementation
 # ==============================================================================
 
-class StyleGANAdapter(ModelAdapter[StyleGANModel]):
+class StyleGANAdapter(ModelAdapter):
     def __init__(self) -> None:
         super().__init__()
         self.name = 'stylegan2'
@@ -752,13 +752,12 @@ class StyleGANAdapter(ModelAdapter[StyleGANModel]):
         )
 
     def load_model(self, info: StyleGANModel, verify: bool = True):
-        if self.model and self.model_info and self.model_info.id == info.id:
+        if self.model and self.model_info.id == info.id:
             return
 
         if self.model:
             del self.model
             self.model = None
-            self.model_info = None
 
         size = info.config.get("size", 256)
         channel_multiplier = info.config.get("channel_multiplier", 2)
@@ -846,7 +845,6 @@ class StyleGANAdapter(ModelAdapter[StyleGANModel]):
         if self.model:
             del self.model
             self.model = None
-            self.model_info = None
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 

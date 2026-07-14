@@ -18,11 +18,6 @@
     "svelte"
   ],
   "python.analysis.extraPaths": [
-    "backend",
-    "../Diffracture"
-  ],
-  "python.autoComplete.extraPaths": [
-    "backend",
     "../Diffracture"
   ],
   "python-envs.pythonProjects": [

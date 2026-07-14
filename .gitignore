@@ -18,8 +18,3 @@ data
 
 # Shared models configuration
 backend/shared_models.json
-
-# Model UID caches
-model_uid_cache.json
-**/model_uid_cache.json
-

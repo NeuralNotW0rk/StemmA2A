@@ -28,7 +28,7 @@ class ParameterGraph:
             with open(data_path, 'r') as df:
                 data = json.load(df)
                 self.project_name = data['project_name']
-                self.G = nx.cytoscape_graph(data['graph'])
+                self.G = nx.cytoscape.cytoscape_graph(data['graph'])
                 
                 # Clean up legacy edge nodes that were added as nodes
                 legacy_edge_nodes = [
@@ -57,20 +57,20 @@ class ParameterGraph:
         with open(data_path, 'w') as df:
             data = {
                 'project_name': self.project_name,
-                'graph': nx.cytoscape_data(self.G, ident='id'),
+                'graph': nx.cytoscape.cytoscape_data(self.G, ident='id'),
             }
             df.write(json.dumps(data, indent=4))
 
     def to_json(self, mode='batch'):
         if mode == 'batch':
-            return nx.cytoscape_data(self.G, ident='id')
+            return nx.cytoscape.cytoscape_data(self.G, ident='id')
         elif mode == 'cluster':
             C = nx.DiGraph()
             for node, data in self.G.nodes(data=True):
                 if data['type'] == 'audio':
                     C.add_node(node, **data)
                     C.nodes[node].pop('parent', None)
-            return nx.cytoscape_data(C, ident='id')
+            return nx.cytoscape.cytoscape_data(C, ident='id')
         
     def add_element(self, ele: GraphElement):
         ele_attrs = ele.to_dict()
