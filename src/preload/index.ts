@@ -27,12 +27,16 @@ const api = {
     ipcRenderer.invoke('getAdapterConfig', adapterName),
   getAudioFile: (audio_id: string): Promise<string | null> =>
     ipcRenderer.invoke('getAudioFile', audio_id),
+  getImageFile: (image_id: string): Promise<string | null> =>
+    ipcRenderer.invoke('getImageFile', image_id),
   openFile: (options: unknown) => ipcRenderer.invoke('dialog:openFile', options),
   getSharedModels: () => ipcRenderer.invoke('getSharedModels'),
   importModel: (data: unknown) => ipcRenderer.invoke('importModel', data),
   exportAudio: (names: string[], exportDir?: string): Promise<any> =>
     ipcRenderer.invoke('exportAudio', names, exportDir),
   registerGrating: (data: unknown) => ipcRenderer.invoke('registerGrating', data),
+  getModelLayers: (modelId: string) => ipcRenderer.invoke('getModelLayers', modelId),
+  createGrating: (data: unknown) => ipcRenderer.invoke('createGrating', data),
   getOperations: (): Promise<any> => ipcRenderer.invoke('getOperations'),
   executeOperation: (data: unknown): Promise<any> => ipcRenderer.invoke('executeOperation', data),
   removeElement: (elementId: string, keepChildren?: boolean): Promise<any> =>

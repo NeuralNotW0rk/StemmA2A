@@ -1,5 +1,5 @@
 
-export type ActionPanelView = 'import-model' | 'import-grating' | 'removal' | 'batching' | 'operation' | 'none'
+export type ActionPanelView = 'import-model' | 'import-grating' | 'removal' | 'batching' | 'operation' | 'bend' | 'none'
 
 export type ElementData = Record<string, unknown>
 

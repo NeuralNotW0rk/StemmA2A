@@ -20,3 +20,8 @@
 ## 3. General Code Quality
 - **Line Endings:** Always use LF (`\n`) for line endings for all files (especially `.svelte`, `.ts`, `.js`, `.json`, etc.). Do not introduce CRLF (`\r\n`).
 - **Linting & Formatting:** Ensure code adheres strictly to ESLint and Prettier configurations. Do not bypass linting rules using `eslint-disable` unless absolutely necessary and documented with a comment.
+
+## 4. Enforce Fail-Fast (No Silent Fallbacks)
+- **Do Not Mask Failures:** Avoid implementing silent fallback blocks or catch-default statements that hide underlying errors (e.g., catching file loading errors and returning random or empty data).
+- **Raise Errors Immediately:** If a resource (like a model weight file or configuration) is missing, malformed, or incompatible, raise an explicit exception immediately during the validation/import phase so that the developer gets instant feedback.
+- **Fail Fast over Graceful Degradation:** Prefer throwing descriptive errors early rather than attempting to recover silently with degraded or mocked behaviors, which complicates downstream debugging.

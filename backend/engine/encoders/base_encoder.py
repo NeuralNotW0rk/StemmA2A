@@ -3,8 +3,8 @@ import torch
 
 class Encoder(ABC):
     @abstractmethod
-    def get_embedding(self, audio_path: str) -> torch.Tensor:
+    def get_embedding(self, file_path: str) -> torch.Tensor:
         """
-        Get the embedding for an audio file.
+        Get the embedding for a file (audio, image, etc.).
         """
         pass

@@ -15,3 +15,6 @@ backend/_exports
 backend/.venv
 data
 *.tmp
+
+# Shared models configuration
+backend/shared_models.json

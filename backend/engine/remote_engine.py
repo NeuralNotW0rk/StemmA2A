@@ -13,8 +13,8 @@ from utils.uid import path_from_uid
 
 
 class RemoteEngine(Engine):
-    def __init__(self, remote_url: str, timeout: int = 300):
-        super().__init__()
+    def __init__(self, remote_url: str, timeout: int = 300, data_root: str = None):
+        super().__init__(data_root=data_root)
         self.remote_url = remote_url
         self.timeout = timeout
         self.cf_client_id = os.environ.get("CF_ACCESS_CLIENT_ID")
@@ -243,3 +243,43 @@ class RemoteEngine(Engine):
                         print(f"Warning: failed to clean up temp zip file {temp_zip_path}: {e}")
         
         return True
+
+    async def get_model_layers(self, model_element: GraphElement) -> list[dict]:
+        """Inspects the model element locally to extract layers, avoiding remote queries for anonymized CAS."""
+        adapter_class = self._get_adapter_class(model_element.adapter)
+        adapter = adapter_class()
+        try:
+            adapter.load_model(model_element)
+            if not hasattr(adapter, 'model') or adapter.model is None:
+                raise RuntimeError("Model failed to load or does not expose PyTorch module.")
+            return self._extract_model_layers(adapter.model)
+        finally:
+            if hasattr(adapter, 'cleanup'):
+                adapter.cleanup()
+
+    async def cluster_features(self, model_element: GraphElement, address: str, num_clusters: int) -> list[int]:
+        """Dispatches feature clustering to the remote engine via the async job queue."""
+        # 1. Execute the remote job
+        job_id = await self.execute(
+            "cluster_features",
+            model_element=model_element,
+            address=address,
+            num_clusters=num_clusters
+        )
+        
+        # 2. Poll for job completion
+        print(f"RemoteEngine: submitted cluster_features job {job_id}. Polling for completion...")
+        while True:
+            status = await self.get_job_status(job_id)
+            status_name = status.get("status")
+            if status_name == "completed":
+                result = status.get("result")
+                if not isinstance(result, list):
+                    raise Exception("Remote server did not return the cluster map list.")
+                return result
+            elif status_name == "failed":
+                raise Exception(f"Remote feature clustering job failed: {status.get('error')}")
+            elif status_name == "cancelled":
+                raise Exception("Remote feature clustering job was cancelled.")
+                
+            await asyncio.sleep(1.0)

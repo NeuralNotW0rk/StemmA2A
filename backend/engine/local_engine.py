@@ -20,18 +20,11 @@ from utils.audio import save_audio
 
 from diffracture import Actant
 from diffracture.topology.grating import Grating as DiffractureGrating
+from diffracture.analysis.clustering import FeatureClusteringPipeline
 
 class LocalEngine(Engine):
     def __init__(self, data_root: str = None):
-        super().__init__()
-        cache_capacity = int(os.environ.get("MODEL_CACHE_CAPACITY", 1))
-        self.model_cache = ModelCache(capacity=cache_capacity)
-        
-        if data_root:
-            self.data_root = Path(data_root)
-        else:
-            # If no data root is provided, create a temporary one for this session.
-            self.data_root = Path(tempfile.mkdtemp())
+        super().__init__(data_root=data_root)
         
         self.data_root.mkdir(parents=True, exist_ok=True)
         print(f"LocalEngine initialized with data root: {self.data_root}")
@@ -46,14 +39,26 @@ class LocalEngine(Engine):
 
         # --- Encoder Setup ---
         self.encoder = None
+        self.encoders = {}
         try:
             from .encoders.clap_encoder import CLAPEncoder
-            self.encoder = CLAPEncoder()
+            clap = CLAPEncoder()
+            self.encoder = clap
+            self.encoders["clap"] = clap
             print("CLAPEncoder initialized.")
         except ImportError:
-            print("CLAPEncoder not found, skipping embedding functionality.")
+            print("CLAPEncoder not found, skipping CLAP embedding functionality.")
         except Exception as e:
             print(f"Error initializing CLAPEncoder: {e}")
+
+        try:
+            from .encoders.clip_encoder import CLIPEncoder
+            self.encoders["clip"] = CLIPEncoder()
+            print("CLIPEncoder initialized.")
+        except ImportError:
+            print("CLIPEncoder not found, skipping CLIP embedding functionality.")
+        except Exception as e:
+            print(f"Error initializing CLIPEncoder: {e}")
 
         # --- Shared Models Setup ---
         self.shared_models = []
@@ -81,23 +86,82 @@ class LocalEngine(Engine):
             print(f"Failed to read shared models config: {e}")
             return
 
+        is_container = os.environ.get("RUNNING_IN_CONTAINER") == "true"
+        if is_container:
+            data_path_str = os.environ.get("CONTAINER_DATA_PATH")
+            if not data_path_str:
+                data_path_str = "/data"
+        else:
+            data_path_str = os.environ.get("LOCAL_DATA_PATH")
+            if not data_path_str:
+                data_path_str = "~/.stemma2a_data"
+        data_cache_root = Path(data_path_str).expanduser()
+
         for entry in config_data:
+            # Support copy-pasting a node directly from graph.json (which wraps attributes in a 'data' key)
+            if "data" in entry and isinstance(entry["data"], dict):
+                entry = entry["data"]
+
             name = entry.get("name")
             adapter_name = entry.get("adapter")
             model_type = entry.get("model_type")
-            config_file_path = entry.get("config_path")
-            checkpoint_file_path = entry.get("checkpoint_path")
-            encoder_file_path = entry.get("encoder_path")
 
-            if not name or not adapter_name or not config_file_path or not checkpoint_file_path:
+            # Extract checkpoint details
+            checkpoint_entry = entry.get("checkpoint")
+            if isinstance(checkpoint_entry, dict):
+                checkpoint_uid = checkpoint_entry.get("uid")
+                checkpoint_file_path = checkpoint_entry.get("path")
+            else:
+                checkpoint_uid = entry.get("checkpoint_uid")
+                checkpoint_file_path = entry.get("checkpoint_path")
+
+            # Extract config details
+            config_entry = entry.get("config")
+            if isinstance(config_entry, dict):
+                config = config_entry
+                config_file_path = None
+            else:
+                config = None
+                config_uid = entry.get("config_uid")
+                config_file_path = entry.get("config_path")
+                if config_uid:
+                    config_file_path = str(data_cache_root / path_from_uid(config_uid))
+
+            # Extract encoder details
+            encoder_entry = entry.get("encoder")
+            if isinstance(encoder_entry, dict):
+                encoder_uid = encoder_entry.get("uid")
+                encoder_file_path = encoder_entry.get("path")
+            else:
+                encoder_uid = entry.get("encoder_uid")
+                encoder_file_path = entry.get("encoder_path")
+
+            # Resolve paths using CAS UIDs if provided and they exist in the cache
+            if checkpoint_uid:
+                checkpoint_resolved = data_cache_root / path_from_uid(checkpoint_uid)
+                if checkpoint_resolved.exists():
+                    checkpoint_file_path = str(checkpoint_resolved)
+            if encoder_uid:
+                encoder_resolved = data_cache_root / path_from_uid(encoder_uid)
+                if encoder_resolved.exists():
+                    encoder_file_path = str(encoder_resolved)
+
+            # StyleGAN config is optional inside the adapter, but let's keep it optional in entry if specified
+            is_stylegan = adapter_name == "stylegan2"
+            has_inline_config = config is not None
+            
+            if not name or not adapter_name or not checkpoint_file_path or (not is_stylegan and not config_file_path and not has_inline_config):
                 print(f"Skipping invalid shared model entry: {entry}")
                 continue
 
-            if not os.path.exists(config_file_path):
+            if config_file_path and not os.path.exists(config_file_path):
                 print(f"Skipping shared model '{name}' because config path does not exist: {config_file_path}")
                 continue
             if not os.path.exists(checkpoint_file_path):
                 print(f"Skipping shared model '{name}' because checkpoint path does not exist: {checkpoint_file_path}")
+                continue
+            if encoder_file_path and not os.path.exists(encoder_file_path):
+                print(f"Skipping shared model '{name}' because encoder path does not exist: {encoder_file_path}")
                 continue
 
             try:
@@ -109,6 +173,7 @@ class LocalEngine(Engine):
                     checkpoint_path=checkpoint_file_path,
                     encoder_path=encoder_file_path,
                     model_type=model_type,
+                    config=config,
                 )
 
                 # Cache/symlink assets
@@ -172,8 +237,30 @@ class LocalEngine(Engine):
                 strength = grating_strengths[i] if grating_strengths and i < len(grating_strengths) else 1.0
                 print(f"Engine: Applying Grating '{grating_element.id}' with strength {strength}...")
                 grating = DiffractureGrating.load(grating_element.file.path)
+                
+                # Apply dynamic overrides if present in the payload and resolve cluster indices
+                gratings_input = kwargs.get("gratings") or []
+                for g_in in gratings_input:
+                    if g_in.get("id") == grating_element.id:
+                        overrides = g_in.get("overrides")
+                        if overrides is None:
+                            overrides = []
+                            g_in["overrides"] = overrides
+                        
+                        override_map = {o.get("address"): o for o in overrides}
+                        
+                        # Process all overrides to apply them to grating first
+                        for override in overrides:
+                            addr = override.get("address")
+                            meta_overrides = override.get("metadata") or {}
+                            override["metadata"] = meta_overrides
+                            
+                            # Apply the override to grating first so we get the merged values
+                            if addr in grating.nodes:
+                                grating.nodes[addr].metadata.update(meta_overrides)
+                
                 grating.to(model_device)
-                adapter.actant.activate(grating, injection_strategy="graft", strength=strength)
+                adapter.actant.activate(grating, injection_strategy="hook", strength=strength)
 
         artifact, tensor = adapter.generate(**kwargs)
 
@@ -181,18 +268,31 @@ class LocalEngine(Engine):
             # Revert the model to its original state so it can remain safely in the cache
             adapter.actant.deactivate()
 
-        sample_rate = adapter.model_info.config["sample_rate"]
-
         local_path = self.data_root / path_from_uid(artifact.id)
         local_path.parent.mkdir(parents=True, exist_ok=True)
 
-        save_audio(tensor, local_path, sample_rate, format="wav")
+        if artifact.type == "image":
+            from torchvision.utils import save_image
+            save_image(tensor, local_path, format="png", normalize=True, value_range=(-1, 1))
+        else:
+            sample_rate = adapter.model_info.config["sample_rate"]
+            save_audio(tensor, local_path, sample_rate, format="wav")
 
         # Update the artifact with the persistent path
         new_file_asset = replace(artifact.file, path=str(local_path))
         artifact = replace(artifact, file=new_file_asset)
 
-        if self.encoder:
+        # Include grating parameters in the artifact context
+        if hasattr(artifact, 'context'):
+            new_context = dict(artifact.context) if artifact.context is not None else {}
+            gratings = kwargs.get("gratings")
+            if gratings:
+                new_context["gratings"] = gratings
+            if grating_elements:
+                new_context["grating_ids"] = [el.id for el in grating_elements]
+            artifact = replace(artifact, context=new_context)
+
+        if self.encoder and artifact.type == "audio":
             try:
                 embedding = self.encoder.get_embedding(local_path)
                 new_embeddings = artifact.embeddings.copy()
@@ -338,31 +438,83 @@ class LocalEngine(Engine):
             self.job_statuses[job_id] = {"status": "cancelled"}
             print(f"Job {job_id} cancellation requested. Status set to 'cancelled'.")
 
-    async def update_embedding(self, audio_artifact: GraphElement) -> GraphElement:
+    async def update_embedding(self, artifact: GraphElement) -> GraphElement:
         """
-        Calculates and adds embeddings to an existing audio artifact.
+        Calculates and adds embeddings to an existing audio or image artifact.
         """
-        if not self.encoder:
-            print("CLAPEncoder not available, cannot update embeddings.")
-            return audio_artifact
+        if not artifact or not hasattr(artifact, 'file'):
+            raise ValueError("A valid artifact with a file asset is required.")
 
-        if not audio_artifact or not hasattr(audio_artifact, 'file'):
-            raise ValueError("A valid audio artifact with a file asset is required.")
+        artifact_type = getattr(artifact, 'type', None)
+        if artifact_type == "audio":
+            encoder = self.encoders.get("clap")
+            encoder_name = "CLAPEncoder"
+        elif artifact_type == "image":
+            encoder = self.encoders.get("clip")
+            encoder_name = "CLIPEncoder"
+        else:
+            print(f"Unsupported artifact type '{artifact_type}' for embedding update.")
+            return artifact
 
-        audio_path = Path(audio_artifact.file.path)
-        if not audio_path.exists():
-            raise FileNotFoundError(f"Audio file not found at {audio_path}")
+        if not encoder:
+            print(f"{encoder_name} not available, cannot update embeddings.")
+            return artifact
+
+        file_path = Path(artifact.file.path)
+        if not file_path.exists():
+            raise FileNotFoundError(f"File not found at {file_path}")
 
         try:
-            embedding = self.encoder.get_embedding(str(audio_path))
+            embedding = encoder.get_embedding(str(file_path))
             
-            new_embeddings = audio_artifact.embeddings.copy()
-            new_embeddings[self.encoder.embedding_type] = embedding.tolist()
+            new_embeddings = getattr(artifact, 'embeddings', {}).copy()
+            new_embeddings[encoder.embedding_type] = embedding.tolist()
             
-            updated_artifact = replace(audio_artifact, embeddings=new_embeddings)
-
+            updated_artifact = replace(artifact, embeddings=new_embeddings)
             return updated_artifact
 
         except Exception as e:
             print(f"Error during embedding update: {e}")
             return audio_artifact
+
+    async def get_model_layers(self, model_element: GraphElement) -> list[dict]:
+        adapter_class = self._get_adapter_class(model_element.adapter)
+        adapter = self.model_cache.get(model_element, adapter_class)
+        if not hasattr(adapter, 'model') or adapter.model is None:
+            raise RuntimeError("Model failed to load or does not expose PyTorch module.")
+            
+        return self._extract_model_layers(adapter.model)
+
+    async def cluster_features(self, model_element: GraphElement, address: str, num_clusters: int) -> list[int]:
+        adapter_class = self._get_adapter_class(model_element.adapter)
+        adapter = self.model_cache.get(model_element, adapter_class)
+        
+
+        print(f"Running dynamic FeatureClusteringPipeline on layer '{address}' with {num_clusters} clusters...")
+        pipeline = FeatureClusteringPipeline(adapter.model, strategy_name="cnn")
+        pipeline.collector.start_collecting([address])
+        
+        # Run dummy forward passes on StyleGAN/StableAudio to collect activations
+        with torch.no_grad():
+            if "stylegan2" in model_element.adapter:
+                for _ in range(16):
+                    z = torch.randn(1, 512, device=adapter.device)
+                    adapter.model([z], truncation=1.0)
+            elif "stable_audio" in model_element.adapter:
+                pass
+                
+        pipeline.collector.stop_collecting()
+        
+        # For 2D convolutions/ModulatedConv2d, channel_dim is 1
+        channel_dim = 1
+        # Run the clustering pipeline
+        cluster_map = pipeline.run_clustering(
+            address=address,
+            channel_dim=channel_dim,
+            num_clusters=num_clusters,
+            epochs=5,
+            device=str(adapter.device)
+        )
+        return cluster_map
+
+

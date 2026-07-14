@@ -273,6 +273,32 @@ app.whenReady().then(async () => {
     return await response.json()
   })
 
+  ipcMain.handle('getModelLayers', async (_event, modelId) => {
+    const response = await fetchWithAuth(`${BACKEND_URL}/model/${modelId}/layers`)
+    if (!response.ok) {
+      const errorBody = await response.text()
+      throw new Error(
+        `Failed to get model layers. Status: ${response.status}. Error: ${errorBody}`
+      )
+    }
+    return await response.json()
+  })
+
+  ipcMain.handle('createGrating', async (_event, gratingData) => {
+    const response = await fetchWithAuth(`${BACKEND_URL}/create_grating`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(gratingData)
+    })
+    if (!response.ok) {
+      const errorBody = await response.text()
+      throw new Error(
+        `Failed to create grating. Status: ${response.status}. Error: ${errorBody}`
+      )
+    }
+    return await response.json()
+  })
+
   ipcMain.handle('exportAudio', async (_event, names: string[], exportDir?: string) => {
     const response = await fetchWithAuth(`${BACKEND_URL}/export`, {
       method: 'POST',
@@ -558,6 +584,38 @@ app.whenReady().then(async () => {
       return { buffer: audioBuffer, mimeType: mimeType }
     } catch (error) {
       console.error('Failed to get audio file:', error)
+      return null
+    }
+  })
+
+  ipcMain.handle('getImageFile', async (_event, image_id) => {
+    try {
+      // 1. Get path from Python backend
+      const pathResponse = await fetchWithAuth(`${BACKEND_URL}/image_path/${image_id}`)
+      if (!pathResponse.ok) {
+        const errorBody = await pathResponse.text()
+        throw new Error(
+          `Failed to get image path from backend. Status: ${pathResponse.status}. Body: ${errorBody}`
+        )
+      }
+      const { path: imagePath } = await pathResponse.json()
+
+      // 2. Read the file into a buffer
+      const imageBuffer = await fs.readFile(imagePath)
+
+      // 3. Determine MIME type
+      const extension = extname(imagePath).toLowerCase()
+      let mimeType = 'image/png' // Default
+      if (extension === '.jpg' || extension === '.jpeg') {
+        mimeType = 'image/jpeg'
+      } else if (extension === '.webp') {
+        mimeType = 'image/webp'
+      }
+
+      // 4. Return buffer and mime type
+      return { buffer: imageBuffer, mimeType: mimeType }
+    } catch (error) {
+      console.error('Failed to get image file:', error)
       return null
     }
   })

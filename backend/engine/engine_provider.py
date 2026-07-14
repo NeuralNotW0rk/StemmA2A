@@ -10,7 +10,7 @@ class EngineProvider:
         if EngineProvider._engine_instance is None:
             if remote_url:
                 timeout = int(os.environ.get("REMOTE_ENGINE_TIMEOUT", 300))
-                EngineProvider._engine_instance = RemoteEngine(remote_url, timeout=timeout)
+                EngineProvider._engine_instance = RemoteEngine(remote_url, timeout=timeout, data_root=data_root)
             else:
                 EngineProvider._engine_instance = LocalEngine(data_root=data_root)
     

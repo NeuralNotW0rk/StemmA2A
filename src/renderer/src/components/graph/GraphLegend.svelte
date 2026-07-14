@@ -4,8 +4,8 @@
     <span>Models</span>
   </div>
   <div class="legend-item">
-    <div class="legend-color audio"></div>
-    <span>Audio</span>
+    <div class="legend-color media"></div>
+    <span>Media</span>
   </div>
   <div class="legend-item">
     <div class="legend-color batch"></div>
@@ -50,8 +50,8 @@
   .model {
     background-color: var(--graph-gradient-3);
   }
-  .audio {
-    background-color: var(--graph-audio);
+  .media {
+    background-color: var(--graph-media);
   }
   .batch {
     background-color: var(--graph-batch);

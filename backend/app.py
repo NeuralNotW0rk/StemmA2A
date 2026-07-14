@@ -25,7 +25,9 @@ from pydantic import ValidationError
 
 from param_graph.graph import ParameterGraph
 from param_graph.elements.models.base_model_element import Model
+from param_graph.elements.models.stylegan_element import StyleGANModel
 from param_graph.elements.artifacts.audio_element import Audio
+from param_graph.elements.artifacts.image_element import Image
 from param_graph.elements.artifacts.grating_element import Grating
 from param_graph.elements.artifacts.latent_element import Latent
 from param_graph.elements.base_elements import Asset
@@ -35,6 +37,7 @@ from param_graph.elements.local_path import LocalPath
 from param_graph.utils import save_artifact_asset, resolve_element
 from engine.engine_provider import EngineProvider
 from engine.encoders.clap_encoder import CLAPEncoder
+from engine.encoders.clip_encoder import CLIPEncoder
 from utils.audio import load_audio, save_audio_to_buffer, save_audio
 from utils.form import create_dynamic_model
 from utils.uid import XXH3_64, path_from_uid
@@ -97,7 +100,8 @@ device_accelerator = torch.device(device_type_accelerator)
 # A default sample rate for processing and playback
 APP_SAMPLE_RATE = 48000
 SIMILARITY_GROUPS = {
-    "audio": "clap"
+    "audio": "clap",
+    "image": "clip"
 }
 
 param_graph: ParameterGraph = None
@@ -424,6 +428,16 @@ async def import_model():
         if "model_element" in data:
             model_dict = data["model_element"]
             model_artifact = resolve_element(model_dict)
+            
+            # Populate layers if missing
+            if not getattr(model_artifact, 'layers', None):
+                try:
+                    engine = engine_provider.get_engine()
+                    layers = await engine.get_model_layers(model_artifact)
+                    model_artifact.layers = layers
+                except Exception as layer_err:
+                    print(f"Warning: Failed to extract layers for shared model during registration: {layer_err}")
+
             with graph_lock:
                 param_graph.add_element(model_artifact)
                 param_graph.save()
@@ -438,15 +452,30 @@ async def import_model():
         config_path = data.get("config_path")
         checkpoint_path = data.get("checkpoint_path")
 
-        if not config_path or not checkpoint_path:
-            return jsonify({"error": "config_path and checkpoint_path are required"}), 400
+        if adapter_name == "stylegan2":
+            if not checkpoint_path:
+                return jsonify({"error": "checkpoint_path is required"}), 400
+            config_path = config_path or ""
+        else:
+            if not config_path or not checkpoint_path:
+                return jsonify({"error": "config_path and checkpoint_path are required"}), 400
 
         # Paths are now expected to be absolute and valid on the server's filesystem.
-        data["config_path"] = str(Path(config_path))
+        if config_path:
+            data["config_path"] = str(Path(config_path))
+        else:
+            data["config_path"] = ""
         data["checkpoint_path"] = str(Path(checkpoint_path))
 
         engine = engine_provider.get_engine()
         model_artifact = await engine.register_model(adapter_name, **data)
+
+        # Populate layers list on model registration
+        try:
+            layers = await engine.get_model_layers(model_artifact)
+            model_artifact.layers = layers
+        except Exception as layer_err:
+            print(f"Warning: Failed to extract layers during model registration: {layer_err}")
 
         with graph_lock:
             param_graph.add_element(model_artifact)
@@ -522,6 +551,80 @@ def register_grating():
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
+@app.route("/model/<model_id>/layers", methods=["GET"])
+async def get_model_layers(model_id):
+    """Inspects a model node and returns a list of its candidate layers for bending."""
+    if param_graph is None or engine_provider is None:
+        return jsonify({"error": "No project loaded"}), 400
+        
+    try:
+        model_element = param_graph.get_element(model_id)
+        if not isinstance(model_element, Model):
+            return jsonify({"error": f"Node '{model_id}' is not a valid model."}), 400
+            
+        # Return cached layers directly if they exist
+        if hasattr(model_element, 'layers') and model_element.layers is not None:
+            return jsonify({
+                "success": True,
+                "layers": model_element.layers
+            }), 200
+            
+        engine = engine_provider.get_engine()
+        layers = await engine.get_model_layers(model_element)
+        
+        # Cache the layers in the graph element
+        with graph_lock:
+            param_graph.update_element(model_id, {"layers": layers})
+            param_graph.save()
+            
+        return jsonify({
+            "success": True,
+            "layers": layers
+        }), 200
+        
+    except Exception as e:
+        print(f"Failed to inspect model layers: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/create_grating", methods=["POST"])
+async def create_grating():
+    """Dynamically creates a new Bending Grating and registers it in the project graph."""
+    if param_graph is None or engine_provider is None:
+        return jsonify({"error": "No project loaded"}), 400
+        
+    try:
+        data = request.get_json()
+        model_id = data.get("model_id")
+        grating_name = data.get("name", "New Grating")
+        elements_input = data.get("elements", [])
+        
+        if not model_id or not elements_input:
+            return jsonify({"error": "model_id and elements list are required"}), 400
+            
+        model_element = param_graph.get_element(model_id)
+        if not isinstance(model_element, Model):
+            return jsonify({"error": f"Node '{model_id}' is not a valid model."}), 400
+            
+        engine = engine_provider.get_engine()
+        grating_artifact = await engine.create_grating(model_element, grating_name, elements_input)
+        
+        with graph_lock:
+            param_graph.add_element(grating_artifact)
+            param_graph.link(model_element, grating_artifact, relation='binds_to')
+            param_graph.save()
+            
+        return jsonify({
+            "success": True,
+            "message": "Grating created successfully",
+            "grating": grating_artifact.to_dict()
+        }), 200
+        
+    except Exception as e:
+        print(f"Failed to create grating: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
 @app.route("/adapter_config/<adapter_name>", methods=["GET"])
 async def get_adapter_config(adapter_name):
     """Get the form configuration for a specific adapter."""
@@ -572,9 +675,11 @@ async def get_job_status(job_id):
             output_dir = param_graph.root / "generate"
             final_artifact = save_artifact_asset(temp_artifact, output_dir, asset_name="file")
             
-            # Ensure context is populated for labelling
-            if hasattr(final_artifact, 'context') and not final_artifact.context:
-                final_artifact = replace(final_artifact, context=job_context.get("validated_params", {}))
+            # Ensure context is populated for labelling, and merge job-level validated params (like model_id, operation, gratings)
+            if hasattr(final_artifact, 'context'):
+                current_context = final_artifact.context or {}
+                merged_context = {**job_context.get("validated_params", {}), **current_context}
+                final_artifact = replace(final_artifact, context=merged_context)
             
             with graph_lock:
                 param_graph.add_element(final_artifact)
@@ -956,6 +1061,7 @@ async def _dispatch_async_operation(data):
         engine_args = {"model_element": model_element, **node_engine_args}
         if gratings:
             engine_args["grating_strengths"] = grating_strengths
+            engine_args["gratings"] = gratings
         
         # If gratings are used, the model is implied, so we omit the direct edge
         if "grating_elements" in node_engine_args and node_engine_args["grating_elements"]:
@@ -1215,6 +1321,28 @@ def resolve_audio_path(audio_id):
             
     return None
 
+def resolve_image_path(image_id):
+    """Gets the image path, falling back to the project cache if the original file was deleted."""
+    if param_graph is None:
+        return None
+        
+    path_str = param_graph.get_path_from_id(image_id, relative=False)
+    if not path_str:
+        return None
+        
+    original_path = Path(path_str)
+    if original_path.exists():
+        return original_path
+        
+    # Check fallback cache
+    cache_dir = Path(param_graph.root) / "cache"
+    if cache_dir.exists():
+        cached_files = list(cache_dir.glob(f"{image_id}.*"))
+        if cached_files:
+            return cached_files[0]
+            
+    return None
+
 def cache_used_audio(audio_id):
     """Copies an external audio file to the local project cache if it's not already there."""
     if param_graph is None:
@@ -1273,35 +1401,116 @@ def update_batch_labels(batch_id: str):
         except Exception:
             contexts.append({})
     
+    def diff_recursive(vals: list):
+        if not vals:
+            return None, []
+        if all(v == vals[0] for v in vals):
+            return vals[0], [None] * len(vals)
+            
+        if all(isinstance(v, dict) for v in vals):
+            shared_dict = {}
+            diff_dicts = [{} for _ in vals]
+            all_keys = set().union(*(d.keys() for d in vals))
+            
+            for k in all_keys:
+                if not all(k in d for d in vals):
+                    for idx, d in enumerate(vals):
+                        if k in d:
+                            diff_dicts[idx][k] = d[k]
+                    continue
+                    
+                k_vals = [d[k] for d in vals]
+                shared_k, diff_k = diff_recursive(k_vals)
+                
+                if shared_k is not None or any(dk is not None for dk in diff_k):
+                    if shared_k is not None:
+                        shared_dict[k] = shared_k
+                    for idx, dk in enumerate(diff_k):
+                        if dk is not None:
+                            diff_dicts[idx][k] = dk
+            return (shared_dict if shared_dict else None), (diff_dicts if any(d for d in diff_dicts) else [None]*len(vals))
+            
+        if all(isinstance(v, list) for v in vals) and all(len(v) == len(vals[0]) for v in vals):
+            shared_list = []
+            diff_lists = [[] for _ in vals]
+            has_diff = False
+            
+            for i in range(len(vals[0])):
+                i_vals = [v[i] for v in vals]
+                shared_i, diff_i = diff_recursive(i_vals)
+                
+                shared_list.append(shared_i)
+                for idx, di in enumerate(diff_i):
+                    diff_lists[idx].append(di)
+                if any(di is not None for di in diff_i):
+                    has_diff = True
+                    
+            if has_diff:
+                return (shared_list if any(x is not None for x in shared_list) else None), diff_lists
+            else:
+                return shared_list, [None] * len(vals)
+                
+        return None, vals
+
+    def flatten_diff(val, path="") -> list[tuple[str, any]]:
+        if isinstance(val, dict):
+            items = []
+            for k, v in val.items():
+                new_path = f"{path}.{k}" if path else k
+                items.extend(flatten_diff(v, new_path))
+            return items
+        elif isinstance(val, list):
+            items = []
+            for i, v in enumerate(val):
+                if v is not None:
+                    new_path = f"{path}[{i}]"
+                    items.extend(flatten_diff(v, new_path))
+            return items
+        else:
+            return [(path, val)]
+
+    def clean_path(path: str, ctx: dict) -> str:
+        import re
+        def replace_override(match):
+            g_idx = int(match.group(1))
+            o_idx = int(match.group(2))
+            try:
+                return ctx["gratings"][g_idx]["overrides"][o_idx]["address"]
+            except (KeyError, IndexError, TypeError):
+                return f"grating[{g_idx}]"
+                
+        path = re.sub(r'gratings\[(\d+)\]\.overrides\[(\d+)\]', replace_override, path)
+        path = path.replace('.metadata.', '.')
+        path = re.sub(r'gratings\[(\d+)\]', r'grating[\1]', path)
+        return path
+
+    shared_context = {}
+    member_diffs_list = [{} for _ in member_ids]
+    
     if contexts:
-        # Find intersection of all keys and values
-        common_keys = set.intersection(*(set(c.keys()) for c in contexts))
-        for k in common_keys:
-            if all(c[k] == contexts[0][k] for c in contexts):
-                shared_context[k] = contexts[0][k]
-        
-        # Calculate what makes each member unique
-        for m_id, ctx in zip(member_ids, contexts):
-            diff = {k: v for k, v in ctx.items() if k not in shared_context or shared_context[k] != v}
-            member_diffs[m_id] = diff
+        shared_res, diff_res = diff_recursive(contexts)
+        shared_context = shared_res or {}
+        member_diffs_list = [d or {} for d in diff_res]
 
     print(f"Shared context: {shared_context}")
-    print(f"Member diffs: {member_diffs}")
+    print(f"Member diffs list: {member_diffs_list}")
 
     # Generate a label for the batch based on the shared prompt/context
-    member_type = batch_node_attrs.get('member_type') or 'element'
-    batch_alias = shared_context.get('prompt', f"{member_type.capitalize()} Batch")
+    batch_alias = shared_context.get('prompt', "Artifact Batch")
     if len(str(batch_alias)) > 30:
         batch_alias = str(batch_alias)[:27] + "..."
 
     param_graph.update_element(batch_id, {"shared_context": shared_context, "alias": batch_alias})
 
     # Update member aliases
-    for member_id in member_ids:
-        diff = member_diffs.get(member_id, {})
-        diff_items = [f"{k}: {v}" for k, v in diff.items()]
+    for member_id, ctx, diff_dict in zip(member_ids, contexts, member_diffs_list):
+        flat_diff = flatten_diff(diff_dict)
+        diff_items = []
+        for path, val in flat_diff:
+            cleaned = clean_path(path, ctx)
+            diff_items.append(f"{cleaned}: {val}")
+            
         diff_label = "\n".join(diff_items) if diff_items else "Base"
-        
         if len(diff_label) > 40:
             diff_label = diff_label[:37] + "..."
             
@@ -1335,8 +1544,9 @@ def trigger_embedding_update(force_recalculate=False, background=True):
 
     def update_embeddings_task():
         try:
-            # Instantiate encoder only once per task run
-            clap_encoder = CLAPEncoder()
+            # Instantiate encoders lazily per task run
+            clap_encoder = None
+            clip_encoder = None
             
             # Initialize interrogator for semantic edge labels
             interrogator = SemanticInterrogator(device_accelerator)
@@ -1346,6 +1556,20 @@ def trigger_embedding_update(force_recalculate=False, background=True):
                 interrogator.load_bank_from_disk(str(bank_path))
             
             for group_type, embedding_type in SIMILARITY_GROUPS.items():
+                if group_type == "audio":
+                    if clap_encoder is None:
+                        clap_encoder = CLAPEncoder()
+                    encoder = clap_encoder
+                    resolver = resolve_audio_path
+                elif group_type == "image":
+                    if clip_encoder is None:
+                        clip_encoder = CLIPEncoder()
+                    encoder = clip_encoder
+                    resolver = resolve_image_path
+                else:
+                    print(f"Unknown similarity group type: {group_type}")
+                    continue
+
                 # 1. Compute embeddings ONLY for nodes that need them
                 with graph_lock:
                     nodes_to_process = []
@@ -1360,11 +1584,11 @@ def trigger_embedding_update(force_recalculate=False, background=True):
                         continue
 
                     try:
-                        audio_path = resolve_audio_path(node)
-                        if not audio_path:
+                        file_path = resolver(node)
+                        if not file_path:
                             continue
                             
-                        embedding = clap_encoder.get_embedding(str(audio_path))
+                        embedding = encoder.get_embedding(str(file_path))
                         
                         with graph_lock:
                             current_data = param_graph.G.nodes[node]
@@ -1433,7 +1657,7 @@ def trigger_embedding_update(force_recalculate=False, background=True):
                                 continue
                                 
                             source_label = ""
-                            if has_label_bank:
+                            if has_label_bank and group_type == "audio":
                                 emb_B = all_latents[neighbor_idx]
                                 diff_A_to_B = torch.tensor(emb_B - emb_A, dtype=torch.float32)
                                 
@@ -1460,7 +1684,7 @@ def trigger_embedding_update(force_recalculate=False, background=True):
                                 continue  # Prevent overlap on small graphs
                             
                             source_label = ""
-                            if has_label_bank:
+                            if has_label_bank and group_type == "audio":
                                 emb_B = all_latents[neighbor_idx]
                                 diff_A_to_B = torch.tensor(emb_B - emb_A, dtype=torch.float32)
                                 
@@ -1652,6 +1876,48 @@ def serve_audio(audio_id):
         
     except Exception as e:
         print(f"Failed to serve audio: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/image_path/<string:image_id>", methods=["GET"])
+def get_image_path(image_id):
+    """Get the absolute path of an image file"""
+    print(f"get_image_path called with id: {image_id}")
+    if param_graph is None:
+        print("get_image_path: param_graph is None. No project loaded.")
+        return jsonify({"error": "No project loaded"}), 400
+    
+    try:
+        image_path = resolve_image_path(image_id)
+        print(f"Path resolved for graph: {image_path}")
+
+        if not image_path:
+            print(f"Image file not found for id: {image_id}")
+            return jsonify({"error": "Image file not found"}), 404
+        
+        print(f"Returning image path: {image_path}")
+        return jsonify({"path": str(image_path)})
+        
+    except Exception as e:
+        print(f"Failed to get image path: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/image/<string:image_id>", methods=["GET"])
+def serve_image(image_id):
+    """Serve image files"""
+    if param_graph is None:
+        return jsonify({"error": "No project loaded"}), 400
+    
+    try:
+        image_path = resolve_image_path(image_id)
+        if not image_path:
+            return jsonify({"error": "Image file not found"}), 404
+        
+        return send_file(str(image_path))
+        
+    except Exception as e:
+        print(f"Failed to serve image: {e}")
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 

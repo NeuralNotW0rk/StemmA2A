@@ -11,3 +11,4 @@ class StableAudioModel(Model):
     model_type: str | None = None
     encoder: Asset | None = None
     adapter: str = 'stable_audio_tools'
+    output_type: str = 'audio'

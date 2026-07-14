@@ -10,7 +10,11 @@
   }>()
 
   let isRemoving = $state(false)
-  let keepChildren = $state(true)
+
+  const initialElements = Array.isArray($selectedForRemoval)
+    ? $selectedForRemoval
+    : [$selectedForRemoval].filter(Boolean)
+  let keepChildren = $state(!initialElements.some((el) => el.type === 'batch'))
 
   let elements = $derived(
     Array.isArray($selectedForRemoval) ? $selectedForRemoval : [$selectedForRemoval].filter(Boolean)

@@ -1,0 +1,53 @@
+{
+    "import": [
+        {
+            "name": "name",
+            "label": "Model Name",
+            "type": "text",
+            "defaultValue": "StyleGAN2",
+            "placeholder": "Enter custom model name..."
+        },
+        {
+            "name": "checkpoint_path",
+            "label": "Checkpoint Path",
+            "type": "file",
+            "required": true,
+            "filters": [
+                { "name": "PyTorch Checkpoint", "extensions": ["pt", "pth", "pkl"] }
+            ],
+            "placeholder": "Select StyleGAN2 checkpoint file (.pt or .pkl)"
+        }
+    ],
+    "generate": [
+        {
+            "name": "seed",
+            "label": "Seed",
+            "type": "integer",
+            "defaultValue": 0,
+            "placeholder": "Enter seed",
+            "randomizable": true
+        },
+        {
+            "name": "truncation",
+            "label": "Truncation Value",
+            "type": "float",
+            "defaultValue": 0.7,
+            "placeholder": "Between 0.0 and 1.0 (truncation trick)"
+        },
+        {
+            "name": "randomize_noise",
+            "label": "Randomize Noise",
+            "type": "boolean",
+            "defaultValue": false
+        }
+    ],
+    "invert": [
+        {
+            "name": "steps",
+            "label": "Optimization Steps",
+            "type": "integer",
+            "defaultValue": 100,
+            "placeholder": "Projection step count"
+        }
+    ]
+}

@@ -32,13 +32,13 @@ class CLAPEncoder(Encoder):
             try:
                 # Fast path: attempt to load from local cache to bypass network overhead
                 self._processor = ClapProcessor.from_pretrained(model_id, local_files_only=True)
-                self._model = ClapModel.from_pretrained(model_id, local_files_only=True, use_safetensors=True).to(self.device)
+                self._model = ClapModel.from_pretrained(model_id, local_files_only=True).to(self.device)
                 print("CLAP model loaded directly from local cache.")
             except Exception:
                 # Fallback: go online to download and cache if not fully present
                 print("CLAP model not fully cached. Downloading from Hugging Face Hub...")
                 self._processor = ClapProcessor.from_pretrained(model_id)
-                self._model = ClapModel.from_pretrained(model_id, use_safetensors=True).to(self.device)
+                self._model = ClapModel.from_pretrained(model_id).to(self.device)
                 print("CLAP model downloaded and loaded.")
                 
             self._model.eval()
@@ -51,11 +51,11 @@ class CLAPEncoder(Encoder):
     def embedding_type(self) -> str:
         return "clap"
 
-    def get_embedding(self, audio_path: str) -> torch.Tensor:
+    def get_embedding(self, file_path: str) -> torch.Tensor:
         if self._model is None:
             self.load_model()
             
-        waveform, sr = torchaudio.load(audio_path)
+        waveform, sr = torchaudio.load(file_path)
         
         # Convert to mono if necessary
         if waveform.shape[0] > 1:

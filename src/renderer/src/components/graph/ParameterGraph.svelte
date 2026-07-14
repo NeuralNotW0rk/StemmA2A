@@ -25,6 +25,7 @@
     onaudioSelect?: (data: any) => void
     onexport?: (data: { names: string[] }) => void
     onimportGrating?: (data: any) => void
+    onbendModel?: (data: any) => void
     onrescanSource?: (name: string) => void
     onnodeSelect?: (data: any) => void
     onedgeSelect?: (data: any) => void
@@ -52,6 +53,7 @@
     operations: operationsProp = [],
     onaudioSelect,
     onimportGrating,
+    onbendModel,
     onrescanSource,
     onexport,
     onnodeSelect,
@@ -89,6 +91,28 @@
   let operationsError: string | null = $state(null)
   let lastCxtTapPosition = { x: 0, y: 0 }
 
+  const displayType = $derived(
+    targetNode
+      ? targetNode.data('type') === 'batch'
+        ? targetNode.data('member_type')
+        : targetNode.data('type')
+      : null
+  )
+
+  const outputType = $derived.by(() => {
+    if (!targetNode) return null
+    if (targetNode.data('type') === 'batch') {
+      const memberIds = targetNode.data('member_ids') || []
+      if (memberIds.length > 0 && cy) {
+        const firstMember = cy.getElementById(memberIds[0])
+        if (firstMember && firstMember.length > 0) {
+          return firstMember.data('output_type') || null
+        }
+      }
+    }
+    return targetNode.data('output_type') || null
+  })
+
   let filteredOperations = $derived.by(() => {
     const initiatorType = targetNode ? targetNode.data('type') : null
     let ops = operations
@@ -106,9 +130,8 @@
     }
     if (!searchQuery) return ops
     const q = searchQuery.toLowerCase()
-    const displayType = targetNode ? (targetNode.data('type') === 'batch' ? targetNode.data('member_type') : targetNode.data('type')) : null
     return ops.filter((op) => {
-      const display = getOpDisplayProps(op, displayType)
+      const display = getOpDisplayProps(op, displayType, outputType)
       return (
         display.name.toLowerCase().includes(q) ||
         (display.description && display.description.toLowerCase().includes(q))
@@ -118,8 +141,22 @@
 
   function getOpDisplayProps(
     op: any,
-    initiatorType?: string
+    initiatorType?: string,
+    outputType?: string
   ): { name: string; description?: string } {
+    if (op.name === 'generate' && initiatorType === 'model') {
+      if (outputType) {
+        return {
+          name: `Generate ${toTitleCase(outputType)}`,
+          description: `Generate ${outputType} from the selected model`
+        }
+      } else {
+        return {
+          name: `Generate`,
+          description: op.description || `Generate output from the selected model`
+        }
+      }
+    }
     if (initiatorType && op.context_overrides && op.context_overrides[initiatorType]) {
       const override = op.context_overrides[initiatorType]
       return {
@@ -474,7 +511,7 @@
       if (!targetOpName) {
         // Fallback for legacy elements
         const type = ele.data('type')
-        if (type === 'audio') {
+        if (type === 'audio' || type === 'image') {
           targetOpName = 'generate'
         } else if (type === 'latent') {
           targetOpName = 'invert'
@@ -517,6 +554,10 @@
 
     const modelNodeCommands = (ele: Singular): Command[] => [
       ...getPinnedOperations(ele),
+      {
+        content: 'Bend',
+        select: () => onbendModel?.(ele.data())
+      },
       {
         content: 'Import Grating',
         select: () => onimportGrating?.(ele.data())
@@ -563,6 +604,34 @@
         content: 'Export',
         select: () => onexport?.({ names: [ele.data('name')] })
       })
+
+      specificCommands.push({
+        content: 'Operations...',
+        select: () => openOperationsMenu(ele)
+      })
+
+      // Inherits from nodeCommands
+      return [...specificCommands, ...nodeCommands(ele)]
+    }
+
+    const imageNodeCommands = (ele: Singular): Command[] => {
+      const specificCommands: Command[] = [
+        {
+          content: ele.data('favorite') ? 'Unfavorite' : 'Favorite',
+          select: () => {
+            const newState = !ele.data('favorite')
+            ele.data('favorite', newState)
+            ontoggleFavorite?.(ele.data(), newState)
+          }
+        }
+      ]
+
+      const replicateCmd = getReplicateCommand(ele)
+      if (replicateCmd) {
+        specificCommands.push(replicateCmd)
+      }
+
+      specificCommands.push(...getPinnedOperations(ele))
 
       specificCommands.push({
         content: 'Operations...',
@@ -649,6 +718,8 @@
             return gratingNodeCommands(ele)
           case 'audio':
             return audioNodeCommands(ele)
+          case 'image':
+            return imageNodeCommands(ele)
           case 'external':
             return externalNodeCommands(ele)
           case 'local_path':
@@ -1283,7 +1354,7 @@
         {:else}
           <ul class="operations-list">
             {#each filteredOperations as op, index (op.name)}
-              {@const display = getOpDisplayProps(op, targetNode?.data('type'))}
+              {@const display = getOpDisplayProps(op, displayType, outputType)}
               <li class="operation-item" class:active={index === selectedIndex}>
                 <button
                   type="button"

@@ -129,11 +129,15 @@ class StableAudioAdapter(ModelAdapter):
         config_path = kwargs.get("config_path")
         checkpoint_path = kwargs.get("checkpoint_path")
         encoder_path = kwargs.get("encoder_path")
+        config = kwargs.get("config")
 
-        # Load the config
-        with open(config_path, 'r') as cf:
-            config_json = cf.read()
-            config = json.loads(config_json)
+        if config is None:
+            if not config_path:
+                raise ValueError("Either 'config' dictionary or 'config_path' must be provided.")
+            # Load the config
+            with open(config_path, 'r') as cf:
+                config_json = cf.read()
+                config = json.loads(config_json)
 
         # Generate the checkpoint ID using the persistent cache or by computing it
         checkpoint_uid = _get_cached_uid(checkpoint_path, self.uid_generator)
