@@ -82,8 +82,8 @@ Write-Host "Step 5: Installing PyTorch..."
 $arguments = @("install", "torch==2.7.1", "torchvision==0.22.1", "torchaudio==2.7.1", "--default-timeout=1000", "--retries", "20", "--extra-index-url", "https://download.pytorch.org/whl/cpu")
 
 if ($CudaVersion) {
-    # Force cuda version 12.1 for now
-    $CudaVersion = "12.1"
+    # Force cuda version 12.6 for now (as PyTorch 2.7.1 is built for CUDA 12.6/12.8, not 12.1)
+    $CudaVersion = "12.6"
     $CudaVersionFormatted = "cu" + $CudaVersion.Replace(".", "")
     $IndexUrl = "https://download.pytorch.org/whl/$CudaVersionFormatted"
     # Overwrite arguments for CUDA
