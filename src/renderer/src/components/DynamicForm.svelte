@@ -8,12 +8,14 @@
     config,
     formData = $bindable(),
     isFormValid = $bindable(),
-    contextData = null
+    contextData = null,
+    allowSequences = true
   } = $props<{
     config: FormConfig
     formData: Record<string, unknown>
     isFormValid: boolean
     contextData?: Record<string, unknown> | null
+    allowSequences?: boolean
   }>()
 
   const batchFields = new SvelteSet<string>()
@@ -271,7 +273,7 @@
   }}
 >
   {#each visibleFields as field (field.name)}
-    {@const isBatch = batchFields.has(field.name)}
+    {@const isBatch = allowSequences && field.allowSequence !== false && batchFields.has(field.name)}
     <div class="form-field">
       {#if field.type === 'textarea'}
         <label for={field.name}>{field.label}</label>
@@ -307,7 +309,7 @@
               <button
                 type="button"
                 class="action-btn"
-                onclick={() => randomizeField(field.name, field.type)}
+                onclick={(): void => randomizeField(field.name, field.type)}
                 title="Randomize value"
               >
                 <svg
@@ -336,14 +338,16 @@
                 >
               </button>
             {/if}
-            <button
-              type="button"
-              class="action-btn"
-              onclick={() => toggleBatchMode(field.name)}
-              title="Toggle sequence mode"
-            >
-              {isBatch ? '−' : '+'}
-            </button>
+            {#if allowSequences && field.allowSequence !== false}
+              <button
+                type="button"
+                class="action-btn"
+                onclick={(): void => toggleBatchMode(field.name)}
+                title="Toggle sequence mode"
+              >
+                {isBatch ? '−' : '+'}
+              </button>
+            {/if}
           </div>
         </div>
       {:else if field.type === 'float'}
@@ -370,7 +374,7 @@
               <button
                 type="button"
                 class="action-btn"
-                onclick={() => randomizeField(field.name, field.type)}
+                onclick={(): void => randomizeField(field.name, field.type)}
                 title="Randomize value"
               >
                 <svg
@@ -399,14 +403,16 @@
                 >
               </button>
             {/if}
-            <button
-              type="button"
-              class="action-btn"
-              onclick={() => toggleBatchMode(field.name)}
-              title="Toggle sequence mode"
-            >
-              {isBatch ? '−' : '+'}
-            </button>
+            {#if allowSequences && field.allowSequence !== false}
+              <button
+                type="button"
+                class="action-btn"
+                onclick={(): void => toggleBatchMode(field.name)}
+                title="Toggle sequence mode"
+              >
+                {isBatch ? '−' : '+'}
+              </button>
+            {/if}
           </div>
         </div>
       {:else if field.type === 'boolean'}
@@ -452,7 +458,7 @@
               <button
                 type="button"
                 class="action-btn"
-                onclick={() => randomizeField(field.name, field.type)}
+                onclick={(): void => randomizeField(field.name, field.type)}
                 title="Randomize value"
               >
                 <svg
@@ -481,14 +487,16 @@
                 >
               </button>
             {/if}
-            <button
-              type="button"
-              class="action-btn"
-              onclick={() => toggleBatchMode(field.name)}
-              title="Toggle sequence mode"
-            >
-              {isBatch ? '−' : '+'}
-            </button>
+            {#if allowSequences && field.allowSequence !== false}
+              <button
+                type="button"
+                class="action-btn"
+                onclick={(): void => toggleBatchMode(field.name)}
+                title="Toggle sequence mode"
+              >
+                {isBatch ? '−' : '+'}
+              </button>
+            {/if}
           </div>
         </div>
       {:else if field.type === 'node'}
@@ -496,7 +504,8 @@
           label={field.label}
           filter={field.filter}
           bind:node={formData[field.name] as ModelData | AudioData}
-          onBatchToggle={(active) => {
+          allowBatchToggle={allowSequences && field.allowSequence !== false}
+          onBatchToggle={(active: boolean): void => {
             if (active) {
               batchFields.add(field.name)
             } else {
@@ -529,7 +538,7 @@
               <button
                 type="button"
                 class="action-btn"
-                onclick={() => randomizeField(field.name, field.type)}
+                onclick={(): void => randomizeField(field.name, field.type)}
                 title="Randomize value"
               >
                 <svg
@@ -558,14 +567,16 @@
                 >
               </button>
             {/if}
-            <button
-              type="button"
-              class="action-btn"
-              onclick={() => toggleBatchMode(field.name)}
-              title="Toggle sequence mode"
-            >
-              {isBatch ? '−' : '+'}
-            </button>
+            {#if allowSequences && field.allowSequence !== false}
+              <button
+                type="button"
+                class="action-btn"
+                onclick={(): void => toggleBatchMode(field.name)}
+                title="Toggle sequence mode"
+              >
+                {isBatch ? '−' : '+'}
+              </button>
+            {/if}
           </div>
         </div>
       {/if}

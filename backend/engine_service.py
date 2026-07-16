@@ -12,6 +12,7 @@ from pydantic import ValidationError
 
 from engine.engine_provider import EngineProvider
 from utils.uid import path_from_uid
+from utils.migrations import run_global_migrations
 from param_graph.registry import resolve_element
 
 
@@ -43,6 +44,7 @@ else:
 
 data_cache_root = Path(data_path_str).expanduser()
 data_cache_root.mkdir(parents=True, exist_ok=True)
+run_global_migrations(data_cache_root)
 
 # Set Hugging Face cache directory to a persistent location within the data cache.
 # This prevents models like CLAP from redownloading every time the container restarts.

@@ -9,7 +9,9 @@ from pathlib import Path
 def path_from_uid(uid: str, depth: int = 1) -> Path:
     """Shards a UID into N levels of directories."""
     parts = [uid[i:i+2] for i in range(0, depth * 2, 2)]
-    return Path(*parts, uid)
+    return Path("cache", *parts, uid)
+
+
 
 
 class UIDMismatchError(Exception):

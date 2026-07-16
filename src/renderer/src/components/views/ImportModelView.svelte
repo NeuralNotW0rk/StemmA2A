@@ -263,7 +263,7 @@
       {#if currentAdapterConfig?.description}
         <p class="adapter-description">{currentAdapterConfig.description}</p>
       {/if}
-      <DynamicForm config={formFields} bind:formData bind:isFormValid />
+      <DynamicForm config={formFields} bind:formData bind:isFormValid allowSequences={false} />
     {/if}
   </div>
 

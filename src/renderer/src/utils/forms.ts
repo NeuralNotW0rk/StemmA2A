@@ -26,6 +26,7 @@ export interface FormField {
     show_if: Record<string, any>;
     value: any;
   }[];
+  allowSequence?: boolean;
 }
 
 export type FormConfig = FormField[];

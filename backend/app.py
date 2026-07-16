@@ -41,6 +41,7 @@ from engine.encoders.clip_encoder import CLIPEncoder
 from utils.audio import load_audio, save_audio_to_buffer, save_audio
 from utils.form import create_dynamic_model
 from utils.uid import XXH3_64, path_from_uid
+from utils.migrations import run_global_migrations, run_project_migrations
 from utils.semantic_interrogation import SemanticInterrogator
 
 from operations.registry import SyncRegistry
@@ -77,6 +78,7 @@ else:
 
 data_cache_root = Path(data_path_str).expanduser()
 data_cache_root.mkdir(parents=True, exist_ok=True)
+run_global_migrations(data_cache_root)
 
 # Set Hugging Face cache directory to a persistent location within the data cache.
 hf_cache_dir = data_cache_root / "huggingface"
@@ -171,6 +173,7 @@ def load_project():
             return jsonify({"error": f"Project path '{project_path_str}' does not exist or is not a directory."}), 404
 
         with graph_lock:
+            run_project_migrations(project_path)
             param_graph = ParameterGraph(str(project_path))
             initialize_engine(str(project_path))
 
