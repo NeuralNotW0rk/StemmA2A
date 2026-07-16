@@ -842,8 +842,10 @@ class StableAudioAdapter(ModelAdapter):
             
             import stable_audio_tools.inference.generation as sat_gen
             import k_diffusion.sampling as k_samp
+            import stable_audio_tools.inference.k_diffusion.sampling as sat_k_samp
             
             original_sample_heun = k_samp.sample_heun
+            original_sat_sample_heun = sat_k_samp.sample_heun
             
             def capture_denoiser(denoiser, x, sigmas, *args, **kwargs_inner):
                 captured_denoiser.append(denoiser)
@@ -851,6 +853,7 @@ class StableAudioAdapter(ModelAdapter):
                 raise InterruptedError("Captured denoiser")
                 
             k_samp.sample_heun = capture_denoiser
+            sat_k_samp.sample_heun = capture_denoiser
             
             try:
                 sat_gen.generate_diffusion_cond(
@@ -868,6 +871,7 @@ class StableAudioAdapter(ModelAdapter):
                 pass
             finally:
                 k_samp.sample_heun = original_sample_heun
+                sat_k_samp.sample_heun = original_sat_sample_heun
                 
             if not captured_denoiser:
                 raise RuntimeError("Failed to capture denoiser from generation pipeline.")

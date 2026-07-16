@@ -2,6 +2,7 @@ services:
   execution-engine:
     build:
       context: ./backend
+    image: execution-engine:latest
     shm_size: '8gb'
     deploy:
       resources:
