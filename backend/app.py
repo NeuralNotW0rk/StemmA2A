@@ -3,6 +3,7 @@ import io
 import traceback
 from pathlib import Path
 import os
+import json
 import random
 import string
 import logging
@@ -491,6 +492,82 @@ async def import_model():
         
     except Exception as e:
         print(f"Failed to import model: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/export_shared_model", methods=["POST"])
+async def export_shared_model():
+    """
+    Exports a registered model to a shared_models_dummy.json file
+    in the active project's root folder.
+    """
+    if param_graph is None:
+        return jsonify({"error": "No project loaded"}), 400
+
+    try:
+        data = request.get_json()
+        model_id = data.get("model_id")
+        if not model_id:
+            return jsonify({"error": "model_id is required"}), 400
+
+        with graph_lock:
+            model = param_graph.get_element(model_id)
+            if not model:
+                return jsonify({"error": f"Model '{model_id}' not found in parameter graph"}), 404
+
+            # Prepare the entry
+            entry = {
+                "name": model.name,
+                "adapter": model.adapter,
+                "model_type": getattr(model, "model_type", None) or model.adapter,
+                "checkpoint_uid": model.checkpoint.uid if hasattr(model, "checkpoint") and model.checkpoint else None,
+                "checkpoint_path": model.checkpoint.path if hasattr(model, "checkpoint") and model.checkpoint else None,
+                "checkpoint_size": model.checkpoint.size if hasattr(model, "checkpoint") and model.checkpoint else None,
+                "config": model.config
+            }
+
+            # Optional encoder details for StableAudioModel
+            encoder = getattr(model, "encoder", None)
+            if encoder:
+                entry["encoder_uid"] = encoder.uid
+                entry["encoder_path"] = encoder.path
+                entry["encoder_size"] = encoder.size
+
+            # Load/Update shared_models_dummy.json in the project root
+            dummy_config_path = Path(param_graph.root) / "shared_models_dummy.json"
+            shared_models_list = []
+            if dummy_config_path.exists():
+                try:
+                    with open(dummy_config_path, "r") as f:
+                        shared_models_list = json.load(f)
+                        if not isinstance(shared_models_list, list):
+                            shared_models_list = []
+                except Exception as e:
+                    print(f"Warning: Failed to read existing dummy config: {e}. Resetting.")
+                    shared_models_list = []
+
+            # Check if this model checkpoint_uid already exists in the dummy list, if so replace it
+            found = False
+            for idx, existing in enumerate(shared_models_list):
+                existing_uid = existing.get("checkpoint_uid") or existing.get("checkpoint", {}).get("uid")
+                if existing_uid == entry["checkpoint_uid"]:
+                    shared_models_list[idx] = entry
+                    found = True
+                    break
+
+            if not found:
+                shared_models_list.append(entry)
+
+            with open(dummy_config_path, "w") as f:
+                json.dump(shared_models_list, f, indent=2)
+
+        return jsonify({
+            "message": f"Successfully exported shared model entry to {dummy_config_path.name}",
+            "success": True
+        })
+
+    except Exception as e:
+        print(f"Failed to export shared model: {e}")
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 

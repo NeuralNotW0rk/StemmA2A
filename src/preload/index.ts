@@ -57,7 +57,9 @@ const api = {
   saveNodePositions: (projectName: string, positions: Record<string, { x: number; y: number }>): Promise<void> =>
     ipcRenderer.invoke('saveNodePositions', projectName, positions),
   updateElement: (elementName: string, attributes: Record<string, any>): Promise<any> =>
-    ipcRenderer.invoke('updateElement', elementName, attributes)
+    ipcRenderer.invoke('updateElement', elementName, attributes),
+  exportSharedModel: (modelId: string): Promise<unknown> =>
+    ipcRenderer.invoke('exportSharedModel', modelId)
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to

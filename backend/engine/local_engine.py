@@ -108,12 +108,15 @@ class LocalEngine(Engine):
 
             # Extract checkpoint details
             checkpoint_entry = entry.get("checkpoint")
+            checkpoint_size = None
             if isinstance(checkpoint_entry, dict):
                 checkpoint_uid = checkpoint_entry.get("uid")
                 checkpoint_file_path = checkpoint_entry.get("path")
+                checkpoint_size = checkpoint_entry.get("size")
             else:
                 checkpoint_uid = entry.get("checkpoint_uid")
                 checkpoint_file_path = entry.get("checkpoint_path")
+                checkpoint_size = entry.get("checkpoint_size")
 
             # Extract config details
             config_entry = entry.get("config")
@@ -129,12 +132,15 @@ class LocalEngine(Engine):
 
             # Extract encoder details
             encoder_entry = entry.get("encoder")
+            encoder_size = None
             if isinstance(encoder_entry, dict):
                 encoder_uid = encoder_entry.get("uid")
                 encoder_file_path = encoder_entry.get("path")
+                encoder_size = encoder_entry.get("size")
             else:
                 encoder_uid = entry.get("encoder_uid")
                 encoder_file_path = entry.get("encoder_path")
+                encoder_size = entry.get("encoder_size")
 
             # Resolve paths using CAS UIDs if provided and they exist in the cache
             if checkpoint_uid:
@@ -174,6 +180,10 @@ class LocalEngine(Engine):
                     encoder_path=encoder_file_path,
                     model_type=model_type,
                     config=config,
+                    checkpoint_uid=checkpoint_uid,
+                    checkpoint_size=checkpoint_size,
+                    encoder_uid=encoder_uid,
+                    encoder_size=encoder_size,
                 )
 
 

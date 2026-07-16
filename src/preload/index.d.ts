@@ -47,6 +47,7 @@ interface API {
   cancelJob: (jobId: string) => Promise<any>
   saveNodePositions: (projectName: string, positions: Record<string, { x: number; y: number }>) => Promise<void>
   updateElement: (elementName: string, attributes: Record<string, any>) => Promise<any>
+  exportSharedModel: (modelId: string) => Promise<unknown>
 }
 
 declare global {

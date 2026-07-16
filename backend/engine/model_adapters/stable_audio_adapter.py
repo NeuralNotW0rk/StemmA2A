@@ -84,9 +84,16 @@ class StableAudioAdapter(ModelAdapter):
                 config_json = cf.read()
                 config = json.loads(config_json)
 
+        checkpoint_uid = kwargs.get("checkpoint_uid")
+        checkpoint_size = kwargs.get("checkpoint_size")
+        encoder_uid = kwargs.get("encoder_uid")
+        encoder_size = kwargs.get("encoder_size")
+
         # Generate the checkpoint ID using the persistent cache or by computing it
-        checkpoint_uid = _compute_stable_audio_uid(checkpoint_path, self.uid_generator)
-        checkpoint_size = get_path_size(Path(checkpoint_path))
+        if not checkpoint_uid:
+            checkpoint_uid = _compute_stable_audio_uid(checkpoint_path, self.uid_generator)
+        if not checkpoint_size:
+            checkpoint_size = get_path_size(Path(checkpoint_path))
         checkpoint_asset = Asset(
             path=checkpoint_path,
             uid=checkpoint_uid,
@@ -97,8 +104,10 @@ class StableAudioAdapter(ModelAdapter):
         if encoder_path:
             encoder_dir = Path(encoder_path)
             if encoder_dir.is_dir():
-                encoder_uid = _hash_directory(encoder_dir)
-                encoder_size = get_path_size(encoder_dir)
+                if not encoder_uid:
+                    encoder_uid = _hash_directory(encoder_dir)
+                if not encoder_size:
+                    encoder_size = get_path_size(encoder_dir)
                 encoder_asset = Asset(
                     path=str(encoder_dir).replace("\\", "/"),
                     uid=encoder_uid,

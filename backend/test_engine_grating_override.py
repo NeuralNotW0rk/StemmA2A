@@ -1,4 +1,5 @@
 import os
+import json
 import asyncio
 import tempfile
 from pathlib import Path
@@ -284,6 +285,30 @@ def test_flask_endpoints():
         assert m1_alias == "conv1.conv.cluster: 1", f"Expected 'conv1.conv.cluster: 1', got '{m1_alias}'"
         assert m2_alias == "conv1.conv.cluster: 2", f"Expected 'conv1.conv.cluster: 2', got '{m2_alias}'"
         print("Recursive batch member labeling verified successfully!")
+
+        # 4. Test POST /export_shared_model
+        print("Testing POST /export_shared_model...")
+        export_payload = {
+            "model_id": model_info.id
+        }
+        resp = client.post("/export_shared_model", json=export_payload)
+        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
+        export_data = resp.get_json()
+        assert export_data["success"] is True
+        assert "Successfully exported" in export_data["message"]
+        
+        # Verify dummy config file was created
+        dummy_file = Path(tmp_dir) / "shared_models_dummy.json"
+        assert dummy_file.exists(), "shared_models_dummy.json was not created!"
+        with open(dummy_file, "r") as f:
+            dummy_data = json.load(f)
+            assert len(dummy_data) == 1
+            entry = dummy_data[0]
+            assert entry["name"] == "Test StyleGAN2"
+            assert entry["adapter"] == "stylegan2"
+            assert entry["checkpoint_uid"] == model_info.checkpoint.uid
+            assert "checkpoint_size" in entry
+        print("Export shared model config verified successfully!")
         
     finally:
         app_module.param_graph = old_graph

@@ -258,6 +258,21 @@ app.whenReady().then(async () => {
     return await response.json()
   })
 
+  ipcMain.handle('exportSharedModel', async (_event, modelId: string): Promise<unknown> => {
+    const response = await fetchWithAuth(`${BACKEND_URL}/export_shared_model`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model_id: modelId })
+    })
+    if (!response.ok) {
+      const errorBody = await response.text()
+      throw new Error(
+        `Failed to export shared model. Status: ${response.status}. Error: ${errorBody}`
+      )
+    }
+    return await response.json()
+  })
+
   ipcMain.handle('registerGrating', async (_event, gratingData) => {
     const response = await fetchWithAuth(`${BACKEND_URL}/register_grating`, {
       method: 'POST',

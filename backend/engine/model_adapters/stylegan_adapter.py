@@ -654,11 +654,14 @@ class StyleGANAdapter(ModelAdapter):
         # Defaults
         size = 256
         channel_multiplier = 2
-        checkpoint_uid = ""
+        checkpoint_uid = kwargs.get("checkpoint_uid")
+        size_bytes = kwargs.get("checkpoint_size")
 
         if checkpoint_path and os.path.exists(checkpoint_path) and os.path.isfile(checkpoint_path):
-            checkpoint_uid = _compute_stylegan_uid(checkpoint_path, self.uid_generator)
-            size_bytes = get_path_size(Path(checkpoint_path))
+            if not checkpoint_uid:
+                checkpoint_uid = _compute_stylegan_uid(checkpoint_path, self.uid_generator)
+            if not size_bytes:
+                size_bytes = get_path_size(Path(checkpoint_path))
             checkpoint_asset = Asset(
                 path=checkpoint_path,
                 uid=checkpoint_uid,
