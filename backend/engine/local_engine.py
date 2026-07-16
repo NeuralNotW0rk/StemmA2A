@@ -516,12 +516,41 @@ class LocalEngine(Engine):
                     z = torch.randn(1, 512, device=adapter.device)
                     adapter.model([z], truncation=1.0)
             elif "stable_audio" in model_element.adapter:
-                pass
+                adapter.generate(
+                    steps=2,
+                    cfg_scale=1.0,
+                    sigma_min=0.3,
+                    sigma_max=500.0,
+                    seed=42,
+                    k_sampler_type="dpmpp-2m",
+                    rf_sampler_type="euler",
+                    seconds_total=1,
+                    duration_padding_sec=0.0
+                )
                 
         pipeline.collector.stop_collecting()
         
-        # For 2D convolutions/ModulatedConv2d, channel_dim is 1
-        channel_dim = 1
+        # Determine the channel dimension dynamically based on layer type and activation shape
+        try:
+            module = adapter.model.get_submodule(address)
+        except AttributeError:
+            module = None
+
+        tensors = pipeline.collector.collected_activations.get(address, [])
+        if tensors and len(tensors) > 0:
+            sample_tensor = tensors[0]
+            if module is not None and isinstance(module, torch.nn.Linear):
+                channel_dim = sample_tensor.ndim - 1
+            elif module is not None and isinstance(module, (torch.nn.Conv1d, torch.nn.Conv2d, torch.nn.Conv3d)):
+                channel_dim = 1
+            else:
+                if sample_tensor.ndim == 4:
+                    channel_dim = 1
+                else:
+                    channel_dim = sample_tensor.ndim - 1
+        else:
+            channel_dim = 1
+
         # Run the clustering pipeline
         cluster_map = pipeline.run_clustering(
             address=address,
