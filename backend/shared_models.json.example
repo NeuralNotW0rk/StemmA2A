@@ -1,5 +1,6 @@
 [
   {
+<<<<<<< Updated upstream
     "name": "Example CAS-based StyleGAN2",
     "adapter": "stylegan2",
     "model_type": "stylegan2",
@@ -14,13 +15,194 @@
     "checkpoint_size": 256102830,
     "encoder_uid": "5e8df31cb7d6c29a.xxh3_64",
     "encoder_size": 18239401,
+=======
+    "name": "Stable Audio Open 1.0",
+    "adapter": "stable_audio_tools",
+    "model_type": "stable_audio_tools",
+    "checkpoint_uid": "7d82a2e5be93e774.xxh3_64",
+    "checkpoint_path": "C:\\Users\\griff\\Proton Drive\\griffinpage9\\My files\\Models\\stable_audio\\stable_audio_open_1\\model.safetensors",
+    "checkpoint_size": null,
+>>>>>>> Stashed changes
     "config": {
+      "model_type": "diffusion_cond",
+      "sample_size": 2097152,
       "sample_rate": 44100,
-      "sample_size": 131072,
+      "audio_channels": 2,
       "model": {
-        "precond": "k-diffusion"
+        "pretransform": {
+          "type": "autoencoder",
+          "iterate_batch": true,
+          "config": {
+            "encoder": {
+              "type": "oobleck",
+              "requires_grad": false,
+              "config": {
+                "in_channels": 2,
+                "channels": 128,
+                "c_mults": [
+                  1,
+                  2,
+                  4,
+                  8,
+                  16
+                ],
+                "strides": [
+                  2,
+                  4,
+                  4,
+                  8,
+                  8
+                ],
+                "latent_dim": 128,
+                "use_snake": true
+              }
+            },
+            "decoder": {
+              "type": "oobleck",
+              "config": {
+                "out_channels": 2,
+                "channels": 128,
+                "c_mults": [
+                  1,
+                  2,
+                  4,
+                  8,
+                  16
+                ],
+                "strides": [
+                  2,
+                  4,
+                  4,
+                  8,
+                  8
+                ],
+                "latent_dim": 64,
+                "use_snake": true,
+                "final_tanh": false
+              }
+            },
+            "bottleneck": {
+              "type": "vae"
+            },
+            "latent_dim": 64,
+            "downsampling_ratio": 2048,
+            "io_channels": 2
+          }
+        },
+        "conditioning": {
+          "configs": [
+            {
+              "id": "prompt",
+              "type": "t5",
+              "config": {
+                "t5_model_name": "t5-base",
+                "max_length": 128
+              }
+            },
+            {
+              "id": "seconds_start",
+              "type": "number",
+              "config": {
+                "min_val": 0,
+                "max_val": 512
+              }
+            },
+            {
+              "id": "seconds_total",
+              "type": "number",
+              "config": {
+                "min_val": 0,
+                "max_val": 512
+              }
+            }
+          ],
+          "cond_dim": 768
+        },
+        "diffusion": {
+          "cross_attention_cond_ids": [
+            "prompt",
+            "seconds_start",
+            "seconds_total"
+          ],
+          "global_cond_ids": [
+            "seconds_start",
+            "seconds_total"
+          ],
+          "type": "dit",
+          "config": {
+            "io_channels": 64,
+            "embed_dim": 1536,
+            "depth": 24,
+            "num_heads": 24,
+            "cond_token_dim": 768,
+            "global_cond_dim": 1536,
+            "project_cond_tokens": false,
+            "transformer_type": "continuous_transformer"
+          }
+        },
+        "io_channels": 64
+      },
+      "training": {
+        "use_ema": true,
+        "log_loss_info": false,
+        "optimizer_configs": {
+          "diffusion": {
+            "optimizer": {
+              "type": "AdamW",
+              "config": {
+                "lr": 5e-05,
+                "betas": [
+                  0.9,
+                  0.999
+                ],
+                "weight_decay": 0.001
+              }
+            },
+            "scheduler": {
+              "type": "InverseLR",
+              "config": {
+                "inv_gamma": 1000000,
+                "power": 0.5,
+                "warmup": 0.99
+              }
+            }
+          }
+        },
+        "demo": {
+          "demo_every": 2000,
+          "demo_steps": 250,
+          "num_demos": 4,
+          "demo_cond": [
+            {
+              "prompt": "Amen break 174 BPM",
+              "seconds_start": 0,
+              "seconds_total": 12
+            },
+            {
+              "prompt": "A beautiful orchestral symphony, classical music",
+              "seconds_start": 0,
+              "seconds_total": 160
+            },
+            {
+              "prompt": "Chill hip-hop beat, chillhop",
+              "seconds_start": 0,
+              "seconds_total": 190
+            },
+            {
+              "prompt": "A pop song about love and loss",
+              "seconds_start": 0,
+              "seconds_total": 180
+            }
+          ],
+          "demo_cfg_scales": [
+            3,
+            6,
+            9
+          ]
+        }
       }
     }
+<<<<<<< Updated upstream
   },
   {
     "name": "Example Path-based StyleGAN2",
@@ -28,5 +210,7 @@
     "model_type": "stylegan2",
     "checkpoint_path": "/app/models/stylegan2_checkpoint.pkl",
     "checkpoint_size": 364025622
+=======
+>>>>>>> Stashed changes
   }
 ]
