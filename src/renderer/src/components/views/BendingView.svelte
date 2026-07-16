@@ -1,20 +1,26 @@
 <!-- src/renderer/src/components/views/BendingView.svelte -->
 <script lang="ts">
-  import { onMount } from 'svelte'
   import NodeSelector from '../NodeSelector.svelte'
   import type { NodeData } from '../../utils/forms'
   import type { ErrorInfo } from '../../utils/types'
 
+  interface ModelLayer {
+    address: string
+    type: string
+    shape?: number[]
+  }
+
   let { modelElement, onclose, onrefresh, onError } = $props<{
-    modelElement: any
+    modelElement: NodeData | null
     onclose: () => void
     onrefresh: () => void
     onError: (error: ErrorInfo) => void
   }>()
 
+  let selectedModel = $state<NodeData | null>(modelElement)
   let name = $state('')
   let inProgress = $state(false)
-  let layers = $state<any[]>([])
+  let layers = $state<ModelLayer[]>([])
   let loadingLayers = $state(true)
 
   // Bending Element configuration state
@@ -25,43 +31,76 @@
   let performClustering = $state(false)
   let numClusters = $state(5)
 
-  let selectedLayer = $derived(layers.find((l) => l.address === selectedAddress))
+  let selectedLayer = $derived(layers.find((l): boolean => l.address === selectedAddress))
 
-  onMount(async () => {
-    if (!modelElement?.id) {
+  $effect((): (() => void) | void => {
+    const modelId = selectedModel?.id
+    if (!modelId) {
+      layers = []
+      selectedAddress = ''
       loadingLayers = false
       return
     }
 
-    try {
-      const response = await window.api.getModelLayers(modelElement.id)
-      if (response && response.success && Array.isArray(response.layers)) {
-        layers = response.layers
-        if (layers.length > 0) {
-          selectedAddress = layers[0].address
+    let isCurrent = true
+    loadingLayers = true
+
+    window.api.getModelLayers(modelId)
+      .then((response: unknown): void => {
+        if (!isCurrent) return
+        
+        if (
+          response &&
+          typeof response === 'object' &&
+          'success' in response &&
+          (response as Record<string, unknown>).success === true &&
+          'layers' in response &&
+          Array.isArray((response as Record<string, unknown>).layers)
+        ) {
+          const fetchedLayers = (response as Record<string, unknown>).layers as ModelLayer[]
+          layers = fetchedLayers
+          if (layers.length > 0) {
+            selectedAddress = layers[0].address
+          } else {
+            selectedAddress = ''
+          }
+        } else {
+          layers = []
+          selectedAddress = ''
         }
-      }
-    } catch (e) {
-      console.error('Failed to load model layers:', e)
-    } finally {
-      loadingLayers = false
+      })
+      .catch((e: unknown): void => {
+        if (!isCurrent) return
+        const message = e instanceof Error ? e.message : String(e)
+        console.error('Failed to load model layers:', message)
+        layers = []
+        selectedAddress = ''
+      })
+      .finally((): void => {
+        if (isCurrent) {
+          loadingLayers = false
+        }
+      })
+
+    return (): void => {
+      isCurrent = false
     }
   })
 
-  let isFormValid = $derived(selectedAddress !== '' && !loadingLayers)
+  let isFormValid = $derived(selectedAddress !== '' && !loadingLayers && !!selectedModel)
 
   async function createGrating(): Promise<void> {
-    if (!isFormValid || !modelElement) return
+    if (!isFormValid || !selectedModel) return
 
     inProgress = true
     try {
       let finalName = name.trim()
       if (!finalName) {
-        finalName = `${modelElement.name || 'Model'} - ${selectedAddress} [${kernelType}]`
+        finalName = `${selectedModel.name || 'Model'} - ${selectedAddress} [${kernelType}]`
       }
 
       const payload = {
-        model_id: modelElement.id,
+        model_id: selectedModel.id,
         name: finalName,
         elements: [
           {
@@ -79,7 +118,7 @@
       await window.api.createGrating(payload)
       onclose()
       onrefresh()
-    } catch (e) {
+    } catch (e: unknown) {
       console.error('Failed to create grating:', e)
       const message = e instanceof Error ? e.message : String(e)
       onError({ title: 'Grating Creation Failed', message })
@@ -91,10 +130,12 @@
 
 <div class="view-container">
   <div class="view-content">
-    <div class="field-group">
-      <span class="field-label">Target Model</span>
-      <div class="read-only-box">{modelElement?.name || 'Loading model...'}</div>
-    </div>
+    <NodeSelector
+      label="Target Model"
+      filter={{ type: 'model' }}
+      bind:node={selectedModel}
+      id="target-model-selector"
+    />
 
     <label>
       Grating Name

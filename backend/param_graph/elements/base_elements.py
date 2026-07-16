@@ -12,6 +12,7 @@ class Asset:
     path: str
     uid: str
     extension: str = ""
+    size: int | None = None
 
 @dataclass(kw_only=True)
 class GraphElement:

@@ -176,21 +176,7 @@ class LocalEngine(Engine):
                     config=config,
                 )
 
-                # Cache/symlink assets
-                for asset_name, asset in model_element._iter_assets():
-                    if asset and asset.path and asset.uid:
-                        dest_path = Path(self.data_root) / path_from_uid(asset.uid)
-                        dest_path.parent.mkdir(parents=True, exist_ok=True)
-                        if not dest_path.exists():
-                            try:
-                                os.symlink(asset.path, dest_path)
-                                print(f"Created symlink for shared model asset {asset.uid}: {asset.path} -> {dest_path}")
-                            except Exception as sym_err:
-                                try:
-                                    shutil.copy(asset.path, dest_path)
-                                    print(f"Copied shared model asset {asset.uid} to cache: {dest_path}")
-                                except Exception as copy_err:
-                                    print(f"Failed to copy shared model asset {asset.uid}: {copy_err}")
+
 
                 self.shared_models.append(model_element)
                 print(f"Successfully loaded shared model: {name} ({model_element.id})")
@@ -199,7 +185,22 @@ class LocalEngine(Engine):
                 traceback.print_exc()
 
     async def get_shared_models(self) -> list[dict]:
-        return [model.to_dict() for model in self.shared_models]
+        shared_models_dict = []
+        for model in self.shared_models:
+            updates = {}
+            for field_name, asset in model._iter_assets():
+                if asset:
+                    updates[field_name] = replace(asset, path="REMOTE")
+            client_model = replace(model, **updates)
+            shared_models_dict.append(client_model.to_dict())
+        return shared_models_dict
+
+    def _resolve_model_element(self, model_element: GraphElement) -> GraphElement:
+        """If the model ID matches a shared model, return the shared model with absolute paths."""
+        shared_model = next((m for m in self.shared_models if m.id == model_element.id), None)
+        if shared_model:
+            return shared_model
+        return model_element
 
     async def register_model(self, adapter_name: str, **kwargs) -> GraphElement:
         """
@@ -218,6 +219,7 @@ class LocalEngine(Engine):
         Saves the output to a persistent location within the data_root.
         """
         model_element = kwargs["model_element"]
+        model_element = self._resolve_model_element(model_element)
         adapter_class = self._get_adapter_class(model_element.adapter)
         adapter = self.model_cache.get(model_element, adapter_class)
 
@@ -316,6 +318,7 @@ class LocalEngine(Engine):
         Saves the resulting latent tensor to a persistent location.
         """
         model_element = kwargs["model_element"]
+        model_element = self._resolve_model_element(model_element)
         adapter_class = self._get_adapter_class(model_element.adapter)
         adapter = self.model_cache.get(model_element, adapter_class)
 
@@ -478,6 +481,7 @@ class LocalEngine(Engine):
             return audio_artifact
 
     async def get_model_layers(self, model_element: GraphElement) -> list[dict]:
+        model_element = self._resolve_model_element(model_element)
         adapter_class = self._get_adapter_class(model_element.adapter)
         adapter = self.model_cache.get(model_element, adapter_class)
         if not hasattr(adapter, 'model') or adapter.model is None:
@@ -486,6 +490,7 @@ class LocalEngine(Engine):
         return self._extract_model_layers(adapter.model)
 
     async def cluster_features(self, model_element: GraphElement, address: str, num_clusters: int) -> list[int]:
+        model_element = self._resolve_model_element(model_element)
         adapter_class = self._get_adapter_class(model_element.adapter)
         adapter = self.model_cache.get(model_element, adapter_class)
         

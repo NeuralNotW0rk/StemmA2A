@@ -34,6 +34,7 @@ from param_graph.elements.artifacts.audio_element import Audio
 from param_graph.elements.artifacts.latent_element import Latent
 from param_graph.elements.models.stable_audio_element import StableAudioModel
 from utils.uid import UIDMismatchError
+from utils.filesystem import get_path_size
 
 # Workaround for the file extension-based safetensors loading in stable audio tools
 def load_ckpt_state_dict(ckpt_path):
@@ -52,69 +53,13 @@ def load_ckpt_state_dict(ckpt_path):
     return state_dict
 
 
-def _get_cache_file_path() -> Path:
-    is_container = os.environ.get("RUNNING_IN_CONTAINER") == "true"
-    if is_container:
-        data_path = os.environ.get("CONTAINER_DATA_PATH")
-    else:
-        data_path = os.environ.get("LOCAL_DATA_PATH")
-        
-    if data_path:
-        cache_dir = Path(data_path).expanduser()
-        try:
-            cache_dir.mkdir(parents=True, exist_ok=True)
-            return cache_dir / "model_uid_cache.json"
-        except Exception:
-            pass
-            
-    for p in ["/app/data", "./data", "."]:
-        path = Path(p)
-        if path.exists() and os.access(path, os.W_OK):
-            return path / "model_uid_cache.json"
-            
-    return Path("model_uid_cache.json")
-
-def _get_cached_uid(file_path: str, uid_generator) -> str:
+def _compute_stable_audio_uid(file_path: str, uid_generator) -> str:
     abs_path = os.path.abspath(file_path)
     if not os.path.exists(abs_path):
         raise FileNotFoundError(f"Checkpoint file not found: {abs_path}")
-        
-    stat = os.stat(abs_path)
-    file_size = stat.st_size
-    file_mtime = stat.st_mtime
-    
-    cache_file = _get_cache_file_path()
-    cache = {}
-    if cache_file.exists():
-        try:
-            with open(cache_file, "r") as f:
-                cache = json.load(f)
-        except Exception as e:
-            print(f"Error reading UID cache: {e}")
-            
-    entry = cache.get(abs_path)
-    if entry and entry.get("size") == file_size and entry.get("mtime") == file_mtime:
-        return entry.get("uid")
-        
-    # Cache miss: compute uid by loading state dict
-    print(f"Cache miss for {abs_path}. Computing state dict UID...")
+    print(f"Computing state dict UID for {abs_path}...")
     state_dict = load_ckpt_state_dict(abs_path)
-    uid = uid_generator.from_state_dict(state_dict)
-    
-    # Save to cache
-    cache[abs_path] = {
-        "size": file_size,
-        "mtime": file_mtime,
-        "uid": uid
-    }
-    
-    try:
-        with open(cache_file, "w") as f:
-            json.dump(cache, f, indent=2)
-    except Exception as e:
-        print(f"Error writing UID cache: {e}")
-        
-    return uid
+    return uid_generator.from_state_dict(state_dict)
 
 
 class StableAudioAdapter(ModelAdapter):
@@ -140,14 +85,25 @@ class StableAudioAdapter(ModelAdapter):
                 config = json.loads(config_json)
 
         # Generate the checkpoint ID using the persistent cache or by computing it
-        checkpoint_uid = _get_cached_uid(checkpoint_path, self.uid_generator)
+        checkpoint_uid = _compute_stable_audio_uid(checkpoint_path, self.uid_generator)
+        checkpoint_size = get_path_size(Path(checkpoint_path))
+        checkpoint_asset = Asset(
+            path=checkpoint_path,
+            uid=checkpoint_uid,
+            size=checkpoint_size
+        )
 
         encoder_asset = None
         if encoder_path:
             encoder_dir = Path(encoder_path)
             if encoder_dir.is_dir():
                 encoder_uid = _hash_directory(encoder_dir)
-                encoder_asset = Asset(path=str(encoder_dir).replace("\\", "/"), uid=encoder_uid)
+                encoder_size = get_path_size(encoder_dir)
+                encoder_asset = Asset(
+                    path=str(encoder_dir).replace("\\", "/"),
+                    uid=encoder_uid,
+                    size=encoder_size
+                )
                 # Combine checkpoint UID and encoder UID to form the overall Model ID
                 model_id = self.uid_generator.from_uids([checkpoint_uid, encoder_uid])
             else:
@@ -158,7 +114,7 @@ class StableAudioAdapter(ModelAdapter):
         return StableAudioModel(
             id=model_id,
             name=kwargs.get("name"),
-            checkpoint=Asset(path=checkpoint_path, uid=checkpoint_uid),
+            checkpoint=checkpoint_asset,
             config=config,
             model_type=kwargs.get("model_type"),
             encoder=encoder_asset,
@@ -176,12 +132,42 @@ class StableAudioAdapter(ModelAdapter):
             self.model = None
 
         if verify:
-            checkpoint_uid = _get_cached_uid(info.checkpoint.path, self.uid_generator)
+            # 1. Verify Checkpoint Asset
+            ckpt_path = info.checkpoint.path
+            if ckpt_path and os.path.exists(ckpt_path) and os.path.isfile(ckpt_path):
+                ckpt_size = get_path_size(Path(ckpt_path))
+                if info.checkpoint.size == ckpt_size:
+                    checkpoint_uid = info.checkpoint.uid
+                else:
+                    print(f"Size mismatch or missing for checkpoint {ckpt_path}. Hashing weights...")
+                    checkpoint_uid = _compute_stable_audio_uid(ckpt_path, self.uid_generator)
+                
+                if checkpoint_uid != info.checkpoint.uid:
+                    raise UIDMismatchError("Model checkpoint UID mismatch")
+            else:
+                checkpoint_uid = info.checkpoint.uid
+
+            # 2. Verify Encoder Asset (if present)
             encoder_asset = getattr(info, "encoder", None)
-            if encoder_asset:
-                expected_id = self.uid_generator.from_uids([checkpoint_uid, encoder_asset.uid])
+            if encoder_asset and encoder_asset.path:
+                encoder_path = Path(encoder_asset.path)
+                if encoder_path.exists():
+                    enc_size = get_path_size(encoder_path)
+                    if encoder_asset.size == enc_size:
+                        encoder_uid = encoder_asset.uid
+                    else:
+                        print(f"Size mismatch or missing for encoder {encoder_path}. Hashing directory...")
+                        encoder_uid = _hash_directory(encoder_path)
+                    
+                    if encoder_uid != encoder_asset.uid:
+                        raise UIDMismatchError("Model encoder UID mismatch")
+                    
+                    expected_id = self.uid_generator.from_uids([checkpoint_uid, encoder_uid])
+                else:
+                    expected_id = checkpoint_uid
             else:
                 expected_id = checkpoint_uid
+
             if expected_id != info.id:
                 raise UIDMismatchError("Combined Model UID mismatch")
 

@@ -16,7 +16,8 @@ from .base_adapter import ModelAdapter, operation
 from param_graph.elements.base_elements import Asset, GraphElement
 from param_graph.elements.artifacts.image_element import Image
 from param_graph.elements.models.stylegan_element import StyleGANModel
-from utils.uid import XXH3_64
+from utils.uid import XXH3_64, UIDMismatchError
+from utils.filesystem import get_path_size
 
 # ==============================================================================
 # Dynamic TensorFlow (NVIDIA legacy pkl) check-pointing utilities
@@ -612,42 +613,13 @@ class Generator(nn.Module):
 
 
 # ==============================================================================
-# Model UID Caching Helper (Copied design from stable_audio_adapter)
+# Model UID Hashing Helper
 # ==============================================================================
 
-def _get_cache_file_path() -> Path:
-    data_path = os.environ.get("LOCAL_DATA_PATH") or os.environ.get("CONTAINER_DATA_PATH")
-    if data_path:
-        cache_dir = Path(data_path).expanduser()
-        try:
-            cache_dir.mkdir(parents=True, exist_ok=True)
-            return cache_dir / "model_uid_cache.json"
-        except Exception:
-            pass
-    return Path("model_uid_cache.json")
-
-
-def _get_cached_uid(file_path: str, uid_generator) -> str:
+def _compute_stylegan_uid(file_path: str, uid_generator) -> str:
     abs_path = os.path.abspath(file_path)
     if not os.path.exists(abs_path):
         raise FileNotFoundError(f"Checkpoint file not found: {abs_path}")
-    stat = os.stat(abs_path)
-    file_size = stat.st_size
-    file_mtime = stat.st_mtime
-    
-    cache_file = _get_cache_file_path()
-    cache = {}
-    if cache_file.exists():
-        try:
-            with open(cache_file, "r") as f:
-                cache = json.load(f)
-        except Exception:
-            pass
-            
-    entry = cache.get(abs_path)
-    if entry and entry.get("size") == file_size and entry.get("mtime") == file_mtime:
-        return entry.get("uid")
-        
     checkpoint = torch.load(abs_path, map_location="cpu", weights_only=False)
     if not isinstance(checkpoint, dict):
         raise ValueError("Loaded checkpoint is not a dictionary. Ensure it is a valid PyTorch model file.")
@@ -659,19 +631,6 @@ def _get_cached_uid(file_path: str, uid_generator) -> str:
     filtered_state_dict = {k: v for k, v in state_dict.items() if 'manipulation' not in k}
     uid = uid_generator.from_state_dict(filtered_state_dict)
     print(f"Computed weight-based UID: {uid}")
-    
-    cache[abs_path] = {
-        "size": file_size,
-        "mtime": file_mtime,
-        "uid": uid
-    }
-    
-    try:
-        with open(cache_file, "w") as f:
-            json.dump(cache, f, indent=2)
-    except Exception as e:
-        print(f"Warning: Failed to save UID cache: {e}")
-        
     return uid
 
 
@@ -698,8 +657,13 @@ class StyleGANAdapter(ModelAdapter):
         checkpoint_uid = ""
 
         if checkpoint_path and os.path.exists(checkpoint_path) and os.path.isfile(checkpoint_path):
-            checkpoint_uid = _get_cached_uid(checkpoint_path, self.uid_generator)
-            checkpoint_asset = Asset(path=checkpoint_path, uid=checkpoint_uid)
+            checkpoint_uid = _compute_stylegan_uid(checkpoint_path, self.uid_generator)
+            size_bytes = get_path_size(Path(checkpoint_path))
+            checkpoint_asset = Asset(
+                path=checkpoint_path,
+                uid=checkpoint_uid,
+                size=size_bytes
+            )
             
             try:
                 # Inspect checkpoint for configuration details
@@ -758,6 +722,21 @@ class StyleGANAdapter(ModelAdapter):
         if self.model:
             del self.model
             self.model = None
+
+        ckpt_path = info.checkpoint.path
+
+        if verify and ckpt_path and os.path.exists(ckpt_path) and os.path.isfile(ckpt_path):
+            size_bytes = get_path_size(Path(ckpt_path))
+            if info.checkpoint.size == size_bytes:
+                # Size matches, use the asset's UID as verified
+                expected_uid = info.checkpoint.uid
+            else:
+                # Compute UID from scratch
+                print(f"Size mismatch or missing for {ckpt_path}. Hashing checkpoint weights...")
+                expected_uid = _compute_stylegan_uid(ckpt_path, self.uid_generator)
+            
+            if expected_uid != info.checkpoint.uid:
+                raise UIDMismatchError("Model checkpoint UID mismatch")
 
         size = info.config.get("size", 256)
         channel_multiplier = info.config.get("channel_multiplier", 2)
