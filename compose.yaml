@@ -3,6 +3,7 @@ services:
     build:
       context: ./backend
     image: execution-engine:latest
+    pull_policy: never
     shm_size: '8gb'
     deploy:
       resources:
