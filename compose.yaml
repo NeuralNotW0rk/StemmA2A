@@ -1,7 +1,5 @@
 services:
   execution-engine:
-    build:
-      context: ./backend
     image: execution-engine:latest
     pull_policy: never
     shm_size: '8gb'
@@ -11,9 +9,9 @@ services:
           devices:
             - driver: nvidia
               count: 1
-              capabilities: [gpu]
+              capabilities: [ gpu ]
     volumes:
-      - ./backend:/app          # Maps your code folder
+      - ./backend:/app # Maps your code folder
       - ${LOCAL_DATA_PATH}:${CONTAINER_DATA_PATH}
       - ${LOCAL_DIFFRACTURE_PATH:-../Diffracture}:/Diffracture
     environment:
