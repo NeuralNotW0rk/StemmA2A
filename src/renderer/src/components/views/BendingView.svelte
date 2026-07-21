@@ -45,10 +45,11 @@
     let isCurrent = true
     loadingLayers = true
 
-    window.api.getModelLayers(modelId)
+    window.api
+      .getModelLayers(modelId)
       .then((response: unknown): void => {
         if (!isCurrent) return
-        
+
         if (
           response &&
           typeof response === 'object' &&
@@ -96,7 +97,7 @@
     try {
       let finalName = name.trim()
       if (!finalName) {
-        finalName = `${selectedModel.name || 'Model'} - ${selectedAddress} [${kernelType}]`
+        finalName = `${selectedAddress} [${kernelType}]`
       }
 
       const payload = {
@@ -177,8 +178,14 @@
 
     <!-- Feature Clustering Pre-computation Toggle -->
     <div style="margin-top: 0.5rem;">
-      <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; color: var(--color-overlay-text);">
-        <input type="checkbox" bind:checked={performClustering} style="width: auto; margin-top: 0;" />
+      <label
+        style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; color: var(--color-overlay-text);"
+      >
+        <input
+          type="checkbox"
+          bind:checked={performClustering}
+          style="width: auto; margin-top: 0;"
+        />
         Precompute Feature Clustering
       </label>
     </div>

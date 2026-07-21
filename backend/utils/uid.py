@@ -49,6 +49,10 @@ class UIDGenerator(ABC):
     def from_uids(self, uids: list) -> str:
         pass
 
+    @abstractmethod
+    def from_directory(self, directory_path: Path) -> str:
+        pass
+
 
 class XXH3_64(UIDGenerator):
 
@@ -112,3 +116,52 @@ class XXH3_64(UIDGenerator):
         concatenated_uids = "".join(uids)
         # Hash the concatenated string
         return self.from_string(concatenated_uids)
+
+    def from_directory(self, directory_path: Path) -> str:
+        """
+        Generates a deterministic xxh3_64 UID for a directory asset.
+        Normalizes POSIX relative paths, filters OS metadata, and normalizes text/JSON files.
+        """
+        h = xxhash.xxh3_64()
+        ignored_names = {".DS_Store", "Thumbs.db", "desktop.ini", "__pycache__", ".git", ".gitignore"}
+
+        # Find all files recursively and sort by POSIX relative path to ensure determinism across OSs
+        file_paths: list[Path] = []
+        for p in directory_path.glob("**/*"):
+            if p.is_file() and not any(part in ignored_names for part in p.parts):
+                file_paths.append(p)
+        file_paths.sort(key=lambda p: p.relative_to(directory_path).as_posix())
+
+        for file_path in file_paths:
+            # 1. Update hash with normalized POSIX relative path
+            rel_posix_path = file_path.relative_to(directory_path).as_posix()
+            h.update(rel_posix_path.encode("utf-8"))
+
+            # 2. Update hash with content
+            suffix = file_path.suffix.lower()
+            if suffix == ".json":
+                try:
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    canonical_json = json.dumps(data, sort_keys=True, separators=(",", ":"))
+                    h.update(canonical_json.encode("utf-8"))
+                except Exception:
+                    with open(file_path, "rb") as f:
+                        while chunk := f.read(8192):
+                            h.update(chunk)
+            elif suffix in {".txt", ".yaml", ".yml", ".md", ".csv"}:
+                try:
+                    with open(file_path, "r", encoding="utf-8", newline="") as f:
+                        text = f.read()
+                    normalized_text = text.replace("\r\n", "\n")
+                    h.update(normalized_text.encode("utf-8"))
+                except Exception:
+                    with open(file_path, "rb") as f:
+                        while chunk := f.read(8192):
+                            h.update(chunk)
+            else:
+                with open(file_path, "rb") as f:
+                    while chunk := f.read(8192):
+                        h.update(chunk)
+
+        return f"{h.hexdigest()}{self.DELIMITER}{self.get_method_name()}"

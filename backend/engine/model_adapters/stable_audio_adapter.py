@@ -5,19 +5,6 @@ import os
 import xxhash
 from pathlib import Path
 
-def _hash_directory(directory_path: Path) -> str:
-    h = xxhash.xxh3_64()
-    # Find all files recursively and sort them to be deterministic
-    for file_path in sorted(directory_path.glob("**/*")):
-        if file_path.is_file():
-            # Update hash with relative path to ensure structure is identical
-            h.update(str(file_path.relative_to(directory_path)).encode("utf-8"))
-            # Update hash with file content in chunks
-            with open(file_path, "rb") as f:
-                while chunk := f.read(8192):
-                    h.update(chunk)
-    return f"{h.hexdigest()}.xxh3_64"
-
 import torch
 import torchaudio
 from einops import rearrange
@@ -105,7 +92,7 @@ class StableAudioAdapter(ModelAdapter):
             encoder_dir = Path(encoder_path)
             if encoder_dir.is_dir():
                 if not encoder_uid:
-                    encoder_uid = _hash_directory(encoder_dir)
+                    encoder_uid = self.uid_generator.from_directory(encoder_dir)
                 if not encoder_size:
                     encoder_size = get_path_size(encoder_dir)
                 encoder_asset = Asset(
@@ -140,6 +127,24 @@ class StableAudioAdapter(ModelAdapter):
             del self.model
             self.model = None
 
+        # Resolve encoder asset path (extract if zip archive)
+        encoder_asset = getattr(info, "encoder", None)
+        actual_encoder_path: Path | None = None
+        if encoder_asset and encoder_asset.path:
+            raw_path = encoder_asset.path
+            if os.path.exists(raw_path):
+                if os.path.isfile(raw_path):
+                    extracted_dir = Path(raw_path + "_extracted")
+                    if not extracted_dir.exists():
+                        import zipfile
+                        print(f"Extracting encoder archive {raw_path} to {extracted_dir}...")
+                        extracted_dir.mkdir(parents=True, exist_ok=True)
+                        with zipfile.ZipFile(raw_path, 'r') as zip_ref:
+                            zip_ref.extractall(extracted_dir)
+                    actual_encoder_path = extracted_dir
+                else:
+                    actual_encoder_path = Path(raw_path)
+
         if verify:
             # 1. Verify Checkpoint Asset
             ckpt_path = info.checkpoint.path
@@ -157,23 +162,18 @@ class StableAudioAdapter(ModelAdapter):
                 checkpoint_uid = info.checkpoint.uid
 
             # 2. Verify Encoder Asset (if present)
-            encoder_asset = getattr(info, "encoder", None)
-            if encoder_asset and encoder_asset.path:
-                encoder_path = Path(encoder_asset.path)
-                if encoder_path.exists():
-                    enc_size = get_path_size(encoder_path)
-                    if encoder_asset.size == enc_size:
-                        encoder_uid = encoder_asset.uid
-                    else:
-                        print(f"Size mismatch or missing for encoder {encoder_path}. Hashing directory...")
-                        encoder_uid = _hash_directory(encoder_path)
-                    
-                    if encoder_uid != encoder_asset.uid:
-                        raise UIDMismatchError("Model encoder UID mismatch")
-                    
-                    expected_id = self.uid_generator.from_uids([checkpoint_uid, encoder_uid])
+            if encoder_asset and actual_encoder_path and actual_encoder_path.exists():
+                enc_size = get_path_size(actual_encoder_path)
+                if encoder_asset.size == enc_size:
+                    encoder_uid = encoder_asset.uid
                 else:
-                    expected_id = checkpoint_uid
+                    print(f"Size mismatch or missing for encoder {actual_encoder_path}. Hashing directory...")
+                    encoder_uid = self.uid_generator.from_directory(actual_encoder_path)
+                
+                if encoder_uid != encoder_asset.uid:
+                    raise UIDMismatchError("Model encoder UID mismatch")
+                
+                expected_id = self.uid_generator.from_uids([checkpoint_uid, encoder_uid])
             else:
                 expected_id = checkpoint_uid
 
@@ -186,30 +186,16 @@ class StableAudioAdapter(ModelAdapter):
         # Load the new model
         # Override conditioner paths if local encoder path is supplied and exists
         config = copy.deepcopy(info.config)
-        encoder_asset = getattr(info, "encoder", None)
-        if encoder_asset and encoder_asset.path:
-            actual_path = encoder_asset.path
-            # If the path points to an archive file (uploaded via sync), extract it first
-            if os.path.isfile(actual_path):
-                extracted_dir = Path(actual_path + "_extracted")
-                if not extracted_dir.exists():
-                    import zipfile
-                    print(f"Extracting encoder archive {actual_path} to {extracted_dir}...")
-                    extracted_dir.mkdir(parents=True, exist_ok=True)
-                    with zipfile.ZipFile(actual_path, 'r') as zip_ref:
-                        zip_ref.extractall(extracted_dir)
-                actual_path = str(extracted_dir)
-
-            if os.path.exists(actual_path):
-                clean_encoder_path = str(Path(actual_path)).replace("\\", "/")
-                conditioning = config.get("model", {}).get("conditioning", {})
-                for cond_config in conditioning.get("configs", []):
-                    cond_type = cond_config.get("type")
-                    if cond_type in ["t5", "t5gemma", "clap", "clap_audio"]:
-                        cond_inner_config = cond_config.setdefault("config", {})
-                        cond_inner_config["model_path"] = clean_encoder_path
-                        cond_inner_config.pop("repo_id", None)
-                        cond_inner_config.pop("subfolder", None)
+        if actual_encoder_path and actual_encoder_path.exists():
+            clean_encoder_path = str(actual_encoder_path).replace("\\", "/")
+            conditioning = config.get("model", {}).get("conditioning", {})
+            for cond_config in conditioning.get("configs", []):
+                cond_type = cond_config.get("type")
+                if cond_type in ["t5", "t5gemma", "clap", "clap_audio"]:
+                    cond_inner_config = cond_config.setdefault("config", {})
+                    cond_inner_config["model_path"] = clean_encoder_path
+                    cond_inner_config.pop("repo_id", None)
+                    cond_inner_config.pop("subfolder", None)
 
         self.model = create_model_from_config(config)
         self.model.load_state_dict(state_dict)

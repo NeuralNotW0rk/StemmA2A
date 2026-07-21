@@ -282,8 +282,8 @@ def test_flask_endpoints():
         m1_alias = g.G.nodes[m1_id].get("alias")
         m2_alias = g.G.nodes[m2_id].get("alias")
         
-        assert m1_alias == "conv1.conv.cluster: 1", f"Expected 'conv1.conv.cluster: 1', got '{m1_alias}'"
-        assert m2_alias == "conv1.conv.cluster: 2", f"Expected 'conv1.conv.cluster: 2', got '{m2_alias}'"
+        assert m1_alias == "cluster: 1 (conv1.conv)", f"Expected 'cluster: 1 (conv1.conv)', got '{m1_alias}'"
+        assert m2_alias == "cluster: 2 (conv1.conv)", f"Expected 'cluster: 2 (conv1.conv)', got '{m2_alias}'"
         print("Recursive batch member labeling verified successfully!")
 
         # 4. Test POST /export_shared_model

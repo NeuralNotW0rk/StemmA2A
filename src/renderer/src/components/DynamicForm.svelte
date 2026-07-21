@@ -86,7 +86,8 @@
     // Touch condition keys to establish reactive dependencies
     const currentConditionValues: Record<string, any> = {}
     for (const key of targetKeys) {
-      const val = formData[key] !== undefined ? formData[key] : (contextData ? contextData[key] : null)
+      const val =
+        formData[key] !== undefined ? formData[key] : contextData ? contextData[key] : null
       currentConditionValues[key] = val
     }
 
@@ -273,7 +274,8 @@
   }}
 >
   {#each visibleFields as field (field.name)}
-    {@const isBatch = allowSequences && field.allowSequence !== false && batchFields.has(field.name)}
+    {@const isBatch =
+      allowSequences && field.allowSequence !== false && batchFields.has(field.name)}
     <div class="form-field">
       {#if field.type === 'textarea'}
         <label for={field.name}>{field.label}</label>

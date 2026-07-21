@@ -221,7 +221,11 @@
         }
 
         if (isReplicated && $contextStore?.gratings && $cyInstanceStore) {
-          const contextGratings = $contextStore.gratings as Array<{ id: string; strength: number; overrides?: any[] }>
+          const contextGratings = $contextStore.gratings as Array<{
+            id: string
+            strength: number
+            overrides?: any[]
+          }>
           selectedGratings = contextGratings.map((g, index) => {
             const node = $cyInstanceStore.$id(g.id).data()
             const item: NodeListItem = {
@@ -234,14 +238,14 @@
                 const meta = ov.metadata || {}
                 const el = node?.elements?.find((e: any) => e.address === ov.address)
                 const ktype = el?.kernel_type || 'erode'
-                
+
                 let targetType: 'all' | 'indices' | 'cluster' = 'all'
                 if (meta.indices && Array.isArray(meta.indices) && meta.indices.length > 0) {
                   targetType = 'indices'
                 } else if (meta.cluster !== null && meta.cluster !== undefined) {
                   targetType = 'cluster'
                 }
-                
+
                 const params: Record<string, any> = {}
                 if (ktype === 'erode' || ktype === 'dilate') {
                   params.radius = meta.radius ?? el?.metadata?.radius ?? 1
@@ -253,7 +257,12 @@
                   params.offset_x = meta.offset_x ?? el?.metadata?.offset_x ?? 0.0
                   params.offset_y = meta.offset_y ?? el?.metadata?.offset_y ?? 0.0
                 } else if (ktype === 'scalar-multiply') {
-                  params.factor = meta.factor ?? meta.multiplier ?? el?.metadata?.factor ?? el?.metadata?.multiplier ?? 1.0
+                  params.factor =
+                    meta.factor ??
+                    meta.multiplier ??
+                    el?.metadata?.factor ??
+                    el?.metadata?.multiplier ??
+                    1.0
                 } else if (ktype === 'resize') {
                   params.scale_x = meta.scale_x ?? el?.metadata?.scale_x ?? 1.0
                   params.scale_y = meta.scale_y ?? el?.metadata?.scale_y ?? 1.0
@@ -480,7 +489,7 @@
       const gratings = validGratings.map((l) => {
         const id = typeof l.node === 'string' ? l.node : l.node?.id
         const strength = l.strength ?? 1.0
-        
+
         const overrides: any[] = []
         if (l.overrides) {
           for (const o of l.overrides) {
@@ -491,13 +500,13 @@
                 .map((s) => parseInt(s.trim()))
                 .filter((n) => !isNaN(n))
             }
-            
+
             const metaOverride: Record<string, any> = {
               indices: o.targetType === 'indices' ? indices : [],
               cluster: o.targetType === 'cluster' ? o.cluster : null,
               ...o.params
             }
-            
+
             overrides.push({
               address: o.address,
               metadata: metaOverride
@@ -577,45 +586,51 @@
       }
 
       // Construct a clean representation of gratings with non-batched parameters
-      const staticGratings = selectedGratings.filter((l) => l.node).map((l) => {
-        const id = typeof l.node === 'string' ? l.node : l.node?.id
-        const strength = l.strength ?? 1.0
-        
-        const overrides: any[] = []
-        if (l.overrides) {
-          for (const o of l.overrides) {
-            let indices: number[] = []
-            if (o.targetType === 'indices' && !o.batchFields?.indicesText && o.indicesText.trim() !== '') {
-              indices = o.indicesText
-                .split(',')
-                .map((s) => parseInt(s.trim()))
-                .filter((n) => !isNaN(n))
-            }
-            
-            const metaOverride: Record<string, any> = {
-              indices: o.targetType === 'indices' && !o.batchFields?.indicesText ? indices : [],
-              cluster: o.targetType === 'cluster' && !o.batchFields?.cluster ? o.cluster : null,
-            }
-            
-            for (const paramKey in o.params) {
-              if (!o.batchFields?.[paramKey]) {
-                metaOverride[paramKey] = o.params[paramKey]
+      const staticGratings = selectedGratings
+        .filter((l) => l.node)
+        .map((l) => {
+          const id = typeof l.node === 'string' ? l.node : l.node?.id
+          const strength = l.strength ?? 1.0
+
+          const overrides: any[] = []
+          if (l.overrides) {
+            for (const o of l.overrides) {
+              let indices: number[] = []
+              if (
+                o.targetType === 'indices' &&
+                !o.batchFields?.indicesText &&
+                o.indicesText.trim() !== ''
+              ) {
+                indices = o.indicesText
+                  .split(',')
+                  .map((s) => parseInt(s.trim()))
+                  .filter((n) => !isNaN(n))
               }
+
+              const metaOverride: Record<string, any> = {
+                indices: o.targetType === 'indices' && !o.batchFields?.indicesText ? indices : [],
+                cluster: o.targetType === 'cluster' && !o.batchFields?.cluster ? o.cluster : null
+              }
+
+              for (const paramKey in o.params) {
+                if (!o.batchFields?.[paramKey]) {
+                  metaOverride[paramKey] = o.params[paramKey]
+                }
+              }
+
+              overrides.push({
+                address: o.address,
+                metadata: metaOverride
+              })
             }
-            
-            overrides.push({
-              address: o.address,
-              metadata: metaOverride
-            })
           }
-        }
-        
-        return {
-          id,
-          strength,
-          overrides
-        }
-      })
+
+          return {
+            id,
+            strength,
+            overrides
+          }
+        })
 
       const paramNames = Object.keys(batchParams)
       const paramValues = Object.values(batchParams)
@@ -632,14 +647,14 @@
         // Deep clone static gratings so each combination gets its own overrides
         const combinationGratings = JSON.parse(JSON.stringify(staticGratings))
         const batchPayload: Record<string, unknown> = { ...staticParams }
-        
+
         combination.forEach((value, index) => {
           const paramName = paramNames[index]
           if (paramName.startsWith('grating__')) {
             const [, gIdxStr, oIdxStr, key] = paramName.split('__')
             const gIdx = parseInt(gIdxStr)
             const oIdx = parseInt(oIdxStr)
-            
+
             const override = combinationGratings[gIdx]?.overrides?.[oIdx]
             if (override) {
               if (key === 'cluster') {
@@ -647,7 +662,10 @@
               } else if (key === 'indicesText') {
                 let indices: number[] = []
                 if (typeof value === 'string') {
-                  indices = value.split(',').map(s => parseInt(s.trim())).filter(n => !isNaN(n))
+                  indices = value
+                    .split(',')
+                    .map((s) => parseInt(s.trim()))
+                    .filter((n) => !isNaN(n))
                 } else if (typeof value === 'number') {
                   indices = [value]
                 }
@@ -660,7 +678,7 @@
             batchPayload[paramName] = value
           }
         })
-        
+
         batchPayload.gratings = combinationGratings
 
         // Add fallback properties for backend compatibility
@@ -708,7 +726,7 @@
             <span class="element-address">{ov.address}</span>
             <span class="element-kernel-badge">{ov.kernel_type}</span>
           </div>
-          
+
           <div class="element-params">
             <!-- Dynamic parameters depending on kernel type -->
             {#if ov.kernel_type === 'erode' || ov.kernel_type === 'dilate'}
@@ -720,19 +738,9 @@
               </div>
               <div class="sub-input-row">
                 {#if ov.batchFields?.radius}
-                  <input
-                    type="text"
-                    bind:value={ov.params.radius}
-                    placeholder="e.g. 1, 2, 3-5"
-                  />
+                  <input type="text" bind:value={ov.params.radius} placeholder="e.g. 1, 2, 3-5" />
                 {:else}
-                  <input
-                    type="range"
-                    min="1"
-                    max="15"
-                    step="1"
-                    bind:value={ov.params.radius}
-                  />
+                  <input type="range" min="1" max="15" step="1" bind:value={ov.params.radius} />
                 {/if}
                 <div class="sub-field-actions">
                   <button
@@ -755,11 +763,7 @@
                     placeholder="e.g. 0.5, 1.0, 1.2-2.0:0.2"
                   />
                 {:else}
-                  <input
-                    type="number"
-                    step="0.1"
-                    bind:value={ov.params.scale_factor}
-                  />
+                  <input type="number" step="0.1" bind:value={ov.params.scale_factor} />
                 {/if}
                 <div class="sub-field-actions">
                   <button
@@ -782,11 +786,7 @@
                     placeholder="e.g. 0, 90, 180-360:90"
                   />
                 {:else}
-                  <input
-                    type="number"
-                    step="1.0"
-                    bind:value={ov.params.angle}
-                  />
+                  <input type="number" step="1.0" bind:value={ov.params.angle} />
                 {/if}
                 <div class="sub-field-actions">
                   <button
@@ -811,11 +811,7 @@
                         placeholder="e.g. 0, 1, 2"
                       />
                     {:else}
-                      <input
-                        type="number"
-                        step="0.5"
-                        bind:value={ov.params.offset_x}
-                      />
+                      <input type="number" step="0.5" bind:value={ov.params.offset_x} />
                     {/if}
                     <div class="sub-field-actions">
                       <button
@@ -839,11 +835,7 @@
                         placeholder="e.g. 0, 1, 2"
                       />
                     {:else}
-                      <input
-                        type="number"
-                        step="0.5"
-                        bind:value={ov.params.offset_y}
-                      />
+                      <input type="number" step="0.5" bind:value={ov.params.offset_y} />
                     {/if}
                     <div class="sub-field-actions">
                       <button
@@ -868,11 +860,7 @@
                     placeholder="e.g. 0.5, 1.0, 1.5-3.0:0.5"
                   />
                 {:else}
-                  <input
-                    type="number"
-                    step="0.1"
-                    bind:value={ov.params.factor}
-                  />
+                  <input type="number" step="0.1" bind:value={ov.params.factor} />
                 {/if}
                 <div class="sub-field-actions">
                   <button
@@ -897,11 +885,7 @@
                         placeholder="e.g. 0.5, 1.0"
                       />
                     {:else}
-                      <input
-                        type="number"
-                        step="0.1"
-                        bind:value={ov.params.scale_x}
-                      />
+                      <input type="number" step="0.1" bind:value={ov.params.scale_x} />
                     {/if}
                     <div class="sub-field-actions">
                       <button
@@ -925,11 +909,7 @@
                         placeholder="e.g. 0.5, 1.0"
                       />
                     {:else}
-                      <input
-                        type="number"
-                        step="0.1"
-                        bind:value={ov.params.scale_y}
-                      />
+                      <input type="number" step="0.1" bind:value={ov.params.scale_y} />
                     {/if}
                     <div class="sub-field-actions">
                       <button
@@ -954,11 +934,7 @@
                     placeholder="e.g. 0.1, 0.5, 1.0"
                   />
                 {:else}
-                  <input
-                    type="number"
-                    step="0.1"
-                    bind:value={ov.params.threshold}
-                  />
+                  <input type="number" step="0.1" bind:value={ov.params.threshold} />
                 {/if}
                 <div class="sub-field-actions">
                   <button
@@ -972,7 +948,7 @@
                 </div>
               </div>
             {/if}
-            
+
             <!-- Target feature / cluster selection -->
             <div class="sub-target-selector">
               <span class="sub-field-label">Target Options</span>
@@ -1005,22 +981,14 @@
                 {/if}
               </div>
             </div>
-            
+
             {#if ov.targetType === 'indices'}
               <span class="sub-label">Target Feature Indices</span>
               <div class="sub-input-row">
                 {#if ov.batchFields?.indicesText}
-                  <input
-                    type="text"
-                    bind:value={ov.indicesText}
-                    placeholder="e.g. [0,1], [2,3]"
-                  />
+                  <input type="text" bind:value={ov.indicesText} placeholder="e.g. [0,1], [2,3]" />
                 {:else}
-                  <input
-                    type="text"
-                    bind:value={ov.indicesText}
-                    placeholder="e.g. 0, 1, 2, 3"
-                  />
+                  <input type="text" bind:value={ov.indicesText} placeholder="e.g. 0, 1, 2, 3" />
                 {/if}
                 <div class="sub-field-actions">
                   <button
@@ -1035,22 +1003,16 @@
               </div>
             {:else if ov.targetType === 'cluster'}
               {@const clusterMap = item.node.elements?.[ovIdx]?.metadata?.cluster_map}
-              {@const maxClusterId = Math.max(0, ...(clusterMap || []).map(item => Number(item?.cluster_index ?? 0)))}
+              {@const maxClusterId = Math.max(
+                0,
+                ...(clusterMap || []).map((item) => Number(item?.cluster_index ?? 0))
+              )}
               <span class="sub-label">Target Cluster ID (0 to {maxClusterId})</span>
               <div class="sub-input-row">
                 {#if ov.batchFields?.cluster}
-                  <input
-                    type="text"
-                    bind:value={ov.cluster}
-                    placeholder="e.g. 0, 1, 2, 0-4"
-                  />
+                  <input type="text" bind:value={ov.cluster} placeholder="e.g. 0, 1, 2, 0-4" />
                 {:else}
-                  <input
-                    type="number"
-                    min="0"
-                    max={maxClusterId}
-                    bind:value={ov.cluster}
-                  />
+                  <input type="number" min="0" max={maxClusterId} bind:value={ov.cluster} />
                 {/if}
                 <div class="sub-field-actions">
                   <button

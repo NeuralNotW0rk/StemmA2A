@@ -1588,7 +1588,15 @@ def update_batch_labels(batch_id: str):
         diff_items = []
         for path, val in flat_diff:
             cleaned = clean_path(path, ctx)
-            diff_items.append(f"{cleaned}: {val}")
+            parts = cleaned.split('.')
+            if len(parts) > 1:
+                param_name = parts[-1]
+                prefix = ".".join(parts[:-1])
+                prefix_parts = prefix.split('.')
+                short_prefix = ".".join(prefix_parts[-3:])
+                diff_items.append(f"{param_name}: {val} ({short_prefix})")
+            else:
+                diff_items.append(f"{cleaned}: {val}")
             
         diff_label = "\n".join(diff_items) if diff_items else "Base"
         if len(diff_label) > 40:
