@@ -14,6 +14,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1 \
     libglib2.0-0 \
     git \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # 4. Set python3.10 as the default 'python' and 'pip' commands

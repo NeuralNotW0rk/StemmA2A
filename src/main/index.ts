@@ -571,37 +571,49 @@ app.whenReady().then(async () => {
     store.set('recentProjects', recentProjects.slice(0, 10))
   })
 
-  ipcMain.handle('getAudioFile', async (_event, audio_id) => {
-    try {
-      // 1. Get path from Python backend
-      const pathResponse = await fetchWithAuth(`${BACKEND_URL}/audio_path/${audio_id}`)
-      if (!pathResponse.ok) {
-        const errorBody = await pathResponse.text()
-        throw new Error(
-          `Failed to get audio path from backend. Status: ${pathResponse.status}. Body: ${errorBody}`
-        )
+  ipcMain.handle(
+    'getAudioFile',
+    async (
+      _event: unknown,
+      audio_id: string
+    ): Promise<{ buffer: Buffer; mimeType: string } | null> => {
+      try {
+        // 1. Get path from Python backend
+        const pathResponse = await fetchWithAuth(`${BACKEND_URL}/audio_path/${audio_id}`)
+        if (!pathResponse.ok) {
+          const errorBody = await pathResponse.text()
+          throw new Error(
+            `Failed to get audio path from backend. Status: ${pathResponse.status}. Body: ${errorBody}`
+          )
+        }
+        const { path: audioPath } = await pathResponse.json()
+
+        // 2. Read the file into a buffer
+        const audioBuffer = await fs.readFile(audioPath)
+
+        // 3. Determine MIME type
+        const extension = extname(audioPath).toLowerCase()
+        let mimeType = 'audio/wav' // Default
+        if (extension === '.mp3') {
+          mimeType = 'audio/mpeg'
+        } else if (extension === '.ogg') {
+          mimeType = 'audio/ogg'
+        } else if (extension === '.m4a') {
+          mimeType = 'audio/mp4'
+        } else if (extension === '.flac') {
+          mimeType = 'audio/flac'
+        } else if (extension === '.aiff' || extension === '.aif') {
+          mimeType = 'audio/aiff'
+        }
+
+        // 4. Return buffer and mime type
+        return { buffer: audioBuffer, mimeType: mimeType }
+      } catch (error: unknown) {
+        console.error('Failed to get audio file:', error)
+        return null
       }
-      const { path: audioPath } = await pathResponse.json()
-
-      // 2. Read the file into a buffer
-      const audioBuffer = await fs.readFile(audioPath)
-
-      // 3. Determine MIME type
-      const extension = extname(audioPath).toLowerCase()
-      let mimeType = 'audio/wav' // Default
-      if (extension === '.mp3') {
-        mimeType = 'audio/mpeg'
-      } else if (extension === '.ogg') {
-        mimeType = 'audio/ogg'
-      }
-
-      // 4. Return buffer and mime type
-      return { buffer: audioBuffer, mimeType: mimeType }
-    } catch (error) {
-      console.error('Failed to get audio file:', error)
-      return null
     }
-  })
+  )
 
   ipcMain.handle('getImageFile', async (_event, image_id) => {
     try {

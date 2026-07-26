@@ -38,14 +38,14 @@
         },
         {
             "name": "seconds_start",
-            "label": "Seconds",
+            "label": "Seconds Start",
             "type": "float",
             "defaultValue": 0,
             "placeholder": "Enter start time in seconds"
         },
         {
             "name": "seconds_total",
-            "label": "Seconds",
+            "label": "Seconds Total",
             "type": "float",
             "defaultValue": 12,
             "placeholder": "Enter duration in seconds"
