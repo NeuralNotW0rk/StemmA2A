@@ -41,6 +41,46 @@ def migrate_sharded_cache(root_dir: Path) -> None:
         print(f"Failed to migrate sharded cache in {root_dir}: {e}")
 
 
+def migrate_batch_to_group(project_path: Path) -> None:
+    """
+    Migrates any legacy 'batch' elements in graph.json to 'group' elements.
+    """
+    if not project_path or not project_path.is_dir():
+        return
+
+    graph_file = project_path / "graph.json"
+    if not graph_file.exists():
+        return
+
+    import json
+    with open(graph_file, "r") as f:
+        data = json.load(f)
+
+    modified = False
+    
+    graph_data = data.get("graph", {})
+    elements = graph_data.get("elements", {})
+    
+    nodes = elements.get("nodes", [])
+    for node in nodes:
+        node_data = node.get("data", {})
+        if node_data.get("type") == "batch":
+            node_data["type"] = "group"
+            modified = True
+
+    edges = elements.get("edges", [])
+    for edge in edges:
+        edge_data = edge.get("data", {})
+        if edge_data.get("type") == "batch":
+            edge_data["type"] = "group"
+            modified = True
+
+    if modified:
+        with open(graph_file, "w") as f:
+            json.dump(data, f, indent=4)
+        print(f"Migrated legacy batch nodes to group nodes in {graph_file}")
+
+
 def run_global_migrations(data_cache_root: Path) -> None:
     """
     Runs all startup global data cache migrations.
@@ -61,3 +101,4 @@ def run_project_migrations(project_path: Path) -> None:
     
     print(f"Running project migrations for {project_path.name}...")
     migrate_sharded_cache(project_path)
+    migrate_batch_to_group(project_path)

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte'
-  import type { NodeData, BatchData } from '../utils/forms'
+  import type { NodeData, GroupData } from '../utils/forms'
   import { selectionStore, cyInstanceStore } from '../utils/stores'
   import type { NodeSingular } from 'cytoscape'
   import NodeSelector from './NodeSelector.svelte'
@@ -95,15 +95,15 @@
         if (node) {
           let ids: string[] = []
           if (typeof node === 'object' && node !== null && 'id' in node) {
-            if (node.type === 'batch' && (node as BatchData).member_ids && $cyInstanceStore) {
-              ids = (node as BatchData).member_ids
+            if (node.type === 'group' && (node as GroupData).member_ids && $cyInstanceStore) {
+              ids = (node as GroupData).member_ids
             } else {
               ids = [node.id]
             }
           } else {
             const cy = $cyInstanceStore
             const nodeStr = String(node)
-            if (cy && cy.$id(nodeStr).data('type') === 'batch') {
+            if (cy && cy.$id(nodeStr).data('type') === 'group') {
               ids = cy.$id(nodeStr).data('member_ids') || []
             } else {
               ids = nodeStr
@@ -141,7 +141,7 @@
   })
 
   $effect(() => {
-    // Auto-enable batch mode if node is a comma-separated list of IDs, a batch object, or a batch ID
+    // Auto-enable batch mode if node is a comma-separated list of IDs, a group object, or a group ID
     if (allowBatchToggle && node) {
       if (typeof node === 'string') {
         if (node.includes(',')) {
@@ -149,12 +149,12 @@
           if (onBatchToggle) onBatchToggle(true)
         } else {
           const cy = $cyInstanceStore
-          if (cy && cy.$id(node).data('type') === 'batch') {
+          if (cy && cy.$id(node).data('type') === 'group') {
             isBatchMode = true
             if (onBatchToggle) onBatchToggle(true)
           }
         }
-      } else if (typeof node === 'object' && node !== null && 'type' in node && node.type === 'batch') {
+      } else if (typeof node === 'object' && node !== null && 'type' in node && node.type === 'group') {
         isBatchMode = true
         if (onBatchToggle) onBatchToggle(true)
       }
@@ -171,12 +171,12 @@
       if (selected) {
         const selectedNode = selected as NodeData
 
-        // If selecting a Batch/container node in single-selection mode, auto-toggle batch mode and unpack
+        // If selecting a Group/container node in single-selection mode, auto-toggle batch mode and unpack
         if (
           !isBatchMode &&
           allowBatchToggle &&
-          selectedNode.type === 'batch' &&
-          (selectedNode as BatchData).member_ids &&
+          selectedNode.type === 'group' &&
+          (selectedNode as GroupData).member_ids &&
           $cyInstanceStore
         ) {
           isBatchMode = true
@@ -185,7 +185,7 @@
           }
 
           const cy = $cyInstanceStore
-          const memberIds = (selectedNode as BatchData).member_ids
+          const memberIds = (selectedNode as GroupData).member_ids
           const memberNodes = memberIds.map((mId) => cy.$id(mId).data() as NodeData).filter(Boolean)
 
           batchItems = memberNodes.map((member) => ({
@@ -257,12 +257,12 @@
 
   function handleChildNodeSelect(selectedNode: NodeData, index: number): void {
     if (
-      selectedNode.type === 'batch' &&
-      (selectedNode as BatchData).member_ids &&
+      selectedNode.type === 'group' &&
+      (selectedNode as GroupData).member_ids &&
       $cyInstanceStore
     ) {
       const cy = $cyInstanceStore
-      const memberIds = (selectedNode as BatchData).member_ids
+      const memberIds = (selectedNode as GroupData).member_ids
       const memberNodes = memberIds.map((mId) => cy.$id(mId).data() as NodeData).filter(Boolean)
 
       if (memberNodes.length > 0) {

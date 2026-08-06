@@ -32,7 +32,8 @@ from param_graph.elements.artifacts.image_element import Image
 from param_graph.elements.artifacts.grating_element import Grating
 from param_graph.elements.artifacts.latent_element import Latent
 from param_graph.elements.base_elements import Asset
-from param_graph.elements.collections.batch_element import Batch
+from param_graph.elements.collections.group_element import Group
+from param_graph.elements.artifacts.bundle_element import Bundle
 from param_graph.elements.collections.directory_element import Directory
 from param_graph.elements.local_path import LocalPath
 from param_graph.utils import save_artifact_asset, resolve_element
@@ -285,9 +286,9 @@ def get_graph():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/graph/create_batch", methods=["POST"])
-def batch_elements():
-    """Create a batch from a selection of nodes."""
+@app.route("/graph/create_group", methods=["POST"])
+def group_elements():
+    """Create a group from a selection of nodes."""
     if param_graph is None:
         return jsonify({"error": "No project loaded"}), 400
 
@@ -297,7 +298,7 @@ def batch_elements():
 
         # 1. Create a new collection element
         if member_ids:
-            batch_id = uid_generator.from_uids(member_ids)
+            group_id = uid_generator.from_uids(member_ids)
             member_type = None
             for member_id in member_ids:
                 member = param_graph.get_element(member_id)
@@ -307,60 +308,60 @@ def batch_elements():
                     return jsonify({"error": "All members must be of the same type"}), 400
         else:
             import uuid
-            batch_id = uid_generator.from_string(str(uuid.uuid4()))
+            group_id = uid_generator.from_string(str(uuid.uuid4()))
             member_type = None
 
         with graph_lock:
-            batch = Batch(id=batch_id, member_ids=member_ids, member_type=member_type)
-            param_graph.add_element(batch)
+            group = Group(id=group_id, member_ids=member_ids, member_type=member_type)
+            param_graph.add_element(group)
 
             # Update parents
             for member_id in member_ids:
-                param_graph.update_element(member_id, {"parent": batch_id})
+                param_graph.update_element(member_id, {"parent": group_id})
             
-            update_batch_labels(batch_id)
+            update_group_labels(group_id)
             param_graph.save()
             
-            updated_batch = param_graph.get_element(batch_id).to_dict()
+            updated_group = param_graph.get_element(group_id).to_dict()
 
         return jsonify({
-            "message": "Batch created successfully",
-            "collection": updated_batch,
+            "message": "Group created successfully",
+            "collection": updated_group,
             "success": True
         })
 
     except Exception as e:
-        print(f"Failed to create batch: {e}")
+        print(f"Failed to create group: {e}")
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/graph/update_batch", methods=["PUT", "POST"])
-@app.route("/graph/update_batch/<batch_id>", methods=["PUT", "POST"])
-def update_batch_endpoint(batch_id=None):
-    """Update an existing batch with new members."""
+@app.route("/graph/update_group", methods=["PUT", "POST"])
+@app.route("/graph/update_group/<group_id>", methods=["PUT", "POST"])
+def update_group_endpoint(group_id=None):
+    """Update an existing group with new members."""
     if param_graph is None:
         return jsonify({"error": "No project loaded"}), 400
 
     try:
         data = request.get_json()
         
-        # Handle alternative route where batch_id is in the body
-        if batch_id is None:
-            batch_id = data.get("batch_id")
+        # Handle alternative route where group_id is in the body
+        if group_id is None:
+            group_id = data.get("group_id") or data.get("batch_id")
             
-        if not batch_id:
-            return jsonify({"error": "batch_id is required"}), 400
+        if not group_id:
+            return jsonify({"error": "group_id is required"}), 400
             
         new_member_ids = data.get("member_ids", [])
 
         with graph_lock:
-            if not param_graph.G.has_node(batch_id):
-                return jsonify({"error": f"Batch {batch_id} not found"}), 404
+            if not param_graph.G.has_node(group_id):
+                return jsonify({"error": f"Group {group_id} not found"}), 404
 
-            batch_node_attrs = param_graph.G.nodes[batch_id]
-            if batch_node_attrs.get('type') != 'batch':
-                return jsonify({"error": f"Node {batch_id} is not a batch"}), 400
+            group_node_attrs = param_graph.G.nodes[group_id]
+            if group_node_attrs.get('type') != 'group':
+                return jsonify({"error": f"Node {group_id} is not a group"}), 400
 
             # Validate types of new members
             member_type = None
@@ -371,7 +372,7 @@ def update_batch_endpoint(batch_id=None):
                 elif member_type != member.type:
                     return jsonify({"error": "All members must be of the same type"}), 400
 
-            old_member_ids = batch_node_attrs.get('member_ids', [])
+            old_member_ids = group_node_attrs.get('member_ids', [])
 
             # Unlink removed members
             for m_id in old_member_ids:
@@ -380,25 +381,25 @@ def update_batch_endpoint(batch_id=None):
 
             # Link new members
             for m_id in new_member_ids:
-                param_graph.update_element(m_id, {"parent": batch_id})
+                param_graph.update_element(m_id, {"parent": group_id})
 
-            # Update batch properties
-            batch_node_attrs['member_ids'] = new_member_ids
-            batch_node_attrs['member_type'] = member_type
+            # Update group properties
+            group_node_attrs['member_ids'] = new_member_ids
+            group_node_attrs['member_type'] = member_type
             
-            update_batch_labels(batch_id)
+            update_group_labels(group_id)
             param_graph.save()
             
-            updated_batch = param_graph.get_element(batch_id).to_dict()
+            updated_group = param_graph.get_element(group_id).to_dict()
 
         return jsonify({
-            "message": "Batch updated successfully",
-            "collection": updated_batch,
+            "message": "Group updated successfully",
+            "collection": updated_group,
             "success": True
         })
 
     except Exception as e:
-        print(f"Failed to update batch: {e}")
+        print(f"Failed to update group: {e}")
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
@@ -764,16 +765,16 @@ async def get_job_status(job_id):
             with graph_lock:
                 param_graph.add_element(final_artifact)
 
-                batch_id = job_context.get("batch_id")
-                if batch_id:
-                    param_graph.update_element(final_artifact.id, {"parent": batch_id})
-                    batch_node_attrs = param_graph.G.nodes[batch_id]
-                    if 'member_ids' not in batch_node_attrs or not isinstance(batch_node_attrs['member_ids'], list):
-                        batch_node_attrs['member_ids'] = []
-                    if final_artifact.id not in batch_node_attrs['member_ids']:
-                        batch_node_attrs['member_ids'].append(final_artifact.id)
+                group_id = job_context.get("group_id") or job_context.get("batch_id")
+                if group_id:
+                    param_graph.update_element(final_artifact.id, {"parent": group_id})
+                    group_node_attrs = param_graph.G.nodes[group_id]
+                    if 'member_ids' not in group_node_attrs or not isinstance(group_node_attrs['member_ids'], list):
+                        group_node_attrs['member_ids'] = []
+                    if final_artifact.id not in group_node_attrs['member_ids']:
+                        group_node_attrs['member_ids'].append(final_artifact.id)
                         
-                    update_batch_labels(batch_id)
+                    update_group_labels(group_id)
 
                 for element in job_context.get("linked_elements", []):
                     print(f"Linking {element.id} to {final_artifact.id}")
@@ -962,7 +963,7 @@ def _dispatch_sync_operation(data):
 
         # 4. Integrate into the graph
         collection_dict = None
-        req_batch_id = data.get("batch_id") or params.get("batch_id")
+        req_group_id = data.get("group_id") or data.get("batch_id") or params.get("group_id") or params.get("batch_id")
         with graph_lock:
             for artifact in final_artifacts:
                 param_graph.add_element(artifact)
@@ -970,50 +971,50 @@ def _dispatch_sync_operation(data):
                 for source_el in source_elements:
                     param_graph.link(source_el, artifact, relation='source')
                 
-            if req_batch_id:
-                if not param_graph.G.has_node(req_batch_id):
-                    # Create new batch element
-                    batch_node = Batch(id=req_batch_id, member_ids=[], member_type=final_artifacts[0].type)
-                    param_graph.add_element(batch_node)
+            if req_group_id:
+                if not param_graph.G.has_node(req_group_id):
+                    # Create new group element
+                    group_node = Group(id=req_group_id, member_ids=[], member_type=final_artifacts[0].type)
+                    param_graph.add_element(group_node)
                     
                     # Try to position it near one of the source elements
                     for el in source_elements:
                         if param_graph.G.has_node(el.id):
                             el_pos = param_graph.G.nodes[el.id].get('position')
                             if el_pos:
-                                param_graph.update_element(req_batch_id, {"position": {"x": el_pos["x"] + 80, "y": el_pos["y"] + 80}})
+                                param_graph.update_element(req_group_id, {"position": {"x": el_pos["x"] + 80, "y": el_pos["y"] + 80}})
                                 break
-                    print(f"Created new batch element {req_batch_id} for sync operation")
+                    print(f"Created new group element {req_group_id} for sync operation")
                 
                 for artifact in final_artifacts:
-                    param_graph.update_element(artifact.id, {"parent": req_batch_id})
-                    batch_node_attrs = param_graph.G.nodes[req_batch_id]
-                    if 'member_ids' not in batch_node_attrs or not isinstance(batch_node_attrs['member_ids'], list):
-                        batch_node_attrs['member_ids'] = []
-                    if artifact.id not in batch_node_attrs['member_ids']:
-                        batch_node_attrs['member_ids'].append(artifact.id)
+                    param_graph.update_element(artifact.id, {"parent": req_group_id})
+                    group_node_attrs = param_graph.G.nodes[req_group_id]
+                    if 'member_ids' not in group_node_attrs or not isinstance(group_node_attrs['member_ids'], list):
+                        group_node_attrs['member_ids'] = []
+                    if artifact.id not in group_node_attrs['member_ids']:
+                        group_node_attrs['member_ids'].append(artifact.id)
                 
-                update_batch_labels(req_batch_id)
-                collection_dict = param_graph.get_element(req_batch_id).to_dict()
+                update_group_labels(req_group_id)
+                collection_dict = param_graph.get_element(req_group_id).to_dict()
             elif is_batch:
                 member_ids = [a.id for a in final_artifacts]
-                batch_id = uid_generator.from_uids(member_ids)
-                batch = Batch(id=batch_id, member_ids=member_ids, member_type=final_artifacts[0].type)
-                param_graph.add_element(batch)
+                group_id = uid_generator.from_uids(member_ids)
+                group = Group(id=group_id, member_ids=member_ids, member_type=final_artifacts[0].type)
+                param_graph.add_element(group)
                 
                 # Try to position it near one of the source elements
                 for el in source_elements:
                     if param_graph.G.has_node(el.id):
                         el_pos = param_graph.G.nodes[el.id].get('position')
                         if el_pos:
-                            param_graph.update_element(batch_id, {"position": {"x": el_pos["x"] + 80, "y": el_pos["y"] + 80}})
+                            param_graph.update_element(group_id, {"position": {"x": el_pos["x"] + 80, "y": el_pos["y"] + 80}})
                             break
                 
                 for m_id in member_ids:
-                    param_graph.update_element(m_id, {"parent": batch_id})
+                    param_graph.update_element(m_id, {"parent": group_id})
                     
-                update_batch_labels(batch_id)
-                collection_dict = param_graph.get_element(batch_id).to_dict()
+                update_group_labels(group_id)
+                collection_dict = param_graph.get_element(group_id).to_dict()
 
             param_graph.save()
             
@@ -1149,24 +1150,24 @@ async def _dispatch_async_operation(data):
         else:
             linked_elements = [model_element, *resolved_elements]
         
-        # --- Batching Logic ---
-        batch_id = data.get("batch_id")
-        if batch_id:
+        # --- Grouping/Batching Logic ---
+        group_id = data.get("group_id") or data.get("batch_id")
+        if group_id:
             with graph_lock:
-                if not param_graph.G.has_node(batch_id):
-                    batch_element = Batch(id=batch_id, member_type="audio" if operation != "invert" else "latent")
-                    param_graph.add_element(batch_element)
+                if not param_graph.G.has_node(group_id):
+                    group_element = Group(id=group_id, member_type="audio" if operation != "invert" else "latent")
+                    param_graph.add_element(group_element)
                     
                     # Try to position it near one of the source/linked elements
                     for el in linked_elements:
                         if param_graph.G.has_node(el.id):
                             el_pos = param_graph.G.nodes[el.id].get('position')
                             if el_pos:
-                                param_graph.update_element(batch_id, {"position": {"x": el_pos["x"] + 80, "y": el_pos["y"] + 80}})
+                                param_graph.update_element(group_id, {"position": {"x": el_pos["x"] + 80, "y": el_pos["y"] + 80}})
                                 break
                     
                     param_graph.save()
-                    print(f"Created new batch element {batch_id}")
+                    print(f"Created new group element {group_id}")
 
         # --- Execute ---
         print(f"Submitting {operation} job {job_id} to engine...")
@@ -1183,7 +1184,7 @@ async def _dispatch_async_operation(data):
             v_params["gratings"] = gratings
             
         active_jobs[job_id] = {
-            "batch_id": batch_id,
+            "group_id": group_id,
             "linked_elements": linked_elements,
             "validated_params": v_params,
             "operation": operation
@@ -1451,20 +1452,20 @@ def cache_used_audio(audio_id):
         except Exception as e:
             print(f"Failed to cache audio {audio_id}: {e}")
 
-def update_batch_labels(batch_id: str):
+def update_group_labels(group_id: str):
     """
-    Recalculates the shared parameters of a batch and updates the batch's alias,
+    Recalculates the shared parameters of a group and updates the group's alias,
     as well as the aliases of all its children (based on their unique parameters).
     Assumes caller holds `graph_lock`.
     """
-    if param_graph is None or not param_graph.G.has_node(batch_id):
+    if param_graph is None or not param_graph.G.has_node(group_id):
         return
 
-    batch_node_attrs = param_graph.G.nodes[batch_id]
-    if batch_node_attrs.get('type') != 'batch':
+    group_node_attrs = param_graph.G.nodes[group_id]
+    if group_node_attrs.get('type') != 'group':
         return
         
-    member_ids = batch_node_attrs.get('member_ids', [])
+    member_ids = group_node_attrs.get('member_ids', [])
     if not member_ids:
         return
 
@@ -1575,12 +1576,12 @@ def update_batch_labels(batch_id: str):
     print(f"Shared context: {shared_context}")
     print(f"Member diffs list: {member_diffs_list}")
 
-    # Generate a label for the batch based on the shared prompt/context
-    batch_alias = shared_context.get('prompt', "Artifact Batch")
-    if len(str(batch_alias)) > 30:
-        batch_alias = str(batch_alias)[:27] + "..."
+    # Generate a label for the group based on the shared prompt/context
+    group_alias = shared_context.get('prompt', "Artifact Group")
+    if len(str(group_alias)) > 30:
+        group_alias = str(group_alias)[:27] + "..."
 
-    param_graph.update_element(batch_id, {"shared_context": shared_context, "alias": batch_alias})
+    param_graph.update_element(group_id, {"shared_context": shared_context, "alias": group_alias})
 
     # Update member aliases
     for member_id, ctx, diff_dict in zip(member_ids, contexts, member_diffs_list):
@@ -1606,18 +1607,18 @@ def update_batch_labels(batch_id: str):
 
 def trigger_labeling_update():
     """
-    Forces a graph-wide recalculation of all batch and node labels.
+    Forces a graph-wide recalculation of all group and node labels.
     """
     if param_graph is None:
         return
 
     with graph_lock:
-        batch_ids = [
+        group_ids = [
             node for node, data in param_graph.G.nodes(data=True)
-            if data.get('type') == 'batch'
+            if data.get('type') == 'group'
         ]
-        for batch_id in batch_ids:
-            update_batch_labels(batch_id)
+        for group_id in group_ids:
+            update_group_labels(group_id)
             
         param_graph.save()
     print("Labeling update completed successfully.")
@@ -2202,12 +2203,12 @@ def remove_elements():
                     for child_id in children:
                         param_graph.update_element(child_id, {"parent": None, "alias": None})
 
-                    if node_attrs.get('type') == 'batch':
+                    if node_attrs.get('type') == 'group':
                         member_ids = node_attrs.get('member_ids', [])
                         for m_id in member_ids:
                             param_graph.update_element(m_id, {"parent": None, "alias": None})
                         
-                        # CRITICAL: strip the batch of its members so remove_element doesn't cascade
+                        # CRITICAL: strip the group of its members so remove_element doesn't cascade
                         param_graph.update_element(element_id, {"member_ids": []})
                         node_attrs['member_ids'] = []
 

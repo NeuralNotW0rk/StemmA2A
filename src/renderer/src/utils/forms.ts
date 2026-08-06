@@ -49,17 +49,28 @@ export interface AudioData {
   [key: string]: unknown
 }
 
-export interface BatchData {
+export interface GroupData {
   id: string
   name?: string
-  type: 'batch'
+  type: 'group'
   member_type: string
   member_ids: string[]
   alias?: string
   [key: string]: unknown
 }
 
-export type NodeData = ModelData | AudioData | BatchData
+export interface BundleData {
+  id: string
+  name: string
+  type: 'bundle'
+  member_type: string
+  member_ids: string[]
+  alias?: string
+  context: Record<string, unknown>
+  [key: string]: unknown
+}
+
+export type NodeData = ModelData | AudioData | GroupData | BundleData
 
 export function initializeFormData(
   fields: FormConfig,
@@ -102,7 +113,7 @@ export function initializeFormData(
       if (field.filter.type === initiatorNode.type) {
         formData[field.name] = initiatorNode
       } else if (
-        initiatorNode.type === 'batch' &&
+        initiatorNode.type === 'group' &&
         field.filter.type === initiatorNode.member_type
       ) {
         formData[field.name] = initiatorNode

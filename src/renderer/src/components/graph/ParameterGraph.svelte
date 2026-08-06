@@ -11,7 +11,7 @@
   import graphStyle from './Style'
   import layoutConfig from './Layout'
   import { cyInstanceStore, selectionStore } from '../../utils/stores'
-  import { BATCHING_CONFIG } from '../../utils/app-config'
+  import { GROUPING_CONFIG } from '../../utils/app-config'
 
   interface Props {
     graphData?: {
@@ -30,15 +30,15 @@
     onnodeSelect?: (data: any) => void
     onedgeSelect?: (data: any) => void
     onElementRemove?: (data: any) => void
-    onstartBatching?: (data: any) => void
+    onstartGrouping?: (data: any) => void
     onsavePositions?: (positions: Record<string, { x: number; y: number }>) => void | Promise<void>
     onexpandPath?: (id: string) => void
     ontoggleFavorite?: (data: any, isFavorite: boolean) => void
-    onchangeBatchMembership?: (
+    onchangeGroupMembership?: (
       nodeId: string,
-      oldBatchId: string | null,
+      oldGroupId: string | null,
       oldMembers: string[],
-      newBatchId: string | null,
+      newGroupId: string | null,
       newMembers: string[]
     ) => void | Promise<void>
     onselectOperation?: (op: any, initiatorNode: any, useContext?: boolean) => void
@@ -59,11 +59,11 @@
     onnodeSelect,
     onedgeSelect,
     onElementRemove,
-    onstartBatching,
+    onstartGrouping,
     onsavePositions,
     onexpandPath,
     ontoggleFavorite,
-    onchangeBatchMembership,
+    onchangeGroupMembership,
     onselectOperation,
     onrefresh
   }: Props = $props()
@@ -93,7 +93,7 @@
 
   const displayType = $derived(
     targetNode
-      ? targetNode.data('type') === 'batch'
+      ? targetNode.data('type') === 'group'
         ? targetNode.data('member_type')
         : targetNode.data('type')
       : null
@@ -101,7 +101,7 @@
 
   const outputType = $derived.by(() => {
     if (!targetNode) return null
-    if (targetNode.data('type') === 'batch') {
+    if (targetNode.data('type') === 'group') {
       const memberIds = targetNode.data('member_ids') || []
       if (memberIds.length > 0 && cy) {
         const firstMember = cy.getElementById(memberIds[0])
@@ -117,7 +117,7 @@
     const initiatorType = targetNode ? targetNode.data('type') : null
     let ops = operations
     if (initiatorType) {
-      const filterType = initiatorType === 'batch' ? targetNode.data('member_type') : initiatorType
+      const filterType = initiatorType === 'group' ? targetNode.data('member_type') : initiatorType
       if (filterType) {
         ops = operations.filter((op) => {
           return (
@@ -284,7 +284,7 @@
   function matchesFilter(node: cytoscape.NodeSingular, filter: Record<string, any>): boolean {
     const data = node.data()
 
-    if (data.type === 'batch') {
+    if (data.type === 'group') {
       const memberIds = data.member_ids || []
       if (memberIds.length === 0) return false
       const firstMember = node.cy().getElementById(memberIds[0])
@@ -342,13 +342,13 @@
     return true
   }
 
-  function isBatchCompatible(batch: cytoscape.NodeSingular, node: cytoscape.NodeSingular): boolean {
-    const filter: Record<string, any> = batch.data('member_type')
-      ? { type: batch.data('member_type') }
+  function isGroupCompatible(group: cytoscape.NodeSingular, node: cytoscape.NodeSingular): boolean {
+    const filter: Record<string, any> = group.data('member_type')
+      ? { type: group.data('member_type') }
       : {}
 
-    // Extract the structural dependencies from the batch's existing members to match BatchingView's logic
-    const memberIds = batch.data('member_ids') || []
+    // Extract the structural dependencies from the group's existing members to match GroupingView's logic
+    const memberIds = group.data('member_ids') || []
     if (memberIds.length > 0) {
       const firstMember = cy!.getElementById(memberIds[0])
       if (firstMember && firstMember.length > 0) {
@@ -356,7 +356,7 @@
         if (incomingIds) filter._incoming_node_ids = incomingIds
 
         const ctx = firstMember.data('context')
-        BATCHING_CONFIG.strictContextKeys.forEach((key) => {
+        GROUPING_CONFIG.strictContextKeys.forEach((key) => {
           filter[`context.${key}`] = ctx?.[key] ?? null
         })
       }
@@ -659,13 +659,13 @@
       ...nodeCommands(ele)
     ]
 
-    const batchNodeCommands = (ele: Singular): Command[] => [
+    const groupNodeCommands = (ele: Singular): Command[] => [
       {
-        content: 'Update Batch',
-        select: () => onstartBatching?.(ele.data())
+        content: 'Update Group',
+        select: () => onstartGrouping?.(ele.data())
       },
       {
-        content: 'Export Batch',
+        content: 'Export Group',
         select: () => {
           const memberIds = ele.data('member_ids') || []
           const names = memberIds
@@ -689,19 +689,19 @@
         { content: 'Tidy', select: tidyView },
         { content: 'Fit', select: fitView },
         {
-          content: 'Create Batch',
+          content: 'Create Group',
           select: async () => {
             try {
-              const response = await window.api.batchElements([])
+              const response = await window.api.groupElements([])
               if (response && response.success) {
-                const newBatch = response.collection
+                const newGroup = response.collection
                 await onsavePositions?.({
-                  [newBatch.id]: { x: lastCxtTapPosition.x, y: lastCxtTapPosition.y }
+                  [newGroup.id]: { x: lastCxtTapPosition.x, y: lastCxtTapPosition.y }
                 })
                 await onrefresh?.()
               }
             } catch (err: any) {
-              console.error('Failed to create empty batch:', err)
+              console.error('Failed to create empty group:', err)
             }
           }
         }
@@ -724,8 +724,8 @@
             return externalNodeCommands(ele)
           case 'local_path':
             return pathNodeCommands(ele)
-          case 'batch':
-            return batchNodeCommands(ele)
+          case 'group':
+            return groupNodeCommands(ele)
           case 'latent':
             return latentNodeCommands(ele)
           default:
@@ -806,9 +806,9 @@
       const parent = node.parent()
       const parentType = parent && parent.length > 0 ? parent.data('type') : null
 
-      // Block ghost-dragging for members of directory nodes, directories, and batches
+      // Block ghost-dragging for members of directory nodes, directories, and groups
       const isGhostDraggable =
-        parentType !== 'directory' && nodeType !== 'directory' && nodeType !== 'batch'
+        parentType !== 'directory' && nodeType !== 'directory' && nodeType !== 'group'
 
       if (node.children().length === 0 && isGhostDraggable && oe && (oe.ctrlKey || oe.metaKey)) {
         sourceNode = node as unknown as cytoscape.NodeSingular
@@ -834,10 +834,10 @@
           events: 'no' // Do not capture events on the ghost node
         })
 
-        cy!.nodes('[type="batch"]').forEach((batch) => {
-          if (batch.id() === sourceNode!.id()) return
-          if (isBatchCompatible(batch as unknown as cytoscape.NodeSingular, sourceNode!)) {
-            batch.addClass('compatible-drop-target')
+        cy!.nodes('[type="group"]').forEach((group) => {
+          if (group.id() === sourceNode!.id()) return
+          if (isGroupCompatible(group as unknown as cytoscape.NodeSingular, sourceNode!)) {
+            group.addClass('compatible-drop-target')
           }
         })
       }
@@ -848,17 +848,17 @@
         ghostNode.position(evt.position)
 
         const nodePos = ghostNode.position()
-        cy!.nodes('.compatible-drop-target').forEach((batch) => {
-          const bb = batch.boundingBox()
+        cy!.nodes('.compatible-drop-target').forEach((group) => {
+          const bb = group.boundingBox()
           if (
             nodePos.x >= bb.x1 &&
             nodePos.x <= bb.x2 &&
             nodePos.y >= bb.y1 &&
             nodePos.y <= bb.y2
           ) {
-            batch.addClass('active-drop-target')
+            group.addClass('active-drop-target')
           } else {
-            batch.removeClass('active-drop-target')
+            group.removeClass('active-drop-target')
           }
         })
       }
@@ -867,20 +867,20 @@
     cy.on('mouseup', async () => {
       if (ghostNode && sourceNode) {
         const nodePos = ghostNode.position()
-        let targetBatchId: string | null = null
+        let targetGroupId: string | null = null
         let invalidDrop = false
 
-        cy!.nodes('[type="batch"]').forEach((batch) => {
-          if (batch.id() === sourceNode!.id()) return
-          const bb = batch.boundingBox()
+        cy!.nodes('[type="group"]').forEach((group) => {
+          if (group.id() === sourceNode!.id()) return
+          const bb = group.boundingBox()
           if (
             nodePos.x >= bb.x1 &&
             nodePos.x <= bb.x2 &&
             nodePos.y >= bb.y1 &&
             nodePos.y <= bb.y2
           ) {
-            if (batch.hasClass('compatible-drop-target')) {
-              targetBatchId = batch.id()
+            if (group.hasClass('compatible-drop-target')) {
+              targetGroupId = group.id()
             } else {
               invalidDrop = true
             }
@@ -888,9 +888,9 @@
         })
 
         // Ensure classes are cleared regardless of whether the drop was valid
-        cy!.nodes('[type="batch"]').removeClass('compatible-drop-target active-drop-target')
+        cy!.nodes('[type="group"]').removeClass('compatible-drop-target active-drop-target')
 
-        if (invalidDrop && !targetBatchId) {
+        if (invalidDrop && !targetGroupId) {
           ghostNode.remove()
           ghostNode = null
           sourceNode = null
@@ -900,15 +900,15 @@
         const currentParentId = sourceNode.data('parent') || null
         const sourceNodeId = sourceNode.id()
 
-        if (currentParentId !== targetBatchId) {
+        if (currentParentId !== targetGroupId) {
           const oldMembers = currentParentId
             ? cy!
                 .getElementById(currentParentId)
                 .data('member_ids')
                 ?.filter((id: string) => id !== sourceNodeId) || []
             : []
-          const newMembers = targetBatchId
-            ? [...(cy!.getElementById(targetBatchId).data('member_ids') || []), sourceNodeId]
+          const newMembers = targetGroupId
+            ? [...(cy!.getElementById(targetGroupId).data('member_ids') || []), sourceNodeId]
             : []
 
           // 1. Set the physical position immediately before snapshotting
@@ -926,8 +926,8 @@
 
             const rawNode = elementsList.find((e: any) => e.data.id === sourceNodeId)
             if (rawNode) {
-              if (targetBatchId) {
-                rawNode.data.parent = targetBatchId
+              if (targetGroupId) {
+                rawNode.data.parent = targetGroupId
               } else {
                 delete rawNode.data.parent
               }
@@ -939,12 +939,12 @@
 
           // 5. Persist
           await extractAndSavePositions()
-          if (onchangeBatchMembership) {
-            await onchangeBatchMembership(
+          if (onchangeGroupMembership) {
+            await onchangeGroupMembership(
               sourceNodeId,
               currentParentId,
               oldMembers,
-              targetBatchId,
+              targetGroupId,
               newMembers
             )
           }

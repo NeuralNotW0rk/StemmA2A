@@ -10,7 +10,7 @@
   import ImportModelView from './components/views/ImportModelView.svelte'
   import RemovalView from './components/views/RemovalView.svelte'
   import NewProjectView from './components/views/NewProjectView.svelte'
-  import BatchingView from './components/views/BatchingView.svelte'
+  import GroupingView from './components/views/GroupingView.svelte'
   import JobStatusView from './components/views/JobStatusView.svelte'
   import OperationView from './components/views/OperationView.svelte'
   import BendingView from './components/views/BendingView.svelte'
@@ -434,9 +434,9 @@
     actionPanelView = 'removal'
   }
 
-  function handleStartBatching(nodeData: any): void {
+  function handleStartGrouping(nodeData: any): void {
     initiatorNodeStore.set(nodeData)
-    actionPanelView = 'batching'
+    actionPanelView = 'grouping'
   }
 
   async function handleExport(data: { names: string[] }): Promise<void> {
@@ -461,26 +461,26 @@
     }
   }
 
-  async function handleChangeBatchMembership(
+  async function handleChangeGroupMembership(
     _nodeId: string,
-    oldBatchId: string | null,
+    oldGroupId: string | null,
     oldMembers: string[],
-    newBatchId: string | null,
+    newGroupId: string | null,
     newMembers: string[]
   ): Promise<void> {
     try {
-      // Unlink from the old batch if applicable
-      if (oldBatchId) {
-        await window.api.updateBatch(oldBatchId, oldMembers)
+      // Unlink from the old group if applicable
+      if (oldGroupId) {
+        await window.api.updateGroup(oldGroupId, oldMembers)
       }
-      // Link to the new batch if applicable
-      if (newBatchId) {
-        await window.api.updateBatch(newBatchId, newMembers)
+      // Link to the new group if applicable
+      if (newGroupId) {
+        await window.api.updateGroup(newGroupId, newMembers)
       }
       await refreshGraphData()
     } catch (error: any) {
-      console.error('Error changing batch membership:', error)
-      errorInInfoPanel = { title: 'Batch Update Failed', message: error.message || String(error) }
+      console.error('Error changing group membership:', error)
+      errorInInfoPanel = { title: 'Group Update Failed', message: error.message || String(error) }
     }
   }
 
@@ -502,7 +502,7 @@
   function getInitiatorOutputType(): string | null {
     const node = $initiatorNodeStore
     if (!node) return null
-    if (node.type === 'batch') {
+    if (node.type === 'group') {
       const memberIds = node.member_ids || []
       if (memberIds.length > 0 && graphData && graphData.elements) {
         let elements: any[] = []
@@ -536,13 +536,13 @@
     if (actionPanelView === 'removal') {
       return 'Confirm Removal'
     }
-    if (actionPanelView === 'batching') {
+    if (actionPanelView === 'grouping') {
       const initNode = $initiatorNodeStore
-      if (initNode?.type === 'batch') {
+      if (initNode?.type === 'group') {
         const memberIds = (initNode as any).member_ids || []
-        return memberIds.length === 0 ? 'Create Batch' : 'Update Batch'
+        return memberIds.length === 0 ? 'Create Group' : 'Update Group'
       }
-      return 'Create Batch'
+      return 'Create Group'
     }
     if (actionPanelView === 'operation') {
       if ($selectedOperation) {
@@ -699,15 +699,15 @@
             errorInInfoPanel = error
           }}
         />
-      {:else if actionPanelView === 'batching'}
-        <BatchingView
+      {:else if actionPanelView === 'grouping'}
+        <GroupingView
           onclose={closeActionPanel}
           onrefresh={() => {
             closeActionPanel()
             refreshGraphData()
           }}
           onerror={(error) => {
-            console.error('Batching error:', error)
+            console.error('Grouping error:', error)
             closeActionPanel()
             errorInInfoPanel = error
           }}
@@ -785,13 +785,13 @@
     onexport={handleExport}
     onedgeSelect={handleElementSelect}
     onElementRemove={handleElementRemove}
-    onstartBatching={handleStartBatching}
+    onstartGrouping={handleStartGrouping}
     onsavePositions={handleSavePositions}
     onexpandPath={handleExpandPath}
     ontoggleFavorite={handleToggleFavorite}
     {showDetailedLabels}
     {chronologicalConstraint}
-    onchangeBatchMembership={handleChangeBatchMembership}
+    onchangeGroupMembership={handleChangeGroupMembership}
     onselectOperation={handleSelectOperation}
     onrefresh={refreshGraphData}
   />

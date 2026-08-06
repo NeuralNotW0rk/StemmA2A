@@ -15,7 +15,7 @@ export const ELEMENT_INFO_CONFIG = {
   priorityKeys: ['id', 'type', 'name', 'alias']
 } as const
 
-export const BATCHING_CONFIG = {
-  // Explicit context attributes that must match exactly for nodes to be grouped in a batch.
+export const GROUPING_CONFIG = {
+  // Explicit context attributes that must match exactly for nodes to be grouped in a group.
   strictContextKeys: ['prompt']
 } as const

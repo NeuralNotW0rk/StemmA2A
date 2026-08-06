@@ -14,7 +14,7 @@ const gradientColor4 = getCssVar('--graph-gradient-4')
 const gradientColor5 = getCssVar('--graph-gradient-5')
 
 const mediaColor = getCssVar('--graph-media')
-const batchColor = getCssVar('--graph-batch')
+const groupColor = getCssVar('--graph-batch')
 const selectedColor = getCssVar('--graph-selected')
 const modelColor = gradientColor3
 const externalColor = gradientColor2
@@ -192,7 +192,7 @@ const defaultStyle: CssStyleDeclaration[] = [
 
   // Collection-specific style configuration
   {
-    selector: 'node[type="batch"]',
+    selector: 'node[type="group"]',
     style: {
       label: (node: NodeSingular) => {
         const name = node.data('name');
@@ -204,7 +204,7 @@ const defaultStyle: CssStyleDeclaration[] = [
       },
       'text-valign': 'top',
       'text-margin-y': 0,
-      'background-color': batchColor,
+      'background-color': groupColor,
       'background-opacity': 0.5,
       'border-width': 2,
       'shape': 'rectangle',
@@ -212,7 +212,7 @@ const defaultStyle: CssStyleDeclaration[] = [
     }
   },
   {
-    selector: 'node[type="batch"].detailed',
+    selector: 'node[type="group"].detailed',
     style: {
       label: (node: NodeSingular) => {
         const name = node.data('name');
@@ -228,21 +228,32 @@ const defaultStyle: CssStyleDeclaration[] = [
     }
   },
   {
-    selector: 'node[type="batch"][member_type="audio"]',
+    selector: 'node[type="group"][member_type="audio"]',
     style: {
       'border-color': mediaColor
     }
   },
   {
-    selector: 'node[type="batch"][member_type="image"]',
+    selector: 'node[type="group"][member_type="image"]',
     style: {
       'border-color': mediaColor
     }
   },
   {
-    selector: 'node[type="batch"][member_type="latent"]',
+    selector: 'node[type="group"][member_type="latent"]',
     style: {
       'border-color': latentColor
+    }
+  },
+  {
+    selector: 'node[type="bundle"]',
+    style: {
+      label: (node: NodeSingular) => node.data('name') || node.data('alias') || node.data('id'),
+      'background-color': externalColor,
+      'border-width': 3,
+      'border-color': gratingColor,
+      width: 40,
+      height: 40
     }
   },
   {
@@ -282,7 +293,7 @@ const defaultStyle: CssStyleDeclaration[] = [
       label: 'data(path)',
       'text-valign': 'top',
       'text-margin-y': 0,
-      'background-color': batchColor,
+      'background-color': groupColor,
       'background-opacity': 0.5,
       'border-color': externalColor,
       'border-width': 2,

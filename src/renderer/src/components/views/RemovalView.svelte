@@ -14,7 +14,7 @@
   const initialElements = Array.isArray($selectedForRemoval)
     ? $selectedForRemoval
     : [$selectedForRemoval].filter(Boolean)
-  let keepChildren = $state(!initialElements.some((el) => el.type === 'batch'))
+  let keepChildren = $state(!initialElements.some((el) => el.type === 'group'))
 
   let elements = $derived(
     Array.isArray($selectedForRemoval) ? $selectedForRemoval : [$selectedForRemoval].filter(Boolean)
@@ -57,12 +57,12 @@
       </div>
     {/if}
 
-    {#if elements.some((el) => el.type === 'batch' || el.type === 'directory')}
+    {#if elements.some((el) => el.type === 'group' || el.type === 'directory')}
       <div class="options">
         <label>
           <input type="checkbox" bind:checked={keepChildren} disabled={isRemoving} />
-          {#if elements.some((el) => el.type === 'batch')}
-            Keep child elements (disband batch)
+          {#if elements.some((el) => el.type === 'group')}
+            Keep child elements (disband group)
           {:else}
             Keep contained files
           {/if}

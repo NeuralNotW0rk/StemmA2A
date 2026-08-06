@@ -40,8 +40,8 @@ interface API {
   repairEdges: () => Promise<any>
   pollJobStatus: (jobId: string) => Promise<any>
   updateEmbeddings: () => Promise<any>
-  batchElements: (memberIds: string[]) => Promise<any>
-  updateBatch: (batchId: string, memberIds: string[]) => Promise<any>
+  groupElements: (memberIds: string[]) => Promise<any>
+  updateGroup: (groupId: string, memberIds: string[]) => Promise<any>
   addExternalSource: (sourcePath: string) => Promise<any>
   expandPath: (pathNodeId: string) => Promise<any>
   cancelJob: (jobId: string) => Promise<any>

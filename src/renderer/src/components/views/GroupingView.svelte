@@ -1,8 +1,8 @@
 <script lang="ts">
   import { initiatorNodeStore, cyInstanceStore, type GraphElement } from '../../utils/stores'
   import NodeSelectorList, { type NodeListItem } from '../NodeSelectorList.svelte'
-  import type { NodeData, BatchData } from '../../utils/forms'
-  import { BATCHING_CONFIG } from '../../utils/app-config'
+  import type { NodeData, GroupData } from '../../utils/forms'
+  import { GROUPING_CONFIG } from '../../utils/app-config'
   import type { ErrorInfo } from '../../utils/types'
 
   let {
@@ -20,16 +20,16 @@
   $effect(() => {
     if (!initiatorNode?.type) {
       onerror({
-        title: 'Batching Error',
-        message: 'The initiator node does not have a valid type for batching.'
+        title: 'Grouping Error',
+        message: 'The initiator node does not have a valid type for grouping.'
       })
     }
   })
 
-  let isUpdate = $derived(initiatorNode?.type === 'batch')
+  let isUpdate = $derived(initiatorNode?.type === 'group')
   let isUpdateTitle = $derived(
-    initiatorNode?.type === 'batch' &&
-      (initiatorNode as unknown as BatchData).member_ids?.length > 0
+    initiatorNode?.type === 'group' &&
+      (initiatorNode as unknown as GroupData).member_ids?.length > 0
   )
 
   let filter = $derived.by(() => {
@@ -42,7 +42,7 @@
       refNode = firstMemberWithNode.node as NodeData
     }
 
-    // 2. Fallback to children of initiator batch
+    // 2. Fallback to children of initiator group
     if (!refNode && isUpdate) {
       if (cy && initiatorNode?.id) {
         const children = cy.$id(initiatorNode.id).children()
@@ -57,13 +57,13 @@
       refNode = initiatorNode as NodeData | null | undefined
     }
 
-    if (!refNode || refNode.type === 'batch') return {}
+    if (!refNode || refNode.type === 'group') return {}
 
     const newFilter: Record<string, unknown> = {}
     if (refNode.type) newFilter.type = refNode.type
 
     const ctx = refNode.context as Record<string, unknown> | undefined
-    BATCHING_CONFIG.strictContextKeys.forEach((key) => {
+    GROUPING_CONFIG.strictContextKeys.forEach((key) => {
       newFilter[`context.${key}`] = ctx?.[key] ?? null
     })
 
@@ -103,7 +103,7 @@
             // Pre-populate with existing members
             members = [...initialMembers]
           } else {
-            // It is an empty batch, pre-populate with one empty slot
+            // It is an empty group, pre-populate with one empty slot
             members = [createMember(null)]
           }
         }
@@ -113,20 +113,19 @@
     }
   })
 
-  async function saveBatch(): Promise<void> {
+  async function saveGroup(): Promise<void> {
     const member_ids = members
       .map((m) => (typeof m.node === 'string' ? m.node : m.node?.id))
       .filter(Boolean)
 
     try {
       if (initiatorNode) {
-        // @ts-ignore (define in dts)
-        await window.api.updateBatch(initiatorNode.id, member_ids)
+        await window.api.updateGroup(initiatorNode.id, member_ids)
       }
       onrefresh()
     } catch (error) {
       onerror({
-        title: 'Batching Error',
+        title: 'Grouping Error',
         message: error instanceof Error ? error.message : String(error)
       })
     }
@@ -147,8 +146,8 @@
 
   <div class="panel-actions">
     <button onclick={onclose}>Cancel</button>
-    <button class="primary" onclick={saveBatch}>
-      {isUpdateTitle ? 'Update Batch' : 'Create Batch'}
+    <button class="primary" onclick={saveGroup}>
+      {isUpdateTitle ? 'Update Group' : 'Create Group'}
     </button>
   </div>
 </div>

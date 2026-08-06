@@ -490,8 +490,8 @@ app.whenReady().then(async () => {
     return await response.json()
   })
 
-  ipcMain.handle('batchElements', async (_event, memberIds) => {
-    const response = await fetchWithAuth(`${BACKEND_URL}/graph/create_batch`, {
+  ipcMain.handle('groupElements', async (_event, memberIds) => {
+    const response = await fetchWithAuth(`${BACKEND_URL}/graph/create_group`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ member_ids: memberIds })
@@ -499,14 +499,14 @@ app.whenReady().then(async () => {
     if (!response.ok) {
       const errorBody = await response.text()
       throw new Error(
-        `Failed to create batch. Status: ${response.status}. Error: ${errorBody}`
+        `Failed to create group. Status: ${response.status}. Error: ${errorBody}`
       )
     }
     return await response.json()
   })
 
-  ipcMain.handle('updateBatch', async (_event, batchId, memberIds) => {
-    const response = await fetchWithAuth(`${BACKEND_URL}/graph/update_batch/${batchId}`, {
+  ipcMain.handle('updateGroup', async (_event, groupId, memberIds) => {
+    const response = await fetchWithAuth(`${BACKEND_URL}/graph/update_group/${groupId}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ member_ids: memberIds })
@@ -514,7 +514,7 @@ app.whenReady().then(async () => {
     if (!response.ok) {
       const errorBody = await response.text()
       throw new Error(
-        `Failed to update batch. Status: ${response.status}. Error: ${errorBody}`
+        `Failed to update group. Status: ${response.status}. Error: ${errorBody}`
       )
     }
     return await response.json()

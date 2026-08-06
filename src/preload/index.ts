@@ -48,9 +48,9 @@ const api = {
   repairEdges: (): Promise<any> => ipcRenderer.invoke('repairEdges'),
   updateEmbeddings: (): Promise<any> => ipcRenderer.invoke('updateEmbeddings'),
   pollJobStatus: (jobId: string): Promise<any> => ipcRenderer.invoke('pollJobStatus', jobId),
-  batchElements: (memberIds: string[]): Promise<any> => ipcRenderer.invoke('batchElements', memberIds),
-  updateBatch: (batchId: string, memberIds: string[]): Promise<any> =>
-    ipcRenderer.invoke('updateBatch', batchId, memberIds),
+  groupElements: (memberIds: string[]): Promise<any> => ipcRenderer.invoke('groupElements', memberIds),
+  updateGroup: (groupId: string, memberIds: string[]): Promise<any> =>
+    ipcRenderer.invoke('updateGroup', groupId, memberIds),
   addExternalSource: (sourcePath: string): Promise<any> => ipcRenderer.invoke('addExternalSource', sourcePath),
   expandPath: (pathNodeId: string): Promise<any> => ipcRenderer.invoke('expandPath', pathNodeId),
   cancelJob: (jobId: string): Promise<any> => ipcRenderer.invoke('cancel-job', jobId),

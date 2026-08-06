@@ -42,7 +42,7 @@
   let outputType = $derived.by(() => {
     const node = $initiatorNodeStore
     if (!node) return null
-    if (node.type === 'batch') {
+    if (node.type === 'group') {
       const memberIds = node.member_ids || []
       if (memberIds.length > 0 && $cyInstanceStore) {
         const firstMember = $cyInstanceStore.getElementById(memberIds[0])
@@ -152,12 +152,12 @@
     ov.batchFields[fieldName] = !ov.batchFields[fieldName]
   }
 
-  let parentBatchId = $derived.by(() => {
+  let parentGroupId = $derived.by(() => {
     const cy = $cyInstanceStore
     const node = $initiatorNodeStore
     if (cy && node && node.parent) {
       const parentNode = cy.$id(node.parent)
-      if (parentNode && parentNode.length > 0 && parentNode.data('type') === 'batch') {
+      if (parentNode && parentNode.length > 0 && parentNode.data('type') === 'group') {
         return node.parent
       }
     }
@@ -165,7 +165,7 @@
   })
 
   let isReplicated = $derived(!!$contextStore)
-  let addToSameBatch = $state(true)
+  let addToSameGroup = $state(true)
 
   onDestroy(() => {
     // Clear state on destroy
@@ -288,7 +288,7 @@
 
         if ($initiatorNodeStore && !isReplicated) {
           const type = $initiatorNodeStore.type
-          const effectiveType = type === 'batch' ? $initiatorNodeStore.member_type : type
+          const effectiveType = type === 'group' ? $initiatorNodeStore.member_type : type
           if (effectiveType === 'audio') {
             if (baseFieldsConfig.some((f) => f.name === 'init_audio')) {
               initialData.init_audio = $initiatorNodeStore
@@ -313,7 +313,7 @@
             if (field.type === 'node') {
               const isAudioInitiator =
                 $initiatorNodeStore?.type === 'audio' ||
-                ($initiatorNodeStore?.type === 'batch' &&
+                ($initiatorNodeStore?.type === 'group' &&
                   $initiatorNodeStore?.member_type === 'audio')
               if (field.name === 'source_audio' && isAudioInitiator) {
                 initialData[field.name] = $initiatorNodeStore
@@ -561,8 +561,8 @@
         basePayload.model_id = basePayload.model
       }
 
-      if (parentBatchId && isReplicated && addToSameBatch) {
-        basePayload.batch_id = parentBatchId
+      if (parentGroupId && isReplicated && addToSameGroup) {
+        basePayload.group_id = parentGroupId
       }
 
       // Single run
@@ -638,9 +638,9 @@
 
       console.log(`Starting batch execution with ${combinations.length} combinations.`)
 
-      const batchId =
-        parentBatchId && isReplicated && addToSameBatch
-          ? parentBatchId
+      const groupId =
+        parentGroupId && isReplicated && addToSameGroup
+          ? parentGroupId
           : `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
 
       combinations.forEach((combination) => {
@@ -689,7 +689,7 @@
           batchPayload.model_id = batchPayload.model
         }
 
-        batchPayload.batch_id = batchId
+        batchPayload.group_id = groupId
 
         runJob(jobName, batchPayload, op.name, op.execution_mode)
       })
@@ -1075,16 +1075,16 @@
         </div>
       {/if}
 
-      {#if parentBatchId && isReplicated}
+      {#if parentGroupId && isReplicated}
         <div class="options">
           <label>
-            <input type="checkbox" bind:checked={addToSameBatch} disabled={isRunning} />
-            Add new artifact to the same batch
+            <input type="checkbox" bind:checked={addToSameGroup} disabled={isRunning} />
+            Add new artifact to the same group
           </label>
         </div>
       {/if}
 
-      {#if (!fieldsConfig || fieldsConfig.length === 0) && !(parentBatchId && isReplicated)}
+      {#if (!fieldsConfig || fieldsConfig.length === 0) && !(parentGroupId && isReplicated)}
         <p class="centered-text">No parameters needed for this operation.</p>
       {/if}
     {:else}

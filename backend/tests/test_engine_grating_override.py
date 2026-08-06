@@ -210,12 +210,12 @@ def test_flask_endpoints():
         assert len(el["metadata"]["cluster_map"]) > 0, "Cluster map was not populated!"
         print("Feature clustering and dynamic grating creation verified successfully!")
         
-        # 3. Test update_batch_labels recursive comparison
-        print("Testing update_batch_labels recursive labeling...")
-        from param_graph.elements.collections.batch_element import Batch
+        # 3. Test update_group_labels recursive comparison
+        print("Testing update_group_labels recursive labeling...")
+        from param_graph.elements.collections.group_element import Group
         from param_graph.elements.artifacts.audio_element import Audio
         
-        batch_id = "test_batch_id"
+        group_id = "test_group_id"
         m1_id = "member_1"
         m2_id = "member_2"
         
@@ -268,15 +268,15 @@ def test_flask_endpoints():
             }
         )
         
-        batch_node = Batch(id=batch_id, member_ids=[m1_id, m2_id], member_type="audio")
+        group_node = Group(id=group_id, member_ids=[m1_id, m2_id], member_type="audio")
         
         g.add_element(m1)
         g.add_element(m2)
-        g.add_element(batch_node)
+        g.add_element(group_node)
         
-        # Trigger update_batch_labels
-        from app import update_batch_labels
-        update_batch_labels(batch_id)
+        # Trigger update_group_labels
+        from app import update_group_labels
+        update_group_labels(group_id)
         
         # Verify labels/aliases
         m1_alias = g.G.nodes[m1_id].get("alias")
@@ -284,7 +284,7 @@ def test_flask_endpoints():
         
         assert m1_alias == "cluster: 1 (conv1.conv)", f"Expected 'cluster: 1 (conv1.conv)', got '{m1_alias}'"
         assert m2_alias == "cluster: 2 (conv1.conv)", f"Expected 'cluster: 2 (conv1.conv)', got '{m2_alias}'"
-        print("Recursive batch member labeling verified successfully!")
+        print("Recursive group member labeling verified successfully!")
 
         # 4. Test POST /export_shared_model
         print("Testing POST /export_shared_model...")
