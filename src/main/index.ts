@@ -159,7 +159,9 @@ app.whenReady().then(async () => {
     const response = await fetchWithAuth(`${BACKEND_URL}/health`)
     if (!response.ok) {
       const errorBody = await response.text()
-      throw new Error(`Failed to get health status. Status: ${response.status}. Error: ${errorBody}`)
+      throw new Error(
+        `Failed to get health status. Status: ${response.status}. Error: ${errorBody}`
+      )
     }
     return await response.json()
   })
@@ -251,9 +253,7 @@ app.whenReady().then(async () => {
     })
     if (!response.ok) {
       const errorBody = await response.text()
-      throw new Error(
-        `Failed to import model. Status: ${response.status}. Error: ${errorBody}`
-      )
+      throw new Error(`Failed to import model. Status: ${response.status}. Error: ${errorBody}`)
     }
     return await response.json()
   })
@@ -281,9 +281,7 @@ app.whenReady().then(async () => {
     })
     if (!response.ok) {
       const errorBody = await response.text()
-      throw new Error(
-        `Failed to register grating. Status: ${response.status}. Error: ${errorBody}`
-      )
+      throw new Error(`Failed to register grating. Status: ${response.status}. Error: ${errorBody}`)
     }
     return await response.json()
   })
@@ -292,9 +290,7 @@ app.whenReady().then(async () => {
     const response = await fetchWithAuth(`${BACKEND_URL}/model/${modelId}/layers`)
     if (!response.ok) {
       const errorBody = await response.text()
-      throw new Error(
-        `Failed to get model layers. Status: ${response.status}. Error: ${errorBody}`
-      )
+      throw new Error(`Failed to get model layers. Status: ${response.status}. Error: ${errorBody}`)
     }
     return await response.json()
   })
@@ -307,8 +303,34 @@ app.whenReady().then(async () => {
     })
     if (!response.ok) {
       const errorBody = await response.text()
+      throw new Error(`Failed to create grating. Status: ${response.status}. Error: ${errorBody}`)
+    }
+    return await response.json()
+  })
+
+  ipcMain.handle('startEvolution', async (_event, evolutionData) => {
+    const response = await fetchWithAuth(`${BACKEND_URL}/start_evolution`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(evolutionData)
+    })
+    if (!response.ok) {
+      const errorBody = await response.text()
+      throw new Error(`Failed to start evolution. Status: ${response.status}. Error: ${errorBody}`)
+    }
+    return await response.json()
+  })
+
+  ipcMain.handle('expressIndividual', async (_event, expressData) => {
+    const response = await fetchWithAuth(`${BACKEND_URL}/express_individual`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(expressData)
+    })
+    if (!response.ok) {
+      const errorBody = await response.text()
       throw new Error(
-        `Failed to create grating. Status: ${response.status}. Error: ${errorBody}`
+        `Failed to express individual. Status: ${response.status}. Error: ${errorBody}`
       )
     }
     return await response.json()
@@ -322,9 +344,7 @@ app.whenReady().then(async () => {
     })
     if (!response.ok) {
       const errorBody = await response.text()
-      throw new Error(
-        `Failed to export audio. Status: ${response.status}. Error: ${errorBody}`
-      )
+      throw new Error(`Failed to export audio. Status: ${response.status}. Error: ${errorBody}`)
     }
     return await response.json()
   })
@@ -351,7 +371,8 @@ app.whenReady().then(async () => {
         try {
           const parsed = JSON.parse(errorBody)
           if (parsed.error) {
-            parsedError = parsed.error + (parsed.traceback ? `\n\nTraceback:\n${parsed.traceback}` : '')
+            parsedError =
+              parsed.error + (parsed.traceback ? `\n\nTraceback:\n${parsed.traceback}` : '')
           }
         } catch (_) {}
         throw new Error(parsedError)
@@ -368,7 +389,9 @@ app.whenReady().then(async () => {
       const response = await fetchWithAuth(`${BACKEND_URL}/job_status/${jobId}`)
       if (!response.ok && response.status !== 500 && response.status !== 404) {
         const errorBody = await response.text()
-        throw new Error(`Failed to poll job status. Status: ${response.status}. Error: ${errorBody}`)
+        throw new Error(
+          `Failed to poll job status. Status: ${response.status}. Error: ${errorBody}`
+        )
       }
       return await response.json()
     } catch (error) {
@@ -403,9 +426,7 @@ app.whenReady().then(async () => {
     })
     if (!response.ok) {
       const errorBody = await response.text()
-      throw new Error(
-        `Failed to remove element. Status: ${response.status}. Error: ${errorBody}`
-      )
+      throw new Error(`Failed to remove element. Status: ${response.status}. Error: ${errorBody}`)
     }
     return await response.json()
   })
@@ -418,9 +439,7 @@ app.whenReady().then(async () => {
     })
     if (!response.ok) {
       const errorBody = await response.text()
-      throw new Error(
-        `Failed to remove elements. Status: ${response.status}. Error: ${errorBody}`
-      )
+      throw new Error(`Failed to remove elements. Status: ${response.status}. Error: ${errorBody}`)
     }
     return await response.json()
   })
@@ -433,7 +452,9 @@ app.whenReady().then(async () => {
     })
     if (!response.ok) {
       const errorBody = await response.text()
-      throw new Error(`Failed to add external source. Status: ${response.status}. Error: ${errorBody}`)
+      throw new Error(
+        `Failed to add external source. Status: ${response.status}. Error: ${errorBody}`
+      )
     }
     return await response.json()
   })
@@ -457,9 +478,7 @@ app.whenReady().then(async () => {
     })
     if (!response.ok) {
       const errorBody = await response.text()
-      throw new Error(
-        `Failed to update labels. Status: ${response.status}. Error: ${errorBody}`
-      )
+      throw new Error(`Failed to update labels. Status: ${response.status}. Error: ${errorBody}`)
     }
     return await response.json()
   })
@@ -470,9 +489,7 @@ app.whenReady().then(async () => {
     })
     if (!response.ok) {
       const errorBody = await response.text()
-      throw new Error(
-        `Failed to repair edges. Status: ${response.status}. Error: ${errorBody}`
-      )
+      throw new Error(`Failed to repair edges. Status: ${response.status}. Error: ${errorBody}`)
     }
     return await response.json()
   })
@@ -498,9 +515,7 @@ app.whenReady().then(async () => {
     })
     if (!response.ok) {
       const errorBody = await response.text()
-      throw new Error(
-        `Failed to create group. Status: ${response.status}. Error: ${errorBody}`
-      )
+      throw new Error(`Failed to create group. Status: ${response.status}. Error: ${errorBody}`)
     }
     return await response.json()
   })
@@ -513,9 +528,7 @@ app.whenReady().then(async () => {
     })
     if (!response.ok) {
       const errorBody = await response.text()
-      throw new Error(
-        `Failed to update group. Status: ${response.status}. Error: ${errorBody}`
-      )
+      throw new Error(`Failed to update group. Status: ${response.status}. Error: ${errorBody}`)
     }
     return await response.json()
   })
@@ -540,7 +553,6 @@ app.whenReady().then(async () => {
   ipcMain.handle('getAdapterConfig', async (_event, adapterName) => {
     return await _getAdapterConfig(adapterName)
   })
-
 
   ipcMain.handle('get_generate_form_config', async (_event, adapterName) => {
     const config = await _getAdapterConfig(adapterName)

@@ -1,7 +1,14 @@
 # backend/app.py
+import sys
+from pathlib import Path
+
+# Add sibling NeutralSelection directory to sys.path dynamically
+sibling_neutral_selection = Path(__file__).parent.parent.parent / "NeutralSelection"
+if sibling_neutral_selection.exists() and str(sibling_neutral_selection.resolve()) not in sys.path:
+    sys.path.insert(0, str(sibling_neutral_selection.resolve()))
+
 import io
 import traceback
-from pathlib import Path
 import os
 import json
 import random
@@ -49,6 +56,13 @@ from utils.semantic_interrogation import SemanticInterrogator
 from operations.registry import SyncRegistry
 from diffracture import Actant
 from diffracture.topology.grating import Grating as DiffractureGrating
+
+from param_graph.elements.artifacts.individual_element import Individual
+from param_graph.elements.artifacts.bundle_element import Bundle
+from param_graph.elements.collections.group_element import Group
+from evolution.lora.lora_genome import LoRAGenome, genome_from_grating, express_to_grating, mutate_perturbation_gene
+import copy
+import uuid
 
 app = Flask(__name__)
 CORS(app)
@@ -689,6 +703,7 @@ async def create_grating():
             
         engine = engine_provider.get_engine()
         grating_artifact = await engine.create_grating(model_element, grating_name, elements_input)
+        grating_artifact.context = data.get("context", {})
         
         with graph_lock:
             param_graph.add_element(grating_artifact)
@@ -705,6 +720,295 @@ async def create_grating():
         print(f"Failed to create grating: {e}")
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
+
+@app.route("/start_evolution", methods=["POST"])
+async def start_evolution():
+    """
+    Starts an evolution run. Generates mutated individual genomes from a baseline grating
+    and queues on-the-fly generation tasks for the initial population.
+    Creates a Population Bundle and a Population Group containing the population members,
+    linked directly from the precursor audio node.
+    """
+    if param_graph is None or engine_provider is None:
+        return jsonify({"error": "No project loaded"}), 400
+
+    try:
+        data = request.get_json() or {}
+        model_id = data.get("model_id")
+        baseline_grating_id = data.get("baseline_grating_id")
+        precursor_audio_id = data.get("precursor_audio_id")
+        population_size = int(data.get("population_size", 10))
+        direction_noise = float(data.get("direction_noise", 0.05))
+        magnitude_noise = float(data.get("magnitude_noise", 0.1))
+        active_flip_prob = float(data.get("active_flip_prob", 0.05))
+        generation_context = data.get("generation_context", {})
+
+        baseline_grating_id = data.get("baseline_grating_id")
+        elements_input = data.get("elements")
+
+        if not model_id or not precursor_audio_id:
+            return jsonify({"error": "model_id and precursor_audio_id are required"}), 400
+
+        if not baseline_grating_id and not elements_input:
+            return jsonify({"error": "Either baseline_grating_id or elements configuration is required"}), 400
+
+        model_element = param_graph.get_element(model_id)
+        if not isinstance(model_element, Model):
+            return jsonify({"error": f"Node '{model_id}' is not a valid model."}), 400
+
+        precursor_audio = param_graph.get_element(precursor_audio_id)
+        if not precursor_audio:
+            return jsonify({"error": f"Precursor audio node '{precursor_audio_id}' not found."}), 400
+
+        engine = engine_provider.get_engine()
+        operation = generation_context.get("operation", "generate")
+
+        # Load baseline Diffracture Grating
+        if baseline_grating_id:
+            baseline_grating = param_graph.get_element(baseline_grating_id)
+            if not isinstance(baseline_grating, Grating):
+                return jsonify({"error": f"Node '{baseline_grating_id}' is not a valid grating."}), 400
+            base_grating_path = baseline_grating.file.path
+            baseline_elements = baseline_grating.elements
+            baseline_name = baseline_grating.name
+        else:
+            # Create baseline grating artifact (in-memory / local file only)
+            grating_name = f"baseline_{uuid.uuid4().hex[:8]}"
+            baseline_grating = await engine.create_grating(model_element, grating_name, elements_input)
+            base_grating_path = baseline_grating.file.path
+            baseline_elements = baseline_grating.elements
+            baseline_name = precursor_audio.name or precursor_audio.alias or "Artifact"
+
+        diff_base_grating = DiffractureGrating.load(base_grating_path)
+        base_genome = genome_from_grating(diff_base_grating)
+
+        # Resolve other linked source nodes if present (like source_audio)
+        source_audio_id = generation_context.get("source_audio_id") or generation_context.get("source_audio")
+        node_engine_args = {}
+        linked_elements = []
+        if source_audio_id:
+            source_audio_element = param_graph.get_element(source_audio_id)
+            node_engine_args["source_audio_element"] = source_audio_element
+            linked_elements.append(source_audio_element)
+
+        # Prepare parameters for the engine
+        dumped_params = {}
+        for k, v in generation_context.items():
+            if isinstance(v, (str, int, float, bool)) and k not in ["model_id", "operation", "gratings", "source_audio_id", "source_audio"]:
+                dumped_params[k] = v
+
+        # 1. Create the Population Bundle Node
+        population_bundle_id = f"bundle_{uid_generator.from_string(str(uuid.uuid4()))}"
+        population_bundle = Bundle(
+            id=population_bundle_id,
+            name=f"Population Bundle - {baseline_name}",
+            member_ids=[],
+            member_type='individual',
+            context={
+                "model_id": model_id,
+                "baseline_grating_id": baseline_grating_id,
+                "population_size": population_size,
+                "direction_noise": direction_noise,
+                "magnitude_noise": magnitude_noise,
+                "active_flip_prob": active_flip_prob,
+                "generation_context": generation_context
+            }
+        )
+
+        # 2. Create the Population Group Node (Visual compound parent container)
+        population_group_id = f"group_{uid_generator.from_string(str(uuid.uuid4()))}"
+        population_group = Group(
+            id=population_group_id,
+            member_ids=[],
+            member_type='individual'
+        )
+
+        with graph_lock:
+            param_graph.add_element(population_bundle)
+            param_graph.add_element(population_group)
+            param_graph.update_element(population_group.id, {"alias": f"Population - {baseline_name}"})
+            # Link precursor audio node to population bundle directly
+            param_graph.link(precursor_audio, population_bundle, relation='precursor')
+            param_graph.save()
+
+        job_ids = []
+        individual_ids = []
+
+        # Create population N individuals
+        for i in range(population_size):
+            child_genome = copy.deepcopy(base_genome)
+            
+            # i == 0 is the unmutated baseline champion; mutate child for i > 0
+            if i > 0:
+                mutated_genes = []
+                for gene in child_genome:
+                    mutated_gene = mutate_perturbation_gene(
+                        gene,
+                        direction_noise=direction_noise,
+                        magnitude_noise=magnitude_noise,
+                        active_flip_prob=active_flip_prob
+                    )
+                    mutated_genes.append(mutated_gene)
+                child_genome._items = mutated_genes
+
+            # Generate individual elements in param graph
+            individual_id = f"individual_{uid_generator.from_string(str(uuid.uuid4()))}"
+            output_dir = param_graph.root / "generate"
+            os.makedirs(output_dir, exist_ok=True)
+            genome_path = output_dir / f"{individual_id}.safetensors"
+            child_genome.save(str(genome_path))
+
+            # Prepare contextual elements to be self-contained in a genome-centric manner
+            ind_context = copy.deepcopy(generation_context)
+            ind_context["baseline_elements"] = baseline_elements
+            ind_context["baseline_file_path"] = str(base_grating_path)
+
+            # Add Individual node to the parameter graph, nested under the population group
+            individual_node = Individual(
+                id=individual_id,
+                name=f"{baseline_name} - Ind {i+1}",
+                file=Asset(path=str(genome_path), uid=individual_id, extension=".safetensors"),
+                base_model_id=model_id,
+                baseline_grating_id=baseline_grating_id,
+                generation=0,
+                context=ind_context
+            )
+
+            with graph_lock:
+                param_graph.add_element(individual_node)
+                param_graph.update_element(individual_node.id, {"parent": population_group_id})
+                param_graph.link(model_element, individual_node, relation='binds_to')
+                param_graph.link(population_bundle, individual_node, relation='member')
+                
+                # Update bundle and group members
+                population_bundle.member_ids.append(individual_id)
+                population_group.member_ids.append(individual_id)
+                param_graph.update_element(population_bundle.id, {"member_ids": population_bundle.member_ids})
+                param_graph.update_element(population_group.id, {"member_ids": population_group.member_ids})
+                
+                param_graph.save()
+
+            individual_ids.append(individual_id)
+
+            # Queue async job
+            job_id = str(uuid.uuid4())
+            engine_args = {
+                "model_element": model_element,
+                "individual_elements": [individual_node],
+                "baseline_grating": baseline_grating,
+                **node_engine_args
+            }
+
+            returned_job_id = await engine.execute(operation, job_id=job_id, **engine_args, **dumped_params)
+            if returned_job_id != job_id:
+                job_id = returned_job_id
+
+            job_ids.append(job_id)
+
+            # Prepare job context for final registration
+            v_params = {**dumped_params}
+            v_params["model_id"] = model_id
+            v_params["operation"] = operation
+            v_params["individuals"] = [{"id": individual_id, "strength": 1.0}]
+
+            active_jobs[job_id] = {
+                "parent_id": individual_id,
+                "linked_elements": [individual_node, *linked_elements],
+                "validated_params": v_params,
+                "operation": operation
+            }
+
+        return jsonify({
+            "success": True,
+            "message": f"Evolution population of size {population_size} started with bundle {population_bundle_id}.",
+            "job_ids": job_ids,
+            "individual_ids": individual_ids,
+            "bundle_id": population_bundle_id,
+            "group_id": population_group_id
+        }), 200
+
+    except Exception as e:
+        print(f"Failed to start evolution: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
+@app.route("/express_individual", methods=["POST"])
+async def express_individual():
+    """
+    Expresses the genome of an individual to a full Grating node in the parameter graph,
+    linking it as a child of the individual.
+    """
+    if param_graph is None:
+        return jsonify({"error": "No project loaded"}), 400
+
+    try:
+        data = request.get_json() or {}
+        individual_id = data.get("individual_id")
+
+        if not individual_id:
+            return jsonify({"error": "individual_id is required"}), 400
+
+        with graph_lock:
+            individual_node = param_graph.get_element(individual_id)
+            if not isinstance(individual_node, Individual):
+                return jsonify({"error": f"Node '{individual_id}' is not a valid individual."}), 400
+
+            baseline_grating_id = individual_node.baseline_grating_id
+            baseline_elements = individual_node.context.get("baseline_elements")
+            baseline_file_path = individual_node.context.get("baseline_file_path")
+
+            if baseline_grating_id:
+                baseline_grating_node = param_graph.get_element(baseline_grating_id)
+                if not isinstance(baseline_grating_node, Grating):
+                    return jsonify({"error": f"Baseline grating '{baseline_grating_id}' not found."}), 400
+                base_elements = baseline_grating_node.elements
+                base_path = baseline_grating_node.file.path
+            elif baseline_elements and baseline_file_path:
+                base_elements = baseline_elements
+                base_path = baseline_file_path
+            else:
+                return jsonify({"error": "Unable to resolve baseline grating configuration for this individual."}), 400
+
+            # Load LoRAGenome from individual file
+            genome = LoRAGenome.load(individual_node.file.path)
+
+            # Express to new Diffracture Grating
+            expressed_diff_grating = express_to_grating(genome, base_path)
+
+            grating_id = f"grating_{uid_generator.from_string(str(uuid.uuid4()))}"
+            expressed_grating_path = param_graph.root / "generate" / f"{grating_id}.safetensors"
+            expressed_diff_grating.save(str(expressed_grating_path))
+
+            # Create Grating Artifact
+            grating_artifact = Grating(
+                id=grating_id,
+                name=f"Expressed {individual_node.name}",
+                file=Asset(path=str(expressed_grating_path), uid=grating_id, extension=".safetensors"),
+                base_model_id=individual_node.base_model_id,
+                elements=base_elements,
+                context=individual_node.context or {}
+            )
+
+            param_graph.add_element(grating_artifact)
+            param_graph.update_element(grating_artifact.id, {"parent": individual_id})
+
+            model_element = param_graph.get_element(individual_node.base_model_id)
+            param_graph.link(model_element, grating_artifact, relation='binds_to')
+            param_graph.link(individual_node, grating_artifact, relation='expressed_to')
+            
+            param_graph.save()
+
+        return jsonify({
+            "success": True,
+            "message": "Individual expressed to grating successfully",
+            "grating": grating_artifact.to_dict()
+        }), 200
+
+    except Exception as e:
+        print(f"Failed to express individual: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
 @app.route("/adapter_config/<adapter_name>", methods=["GET"])
 async def get_adapter_config(adapter_name):
@@ -741,66 +1045,68 @@ async def get_job_status(job_id):
         status_info = await engine.get_job_status(job_id)
         status = status_info.get("status")
 
-        if status == "completed":
-            print(f"Job {job_id} completed. Processing artifact...")
+        if status in ["completed", "failed", "not_found"]:
             job_context = active_jobs.pop(job_id, {})
-            
-            result_dict = status_info.get("result", {})
-            artifact_data = result_dict.get('artifact', result_dict)
 
-            if not artifact_data:
-                raise Exception("Completed job did not return a valid artifact.")
+            if status == "completed":
+                print(f"Job {job_id} completed. Processing artifact...")
+                result_dict = status_info.get("result", {})
+                artifact_data = result_dict.get('artifact', result_dict)
 
-            temp_artifact = resolve_element(artifact_data) if isinstance(artifact_data, dict) else artifact_data
+                if not artifact_data:
+                    raise Exception("Completed job did not return a valid artifact.")
 
-            output_dir = param_graph.root / "generate"
-            final_artifact = save_artifact_asset(temp_artifact, output_dir, asset_name="file")
-            
-            # Ensure context is populated for labelling, and merge job-level validated params (like model_id, operation, gratings)
-            if hasattr(final_artifact, 'context'):
-                current_context = final_artifact.context or {}
-                merged_context = {**job_context.get("validated_params", {}), **current_context}
-                final_artifact = replace(final_artifact, context=merged_context)
-            
-            with graph_lock:
-                param_graph.add_element(final_artifact)
+                temp_artifact = resolve_element(artifact_data) if isinstance(artifact_data, dict) else artifact_data
 
-                group_id = job_context.get("group_id") or job_context.get("batch_id")
-                if group_id:
-                    param_graph.update_element(final_artifact.id, {"parent": group_id})
-                    group_node_attrs = param_graph.G.nodes[group_id]
-                    if 'member_ids' not in group_node_attrs or not isinstance(group_node_attrs['member_ids'], list):
-                        group_node_attrs['member_ids'] = []
-                    if final_artifact.id not in group_node_attrs['member_ids']:
-                        group_node_attrs['member_ids'].append(final_artifact.id)
-                        
-                    update_group_labels(group_id)
+                output_dir = param_graph.root / "generate"
+                final_artifact = save_artifact_asset(temp_artifact, output_dir, asset_name="file")
+                
+                # Ensure context is populated for labelling, and merge job-level validated params (like model_id, operation, gratings)
+                if hasattr(final_artifact, 'context'):
+                    current_context = final_artifact.context or {}
+                    merged_context = {**job_context.get("validated_params", {}), **current_context}
+                    final_artifact = replace(final_artifact, context=merged_context)
+                
+                with graph_lock:
+                    param_graph.add_element(final_artifact)
 
-                for element in job_context.get("linked_elements", []):
-                    print(f"Linking {element.id} to {final_artifact.id}")
-                    param_graph.link(element, final_artifact, relation='source')
-                param_graph.save()
-            
-            trigger_embedding_update()
-            
-            print("Artifact processed and saved to graph successfully.")
-            return jsonify({
-                "status": "completed",
-                "message": "Audio generated and registered successfully.",
-                "artifact": final_artifact.to_dict(),
-                "node_id": final_artifact.id,
-                "validated_params": job_context.get("validated_params")
-            }), 200
+                    parent_id = job_context.get("parent_id")
+                    group_id = job_context.get("group_id") or job_context.get("batch_id")
+                    if parent_id:
+                        param_graph.update_element(final_artifact.id, {"parent": parent_id})
+                    elif group_id:
+                        param_graph.update_element(final_artifact.id, {"parent": group_id})
+                        group_node_attrs = param_graph.G.nodes[group_id]
+                        if 'member_ids' not in group_node_attrs or not isinstance(group_node_attrs['member_ids'], list):
+                            group_node_attrs['member_ids'] = []
+                        if final_artifact.id not in group_node_attrs['member_ids']:
+                            group_node_attrs['member_ids'].append(final_artifact.id)
+                            
+                        update_group_labels(group_id)
 
-        elif status == "failed":
-            error_msg = status_info.get("error", "Unknown error during generation.")
-            traceback_msg = status_info.get("traceback")
-            active_jobs.pop(job_id, None)
-            return jsonify({"status": "failed", "error": error_msg, "traceback": traceback_msg}), 500
+                    for element in job_context.get("linked_elements", []):
+                        print(f"Linking {element.id} to {final_artifact.id}")
+                        param_graph.link(element, final_artifact, relation='source')
+                    param_graph.save()
+                
+                trigger_embedding_update()
+                
+                print("Artifact processed and saved to graph successfully.")
+                return jsonify({
+                    "status": "completed",
+                    "message": "Audio generated and registered successfully.",
+                    "artifact": final_artifact.to_dict(),
+                    "node_id": final_artifact.id,
+                    "validated_params": job_context.get("validated_params")
+                }), 200
 
-        elif status == "not_found":
-            active_jobs.pop(job_id, None)
-            return jsonify({"status": "not_found", "error": f"Job {job_id} was lost."}), 404
+            elif status == "failed":
+                error_msg = status_info.get("error", "Unknown error during generation.")
+                traceback_msg = status_info.get("traceback")
+                return jsonify({"status": "failed", "error": error_msg, "traceback": traceback_msg}), 500
+
+            elif status == "not_found":
+                return jsonify({"status": "not_found", "error": f"Job {job_id} was lost."}), 404
 
         # For 'pending' or 'running', just return the status info
         return jsonify(status_info), 200

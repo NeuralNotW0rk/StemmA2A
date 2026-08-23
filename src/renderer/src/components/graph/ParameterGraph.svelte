@@ -42,6 +42,7 @@
       newMembers: string[]
     ) => void | Promise<void>
     onselectOperation?: (op: any, initiatorNode: any, useContext?: boolean) => void
+    onevolveAudio?: (data: any) => void
     onrefresh?: () => void | Promise<void>
   }
 
@@ -65,6 +66,7 @@
     ontoggleFavorite,
     onchangeGroupMembership,
     onselectOperation,
+    onevolveAudio,
     onrefresh
   }: Props = $props()
 
@@ -480,6 +482,15 @@
 
     // --- Command Definitions (Inheritance-style) ---
 
+    async function handleExpressIndividual(individualId: string): Promise<void> {
+      try {
+        await window.api.expressIndividual({ individual_id: individualId })
+        await onrefresh?.()
+      } catch (err: any) {
+        console.error('Failed to express individual:', err)
+      }
+    }
+
     const PINNED_OPERATIONS = new Set(['generate', 'invert'])
 
     const getPinnedOperations = (ele: Singular): Command[] => {
@@ -570,6 +581,14 @@
       ...nodeCommands(ele)
     ]
 
+    const individualNodeCommands = (ele: Singular): Command[] => [
+      {
+        content: 'Express',
+        select: () => handleExpressIndividual(ele.id())
+      },
+      ...nodeCommands(ele)
+    ]
+
     const latentNodeCommands = (ele: Singular): Command[] => {
       const specificCommands: Command[] = []
       const replicateCmd = getReplicateCommand(ele)
@@ -604,6 +623,22 @@
         content: 'Export',
         select: () => onexport?.({ names: [ele.data('name')] })
       })
+
+      specificCommands.push({
+        content: 'Evolve',
+        select: () => onevolveAudio?.(ele.data())
+      })
+
+      const parentId = ele.data('parent')
+      if (parentId) {
+        const parentNode = cy!.getElementById(parentId)
+        if (parentNode.length > 0 && parentNode.data('type') === 'individual') {
+          specificCommands.push({
+            content: 'Express',
+            select: () => handleExpressIndividual(parentId)
+          })
+        }
+      }
 
       specificCommands.push({
         content: 'Operations...',
@@ -726,6 +761,8 @@
             return pathNodeCommands(ele)
           case 'group':
             return groupNodeCommands(ele)
+          case 'individual':
+            return individualNodeCommands(ele)
           case 'latent':
             return latentNodeCommands(ele)
           default:
@@ -1140,6 +1177,24 @@
       return
     }
 
+    // Filter out baseline nodes and edges connected to them to keep the visual graph clean
+    const baselineNodeIds = new Set<string>()
+    newElements = newElements.filter((ele: any): boolean => {
+      if (ele.group === 'nodes' && ele.data.type === 'grating' && ele.data.context?.is_baseline) {
+        baselineNodeIds.add(ele.data.id)
+        return false
+      }
+      return true
+    })
+    newElements = newElements.filter((ele: any): boolean => {
+      if (ele.group === 'edges' || ele.data.source) {
+        if (baselineNodeIds.has(ele.data.source) || baselineNodeIds.has(ele.data.target)) {
+          return false
+        }
+      }
+      return true
+    })
+
     // 1. Snapshot the CURRENT visual state
     const savedPositions: Record<string, { x: number; y: number }> = {}
     cy.nodes().forEach((node) => {
@@ -1189,14 +1244,23 @@
             return acc
           }
 
-          // Find the actual nodes in your newElements list to check for parents
-          const targetNode = newElements.find((n) => n.data.id === edgeData.target)
-          const target = targetNode?.data.parent || edgeData.target
-
           // We explicitly DO NOT proxy the source to its parent batch.
           // This ensures that when a single sample is used as init_audio,
           // the edge visually originates from that specific sample, not the whole batch.
           const source = edgeData.source
+
+          // Find the actual nodes in your newElements list to check for parents
+          const targetNode = newElements.find((n) => n.data.id === edgeData.target)
+          let target = edgeData.target
+          if (
+            targetNode?.data.parent &&
+            targetNode.data.parent !== source &&
+            targetNode.data.type !== 'individual' &&
+            targetNode.data.type !== 'bundle' &&
+            targetNode.data.type !== 'group'
+          ) {
+            target = targetNode.data.parent
+          }
 
           // Prevent alpha-stacking visual bugs by deduplicating edges that share the same endpoints
           const sig = `${source}->${target}:${edgeData.type}`

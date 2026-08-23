@@ -37,6 +37,8 @@ const api = {
   registerGrating: (data: unknown) => ipcRenderer.invoke('registerGrating', data),
   getModelLayers: (modelId: string) => ipcRenderer.invoke('getModelLayers', modelId),
   createGrating: (data: unknown) => ipcRenderer.invoke('createGrating', data),
+  startEvolution: (data: unknown) => ipcRenderer.invoke('startEvolution', data),
+  expressIndividual: (data: unknown) => ipcRenderer.invoke('expressIndividual', data),
   getOperations: (): Promise<any> => ipcRenderer.invoke('getOperations'),
   executeOperation: (data: unknown): Promise<any> => ipcRenderer.invoke('executeOperation', data),
   removeElement: (elementId: string, keepChildren?: boolean): Promise<any> =>
@@ -48,14 +50,18 @@ const api = {
   repairEdges: (): Promise<any> => ipcRenderer.invoke('repairEdges'),
   updateEmbeddings: (): Promise<any> => ipcRenderer.invoke('updateEmbeddings'),
   pollJobStatus: (jobId: string): Promise<any> => ipcRenderer.invoke('pollJobStatus', jobId),
-  groupElements: (memberIds: string[]): Promise<any> => ipcRenderer.invoke('groupElements', memberIds),
+  groupElements: (memberIds: string[]): Promise<any> =>
+    ipcRenderer.invoke('groupElements', memberIds),
   updateGroup: (groupId: string, memberIds: string[]): Promise<any> =>
     ipcRenderer.invoke('updateGroup', groupId, memberIds),
-  addExternalSource: (sourcePath: string): Promise<any> => ipcRenderer.invoke('addExternalSource', sourcePath),
+  addExternalSource: (sourcePath: string): Promise<any> =>
+    ipcRenderer.invoke('addExternalSource', sourcePath),
   expandPath: (pathNodeId: string): Promise<any> => ipcRenderer.invoke('expandPath', pathNodeId),
   cancelJob: (jobId: string): Promise<any> => ipcRenderer.invoke('cancel-job', jobId),
-  saveNodePositions: (projectName: string, positions: Record<string, { x: number; y: number }>): Promise<void> =>
-    ipcRenderer.invoke('saveNodePositions', projectName, positions),
+  saveNodePositions: (
+    projectName: string,
+    positions: Record<string, { x: number; y: number }>
+  ): Promise<void> => ipcRenderer.invoke('saveNodePositions', projectName, positions),
   updateElement: (elementName: string, attributes: Record<string, any>): Promise<any> =>
     ipcRenderer.invoke('updateElement', elementName, attributes),
   exportSharedModel: (modelId: string): Promise<unknown> =>

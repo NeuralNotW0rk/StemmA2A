@@ -14,6 +14,7 @@
   import JobStatusView from './components/views/JobStatusView.svelte'
   import OperationView from './components/views/OperationView.svelte'
   import BendingView from './components/views/BendingView.svelte'
+  import InitializeEvolutionView from './components/views/InitializeEvolutionView.svelte'
   import { onMount, onDestroy } from 'svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import {
@@ -48,6 +49,7 @@
   let selectedElementData: ElementData | null = $state(null)
   let actionPanelView: ActionPanelView = $state('none')
   let activeModelElement: any = $state(null)
+  let activeAudioElement: ElementData | null = $state(null)
   let errorInInfoPanel: ErrorInfo | null = $state(null)
   let allOperations: any[] = $state([])
   let toolbarComponent: Toolbar
@@ -229,6 +231,7 @@
     contextStore.set(null)
     selectedForRemoval.set(null)
     selectedOperation.set(null)
+    activeAudioElement = null
   }
 
   async function handleProjectLoad(data: {
@@ -533,6 +536,9 @@
     if (actionPanelView === 'bend') {
       return 'Configure Model Bending'
     }
+    if (actionPanelView === 'initialize-evolution') {
+      return 'Initialize Evolution'
+    }
     if (actionPanelView === 'removal') {
       return 'Confirm Removal'
     }
@@ -728,6 +734,20 @@
             errorInInfoPanel = error
           }}
         />
+      {:else if actionPanelView === 'initialize-evolution'}
+        <InitializeEvolutionView
+          audioElement={activeAudioElement}
+          onclose={closeActionPanel}
+          onrefresh={() => {
+            closeActionPanel()
+            refreshGraphData()
+          }}
+          onError={(error) => {
+            console.error('Evolution setup error:', error)
+            closeActionPanel()
+            errorInInfoPanel = error
+          }}
+        />
       {/if}
     </ContentPanel>
   {:else if $isCreatingNewProject}
@@ -793,6 +813,10 @@
     {chronologicalConstraint}
     onchangeGroupMembership={handleChangeGroupMembership}
     onselectOperation={handleSelectOperation}
+    onevolveAudio={(audio) => {
+      activeAudioElement = audio
+      actionPanelView = 'initialize-evolution'
+    }}
     onrefresh={refreshGraphData}
   />
   {#if audioSrc}

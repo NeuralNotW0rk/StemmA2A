@@ -193,7 +193,7 @@
       adapterFields = []
       selectedGratings = []
       lastLoadedModelId = null
-      addToSameBatch = true
+      addToSameGroup = true
 
       const baseFieldsConfig = (op.form_config || []) as FormConfig
 

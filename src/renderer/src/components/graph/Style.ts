@@ -23,7 +23,6 @@ const latentColor = gradientColor5
 const favoriteColor = 'rgb(0, 255, 255)'
 const validColor = '#4CAF50'
 
-
 const defaultStyle: CssStyleDeclaration[] = [
   // General style configuration
   {
@@ -80,12 +79,12 @@ const defaultStyle: CssStyleDeclaration[] = [
     selector: 'node[type="audio"]',
     style: {
       label: (node: NodeSingular) => {
-        const name = node.data('name');
-        const alias = node.data('alias');
-        const promptTxt = node.data('context') && node.data('context')["prompt"];
-        const secondary = alias || promptTxt;
-        
-        return secondary ? secondary : (name || node.data('id'));
+        const name = node.data('name')
+        const alias = node.data('alias')
+        const promptTxt = node.data('context') && node.data('context')['prompt']
+        const secondary = alias || promptTxt
+
+        return secondary ? secondary : name || node.data('id')
       },
       'background-color': mediaColor,
       'background-image': audioIcon,
@@ -101,15 +100,15 @@ const defaultStyle: CssStyleDeclaration[] = [
     selector: 'node[type="audio"].detailed',
     style: {
       label: (node: NodeSingular) => {
-        const name = node.data('name');
-        const alias = node.data('alias');
-        const promptTxt = node.data('context') && node.data('context')["prompt"];
-        const secondary = alias || promptTxt;
-        
+        const name = node.data('name')
+        const alias = node.data('alias')
+        const promptTxt = node.data('context') && node.data('context')['prompt']
+        const secondary = alias || promptTxt
+
         if (name && secondary && name !== secondary) {
-          return `${name}\n[${secondary}]`;
+          return `${name}\n[${secondary}]`
         }
-        return name || (secondary ? `[${secondary}]` : node.data('id'));
+        return name || (secondary ? `[${secondary}]` : node.data('id'))
       }
     }
   },
@@ -125,12 +124,12 @@ const defaultStyle: CssStyleDeclaration[] = [
     selector: 'node[type="image"]',
     style: {
       label: (node: NodeSingular) => {
-        const name = node.data('name');
-        const alias = node.data('alias');
-        const promptTxt = node.data('context') && node.data('context')["prompt"];
-        const secondary = alias || promptTxt;
-        
-        return secondary ? secondary : (name || node.data('id'));
+        const name = node.data('name')
+        const alias = node.data('alias')
+        const promptTxt = node.data('context') && node.data('context')['prompt']
+        const secondary = alias || promptTxt
+
+        return secondary ? secondary : name || node.data('id')
       },
       'background-color': mediaColor,
       'background-image': imageIcon,
@@ -146,15 +145,15 @@ const defaultStyle: CssStyleDeclaration[] = [
     selector: 'node[type="image"].detailed',
     style: {
       label: (node: NodeSingular) => {
-        const name = node.data('name');
-        const alias = node.data('alias');
-        const promptTxt = node.data('context') && node.data('context')["prompt"];
-        const secondary = alias || promptTxt;
-        
+        const name = node.data('name')
+        const alias = node.data('alias')
+        const promptTxt = node.data('context') && node.data('context')['prompt']
+        const secondary = alias || promptTxt
+
         if (name && secondary && name !== secondary) {
-          return `${name}\n[${secondary}]`;
+          return `${name}\n[${secondary}]`
         }
-        return name || (secondary ? `[${secondary}]` : node.data('id'));
+        return name || (secondary ? `[${secondary}]` : node.data('id'))
       }
     }
   },
@@ -170,14 +169,16 @@ const defaultStyle: CssStyleDeclaration[] = [
     selector: 'node[type="latent"]',
     style: {
       label: (node: NodeSingular) => {
-        const context = node.data('context');
-        const isUnconditional = context && (
-          context["inversion_unconditional"] === true ||
-          (context["inversion_metadata"] && context["inversion_metadata"]["inversion_unconditional"] === true)
-        );
-        const promptTxt = (context && context["prompt"]) || (isUnconditional ? "[unconditional]" : "[empty]");
-        const strength = context && context["inversion_strength"];
-        return `${promptTxt}\nx${strength}`;
+        const context = node.data('context')
+        const isUnconditional =
+          context &&
+          (context['inversion_unconditional'] === true ||
+            (context['inversion_metadata'] &&
+              context['inversion_metadata']['inversion_unconditional'] === true))
+        const promptTxt =
+          (context && context['prompt']) || (isUnconditional ? '[unconditional]' : '[empty]')
+        const strength = context && context['inversion_strength']
+        return `${promptTxt}\nx${strength}`
       },
       'background-color': latentColor,
       'background-image': latentIcon,
@@ -195,35 +196,35 @@ const defaultStyle: CssStyleDeclaration[] = [
     selector: 'node[type="group"]',
     style: {
       label: (node: NodeSingular) => {
-        const name = node.data('name');
-        const alias = node.data('alias');
-        const promptTxt = node.data('context') && node.data('context')["prompt"];
-        const secondary = alias || promptTxt;
-        
-        return secondary ? secondary : (name || node.data('id'));
+        const name = node.data('name')
+        const alias = node.data('alias')
+        const promptTxt = node.data('context') && node.data('context')['prompt']
+        const secondary = alias || promptTxt
+
+        return secondary ? secondary : name || node.data('id')
       },
       'text-valign': 'top',
       'text-margin-y': 0,
       'background-color': groupColor,
       'background-opacity': 0.5,
       'border-width': 2,
-      'shape': 'rectangle',
-      'padding': '10px'
+      shape: 'rectangle',
+      padding: '10px'
     }
   },
   {
     selector: 'node[type="group"].detailed',
     style: {
       label: (node: NodeSingular) => {
-        const name = node.data('name');
-        const alias = node.data('alias');
-        const promptTxt = node.data('context') && node.data('context')["prompt"];
-        const secondary = alias || promptTxt;
-        
+        const name = node.data('name')
+        const alias = node.data('alias')
+        const promptTxt = node.data('context') && node.data('context')['prompt']
+        const secondary = alias || promptTxt
+
         if (name && secondary && name !== secondary) {
-          return `${name}\n[${secondary}]`;
+          return `${name}\n[${secondary}]`
         }
-        return name || (secondary ? `[${secondary}]` : node.data('id'));
+        return name || (secondary ? `[${secondary}]` : node.data('id'))
       }
     }
   },
@@ -243,6 +244,21 @@ const defaultStyle: CssStyleDeclaration[] = [
     selector: 'node[type="group"][member_type="latent"]',
     style: {
       'border-color': latentColor
+    }
+  },
+  {
+    selector: 'node[type="individual"]',
+    style: {
+      label: (node: NodeSingular) => node.data('name') || node.data('id'),
+      'text-valign': 'top',
+      'text-margin-y': -8,
+      'border-width': 2,
+      'border-color': gratingColor,
+      'border-style': 'dashed',
+      'background-color': gratingColor,
+      'background-opacity': 0.08,
+      shape: 'ellipse',
+      padding: '15px'
     }
   },
   {
@@ -297,8 +313,8 @@ const defaultStyle: CssStyleDeclaration[] = [
       'background-opacity': 0.5,
       'border-color': externalColor,
       'border-width': 2,
-      'shape': 'rectangle',
-      'padding': '10px'
+      shape: 'rectangle',
+      padding: '10px'
     }
   },
 
@@ -306,16 +322,16 @@ const defaultStyle: CssStyleDeclaration[] = [
   {
     selector: 'edge[type="spring"]',
     style: {
-      'display': 'none',
+      display: 'none',
       'curve-style': 'haystack'
     }
   },
   {
     selector: 'edge[type="spring"].visible',
     style: {
-      'display': 'element',
+      display: 'element',
       'line-color': '#ffff00',
-      'opacity': 'mapData(weight, 0, 1, 0, 1)',
+      opacity: 'mapData(weight, 0, 1, 0, 1)',
       'curve-style': 'straight', // Changed from haystack to support edge labels
       'source-label': 'data(source_label)',
       'source-text-offset': 20,
@@ -325,7 +341,7 @@ const defaultStyle: CssStyleDeclaration[] = [
       'text-background-color': '#111111',
       'text-background-opacity': 0.8,
       'text-background-padding': 4,
-      'text-background-shape': 'roundrectangle',
+      'text-background-shape': 'roundrectangle'
     }
   },
   {
@@ -376,7 +392,6 @@ const defaultStyle: CssStyleDeclaration[] = [
       'target-arrow-color': externalColor
     }
   },
-
 
   // Overrides
   {

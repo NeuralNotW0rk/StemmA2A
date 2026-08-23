@@ -17,6 +17,7 @@ from .engine import Engine
 from .model_cache import ModelCache
 from utils.uid import path_from_uid
 from utils.audio import save_audio
+from evolution.lora.lora_genome import LoRAGenome, express_to_grating
 
 from diffracture import Actant
 from diffracture.topology.grating import Grating as DiffractureGrating
@@ -233,18 +234,24 @@ class LocalEngine(Engine):
         adapter_class = self._get_adapter_class(model_element.adapter)
         adapter = self.model_cache.get(model_element, adapter_class)
 
-        # Engine-level Grating intervention orchestration
+        # Engine-level Grating/Genome intervention orchestration
         grating_elements = kwargs.get("grating_elements", [])
         grating_strengths = kwargs.get("grating_strengths", [])
-        if grating_elements:
+        individual_elements = kwargs.get("individual_elements", [])
+        individual_strengths = kwargs.get("individual_strengths", [])
+        
+        has_intervention = bool(grating_elements or individual_elements)
+        
+        if has_intervention:
             if not hasattr(adapter, 'model') or adapter.model is None:
-                raise RuntimeError(f"Adapter '{model_element.adapter}' does not expose a loaded 'model' for grating injection.")
+                raise RuntimeError(f"Adapter '{model_element.adapter}' does not expose a loaded 'model' for grating/genome injection.")
             
             if not hasattr(adapter, 'actant'):
                 adapter.actant = Actant(adapter.model)
                 
             model_device = next(adapter.model.parameters()).device
             
+            # 1. Apply physical Grating elements
             for i, grating_element in enumerate(grating_elements):
                 strength = grating_strengths[i] if grating_strengths and i < len(grating_strengths) else 1.0
                 print(f"Engine: Applying Grating '{grating_element.id}' with strength {strength}...")
@@ -259,8 +266,6 @@ class LocalEngine(Engine):
                             overrides = []
                             g_in["overrides"] = overrides
                         
-                        override_map = {o.get("address"): o for o in overrides}
-                        
                         # Process all overrides to apply them to grating first
                         for override in overrides:
                             addr = override.get("address")
@@ -274,9 +279,36 @@ class LocalEngine(Engine):
                 grating.to(model_device)
                 adapter.actant.activate(grating, injection_strategy="hook", strength=strength)
 
+            # 2. Apply dynamic in-memory expressed genomes (individual_elements)
+            if individual_elements:
+                baseline_grating = kwargs.get("baseline_grating")
+                if not baseline_grating:
+                    raise RuntimeError("individual_elements passed but no baseline_grating was provided.")
+                
+                for i, ind_element in enumerate(individual_elements):
+                    strength = individual_strengths[i] if individual_strengths and i < len(individual_strengths) else 1.0
+                    print(f"Engine: Dynamically expressing genome '{ind_element.id}' with strength {strength}...")
+                    
+                    genome = LoRAGenome.load(ind_element.file.path)
+                    grating = express_to_grating(genome, baseline_grating.file.path)
+                    
+                    # Apply overrides for individuals if any were passed
+                    individuals_input = kwargs.get("individuals") or []
+                    for ind_in in individuals_input:
+                        if ind_in.get("id") == ind_element.id:
+                            overrides = ind_in.get("overrides") or []
+                            for override in overrides:
+                                addr = override.get("address")
+                                meta_overrides = override.get("metadata") or {}
+                                if addr in grating.nodes:
+                                    grating.nodes[addr].metadata.update(meta_overrides)
+                                    
+                    grating.to(model_device)
+                    adapter.actant.activate(grating, injection_strategy="hook", strength=strength)
+
         artifact, tensor = adapter.generate(**kwargs)
 
-        if grating_elements:
+        if has_intervention:
             # Revert the model to its original state so it can remain safely in the cache
             adapter.actant.deactivate()
 
