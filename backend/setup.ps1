@@ -186,4 +186,39 @@ else {
     Write-Host "Diffracture not found at ../Diffracture. Skipping."
 }
 
+
+# 8. Install NeutralSelection (if available)
+Write-Host "Step 8: Checking for NeutralSelection locally..."
+$NeutralSelectionPath = (Resolve-Path (Join-Path $ProjectRoot "../NeutralSelection") -ErrorAction SilentlyContinue).Path
+if ($NeutralSelectionPath) {
+    $SetupPy = Join-Path $NeutralSelectionPath "setup.py"
+    $PyProject = Join-Path $NeutralSelectionPath "pyproject.toml"
+    if ((Test-Path $SetupPy) -or (Test-Path $PyProject)) {
+        Write-Host "Found NeutralSelection at $NeutralSelectionPath. Installing in editable mode..."
+        try {
+            if ($CudaVersion) {
+                & $PythonExe -m pip install -e $NeutralSelectionPath --extra-index-url $IndexUrl
+            }
+            else {
+                & $PythonExe -m pip install -e $NeutralSelectionPath --extra-index-url "https://download.pytorch.org/whl/cpu"
+            }
+            if ($LASTEXITCODE -ne 0) {
+                throw "pip install failed with exit code $LASTEXITCODE"
+            }
+            Write-Host "NeutralSelection installed successfully."
+        }
+        catch {
+            Write-Error "ERROR: Failed to install NeutralSelection."
+            Write-Error "PIP ERROR: $_"
+            exit 1
+        }
+    }
+    else {
+        Write-Host "NeutralSelection directory found, but no setup.py or pyproject.toml present. Skipping."
+    }
+}
+else {
+    Write-Host "NeutralSelection not found at ../NeutralSelection. Skipping."
+}
+
 Write-Host "Backend setup completed successfully!"

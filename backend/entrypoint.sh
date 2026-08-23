@@ -8,6 +8,12 @@ if [ -d "/Diffracture" ] && { [ -f "/Diffracture/setup.py" ] || [ -f "/Diffractu
     pip install -e /Diffracture
 fi
 
+# Check if the NeutralSelection directory is mounted and contains a Python package definition
+if [ -d "/NeutralSelection" ] && { [ -f "/NeutralSelection/setup.py" ] || [ -f "/NeutralSelection/pyproject.toml" ]; }; then
+    echo "Found NeutralSelection mount. Installing in editable mode..."
+    pip install -e /NeutralSelection
+fi
+
 # Run CUDA and system diagnostics to check for common container bottleneck issues
 python diagnose_gpu.py
 
