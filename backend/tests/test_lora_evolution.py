@@ -84,10 +84,10 @@ class TestLoRAEvolution(unittest.TestCase):
             PerturbationGene("l4", torch.ones(1, 1), torch.ones(1, 1) * 4.0, True),
         ]
         genes_p2 = [
-            PerturbationGene("l1", torch.zeros(1, 1), torch.zeros(1, 1) * 10.0, False),
-            PerturbationGene("l2", torch.zeros(1, 1), torch.zeros(1, 1) * 20.0, False),
-            PerturbationGene("l3", torch.zeros(1, 1), torch.zeros(1, 1) * 30.0, False),
-            PerturbationGene("l4", torch.zeros(1, 1), torch.zeros(1, 1) * 40.0, False),
+            PerturbationGene("l1", torch.ones(1, 1) * 10.0, torch.ones(1, 1) * 10.0, False),
+            PerturbationGene("l2", torch.ones(1, 1) * 20.0, torch.ones(1, 1) * 20.0, False),
+            PerturbationGene("l3", torch.ones(1, 1) * 30.0, torch.ones(1, 1) * 30.0, False),
+            PerturbationGene("l4", torch.ones(1, 1) * 40.0, torch.ones(1, 1) * 40.0, False),
         ]
         genome_p1 = LoRAGenome(genes_p1)
         genome_p2 = LoRAGenome(genes_p2)
@@ -154,7 +154,7 @@ class TestLoRAEvolution(unittest.TestCase):
         grating.add_element(el)
 
         # Gene with wrong rank/shape (rank 3 instead of 2)
-        mismatched_gene = PerturbationGene("module", torch.randn(3, 4), torch.randn(4, 3), 1.0, True)
+        mismatched_gene = PerturbationGene("module", torch.randn(3, 4), torch.randn(4, 3), True)
         genome = LoRAGenome([mismatched_gene])
 
         with self.assertRaises(ValueError):
@@ -162,7 +162,7 @@ class TestLoRAEvolution(unittest.TestCase):
 
     def test_population_and_individual_interface(self) -> None:
         """Verify NeutralSelection Individual and Population integrations work."""
-        genes = [PerturbationGene("l1", torch.ones(1, 1), torch.ones(1, 1), 1.0, True)]
+        genes = [PerturbationGene("l1", torch.ones(1, 1), torch.ones(1, 1), True)]
         genome = LoRAGenome(genes)
 
         individual = Individual(genotype=genome)
@@ -190,8 +190,8 @@ class TestLoRAEvolution(unittest.TestCase):
         """Verify the recombine polymorphic helper works for both Genomes and Individuals."""
         from neutral_selection.variation.recombination import recombine
 
-        genes_p1 = [PerturbationGene("l1", torch.ones(1, 1), torch.ones(1, 1), 1.0, True)]
-        genes_p2 = [PerturbationGene("l1", torch.zeros(1, 1), torch.zeros(1, 1), 10.0, False)]
+        genes_p1 = [PerturbationGene("l1", torch.ones(1, 1), torch.ones(1, 1), True)]
+        genes_p2 = [PerturbationGene("l1", torch.zeros(1, 1), torch.zeros(1, 1), False)]
         genome_p1 = LoRAGenome(genes_p1)
         genome_p2 = LoRAGenome(genes_p2)
 
