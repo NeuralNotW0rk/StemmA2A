@@ -21,34 +21,21 @@ class TestLoRAEvolution(unittest.TestCase):
         torch.manual_seed(42)
 
     def test_gene_from_and_to_tensors(self) -> None:
-        """Verify normalization on creation and correct scaling on reconstruction."""
+        """Verify initialization and scaling on reconstruction."""
         address = "layer_test"
         lora_down = torch.randn(2, 5, dtype=torch.float64) * 5.0
         lora_up = torch.randn(8, 2, dtype=torch.float64) * 5.0
 
         gene = PerturbationGene.from_tensors(address, lora_down, lora_up, active=True)
 
-        # Check normalization
-        norm_a = torch.linalg.norm(gene.a_dir).item()
-        norm_b = torch.linalg.norm(gene.b_dir).item()
-        self.assertAlmostEqual(norm_a, 1.0, places=5)
-        self.assertAlmostEqual(norm_b, 1.0, places=5)
-
-        # Check magnitude value
-        orig_norm_a = torch.linalg.norm(lora_down).item()
-        orig_norm_b = torch.linalg.norm(lora_up).item()
-        self.assertAlmostEqual(gene.magnitude, orig_norm_a * orig_norm_b, places=5)
+        # Check weights are saved
+        self.assertTrue(torch.allclose(gene.lora_down, lora_down))
+        self.assertTrue(torch.allclose(gene.lora_up, lora_up))
 
         # Check reconstruction
         rec_down, rec_up = gene.to_tensors()
-        # Magnitude is ||rec_down|| * ||rec_up|| = sqrt(mag) * sqrt(mag) = mag
-        rec_norm_a = torch.linalg.norm(rec_down).item()
-        rec_norm_b = torch.linalg.norm(rec_up).item()
-        self.assertAlmostEqual(rec_norm_a * rec_norm_b, gene.magnitude, places=5)
-
-        # Check direction alignment
-        self.assertTrue(torch.allclose(gene.a_dir, rec_down / rec_norm_a))
-        self.assertTrue(torch.allclose(gene.b_dir, rec_up / rec_norm_b))
+        self.assertTrue(torch.allclose(lora_down, rec_down))
+        self.assertTrue(torch.allclose(lora_up, rec_up))
 
     def test_genome_grating_translation(self) -> None:
         """Verify translation from Grating to LoRAGenome and back."""
@@ -71,9 +58,11 @@ class TestLoRAEvolution(unittest.TestCase):
         self.assertEqual(genome[0].address, "module1")
         self.assertEqual(genome[1].address, "module2")
 
-        # Mutate genome magnitude
-        genome[0].magnitude = 10.0
-        genome[1].magnitude = 5.0
+        # Mutate genome weights
+        genome[0].lora_down.fill_(10.0)
+        genome[0].lora_up.fill_(1.0)
+        genome[1].lora_down.fill_(5.0)
+        genome[1].lora_up.fill_(1.0)
 
         # Express back to new Grating
         new_grating = express_to_grating(genome, grating)
@@ -83,25 +72,22 @@ class TestLoRAEvolution(unittest.TestCase):
         new_el1 = nodes["module1"]
         new_el2 = nodes["module2"]
 
-        mag_1 = torch.linalg.norm(new_el1.params["lora_down"]).item() * torch.linalg.norm(new_el1.params["lora_up"]).item()
-        mag_2 = torch.linalg.norm(new_el2.params["lora_down"]).item() * torch.linalg.norm(new_el2.params["lora_up"]).item()
-
-        self.assertAlmostEqual(mag_1, 10.0, places=5)
-        self.assertAlmostEqual(mag_2, 5.0, places=5)
+        self.assertTrue(torch.allclose(new_el1.params["lora_down"], torch.full_like(new_el1.params["lora_down"], 10.0)))
+        self.assertTrue(torch.allclose(new_el2.params["lora_down"], torch.full_like(new_el2.params["lora_down"], 5.0)))
 
     def test_n_point_crossover(self) -> None:
         """Verify NPoint crossover swaps segments correctly."""
         genes_p1 = [
-            PerturbationGene("l1", torch.ones(1, 1), torch.ones(1, 1), 1.0, True),
-            PerturbationGene("l2", torch.ones(1, 1), torch.ones(1, 1), 2.0, True),
-            PerturbationGene("l3", torch.ones(1, 1), torch.ones(1, 1), 3.0, True),
-            PerturbationGene("l4", torch.ones(1, 1), torch.ones(1, 1), 4.0, True),
+            PerturbationGene("l1", torch.ones(1, 1), torch.ones(1, 1), True),
+            PerturbationGene("l2", torch.ones(1, 1), torch.ones(1, 1) * 2.0, True),
+            PerturbationGene("l3", torch.ones(1, 1), torch.ones(1, 1) * 3.0, True),
+            PerturbationGene("l4", torch.ones(1, 1), torch.ones(1, 1) * 4.0, True),
         ]
         genes_p2 = [
-            PerturbationGene("l1", torch.zeros(1, 1), torch.zeros(1, 1), 10.0, False),
-            PerturbationGene("l2", torch.zeros(1, 1), torch.zeros(1, 1), 20.0, False),
-            PerturbationGene("l3", torch.zeros(1, 1), torch.zeros(1, 1), 30.0, False),
-            PerturbationGene("l4", torch.zeros(1, 1), torch.zeros(1, 1), 40.0, False),
+            PerturbationGene("l1", torch.zeros(1, 1), torch.zeros(1, 1) * 10.0, False),
+            PerturbationGene("l2", torch.zeros(1, 1), torch.zeros(1, 1) * 20.0, False),
+            PerturbationGene("l3", torch.zeros(1, 1), torch.zeros(1, 1) * 30.0, False),
+            PerturbationGene("l4", torch.zeros(1, 1), torch.zeros(1, 1) * 40.0, False),
         ]
         genome_p1 = LoRAGenome(genes_p1)
         genome_p2 = LoRAGenome(genes_p2)
@@ -114,20 +100,20 @@ class TestLoRAEvolution(unittest.TestCase):
             child_a, child_b = crossover(genome_p1, genome_p2)
 
         # Child A: P1[:2] + P2[2:]
-        self.assertEqual(child_a[0].magnitude, 1.0)
-        self.assertEqual(child_a[1].magnitude, 2.0)
-        self.assertEqual(child_a[2].magnitude, 30.0)
-        self.assertEqual(child_a[3].magnitude, 40.0)
+        self.assertEqual(child_a[0].lora_up.item(), 1.0)
+        self.assertEqual(child_a[1].lora_up.item(), 2.0)
+        self.assertEqual(child_a[2].lora_up.item(), 30.0)
+        self.assertEqual(child_a[3].lora_up.item(), 40.0)
 
         # Child B: P2[:2] + P1[2:]
-        self.assertEqual(child_b[0].magnitude, 10.0)
-        self.assertEqual(child_b[1].magnitude, 20.0)
-        self.assertEqual(child_b[2].magnitude, 3.0)
-        self.assertEqual(child_b[3].magnitude, 4.0)
+        self.assertEqual(child_b[0].lora_up.item(), 10.0)
+        self.assertEqual(child_b[1].lora_up.item(), 20.0)
+        self.assertEqual(child_b[2].lora_up.item(), 3.0)
+        self.assertEqual(child_b[3].lora_up.item(), 4.0)
 
     def test_mutation(self) -> None:
         """Verify gene mutation perturbs weights and active status."""
-        gene = PerturbationGene("l1", torch.tensor([1.0, 0.0]), torch.tensor([0.0, 1.0]), 5.0, True)
+        gene = PerturbationGene("l1", torch.tensor([1.0, 0.0]), torch.tensor([0.0, 1.0]), True)
 
         mutated = mutate_perturbation_gene(
             gene,
@@ -136,14 +122,30 @@ class TestLoRAEvolution(unittest.TestCase):
             active_flip_prob=0.0
         )
 
-        # Check direction changed but remained unit norm
-        self.assertFalse(torch.equal(mutated.a_dir, gene.a_dir))
-        self.assertAlmostEqual(torch.linalg.norm(mutated.a_dir).item(), 1.0, places=5)
-        self.assertAlmostEqual(torch.linalg.norm(mutated.b_dir).item(), 1.0, places=5)
+        # Check weights changed
+        self.assertFalse(torch.equal(mutated.lora_down, gene.lora_down))
+        self.assertFalse(torch.equal(mutated.lora_up, gene.lora_up))
 
-        # Magnitude changed
-        self.assertNotEqual(mutated.magnitude, gene.magnitude)
-        self.assertGreaterEqual(mutated.magnitude, 0.0)
+        # Verify mutation still occurs for inactive genes (recessive/dormant mutation)
+        inactive_gene = PerturbationGene("l1", torch.tensor([1.0, 0.0]), torch.tensor([0.0, 1.0]), False)
+        mutated_inactive = mutate_perturbation_gene(
+            inactive_gene,
+            direction_noise=0.1,
+            magnitude_noise=0.2,
+            active_flip_prob=0.0
+        )
+        self.assertFalse(torch.equal(mutated_inactive.lora_down, inactive_gene.lora_down))
+
+        # Verify that mutating a zero weight gene initializes it with random weights
+        zero_gene = PerturbationGene("l1", torch.zeros(2, 2), torch.zeros(2, 2), True)
+        mutated_zero = mutate_perturbation_gene(
+            zero_gene,
+            direction_noise=0.1,
+            magnitude_noise=0.2,
+            active_flip_prob=0.0
+        )
+        self.assertFalse(torch.all(mutated_zero.lora_down == 0.0))
+        self.assertFalse(torch.all(mutated_zero.lora_up == 0.0))
 
     def test_fail_fast_mismatch(self) -> None:
         """Verify fail-fast behavior when shape mismatches occur."""
@@ -216,8 +218,8 @@ class TestLoRAEvolution(unittest.TestCase):
         import os
 
         genes = [
-            PerturbationGene("layer_1", torch.randn(2, 4), torch.randn(4, 2), 2.5, True),
-            PerturbationGene("layer_2", torch.randn(3, 5), torch.randn(5, 3), 0.0, False),
+            PerturbationGene("layer_1", torch.randn(2, 4), torch.randn(4, 2), True),
+            PerturbationGene("layer_2", torch.randn(3, 5), torch.randn(5, 3), False),
         ]
         original_genome = LoRAGenome(genes)
 
@@ -235,9 +237,8 @@ class TestLoRAEvolution(unittest.TestCase):
             self.assertEqual(len(loaded_genome), 2)
             for orig_gene, loaded_gene in zip(original_genome, loaded_genome):
                 self.assertEqual(orig_gene.address, loaded_gene.address)
-                self.assertTrue(torch.allclose(orig_gene.a_dir, loaded_gene.a_dir))
-                self.assertTrue(torch.allclose(orig_gene.b_dir, loaded_gene.b_dir))
-                self.assertAlmostEqual(orig_gene.magnitude, loaded_gene.magnitude)
+                self.assertTrue(torch.allclose(orig_gene.lora_down, loaded_gene.lora_down))
+                self.assertTrue(torch.allclose(orig_gene.lora_up, loaded_gene.lora_up))
                 self.assertEqual(orig_gene.active, loaded_gene.active)
 
     def test_express_to_grating_with_path(self) -> None:
@@ -249,12 +250,10 @@ class TestLoRAEvolution(unittest.TestCase):
         el1 = LoRAElement("module1", rank=2, alpha=1.0, in_features=4, out_features=4)
         grating.add_element(el1)
 
-        a_dir = torch.randn(2, 4)
-        b_dir = torch.randn(4, 2)
-        a_dir = a_dir / torch.linalg.norm(a_dir)
-        b_dir = b_dir / torch.linalg.norm(b_dir)
+        lora_down = torch.randn(2, 4)
+        lora_up = torch.randn(4, 2)
         genes = [
-            PerturbationGene("module1", a_dir, b_dir, 5.0, True)
+            PerturbationGene("module1", lora_down, lora_up, True)
         ]
         genome = LoRAGenome(genes)
 
@@ -267,8 +266,8 @@ class TestLoRAEvolution(unittest.TestCase):
 
             # Verify parameters were expressed correctly
             new_el = expressed_grating.nodes["module1"]
-            mag = torch.linalg.norm(new_el.params["lora_down"]).item() * torch.linalg.norm(new_el.params["lora_up"]).item()
-            self.assertAlmostEqual(mag, 5.0, places=5)
+            self.assertTrue(torch.allclose(new_el.params["lora_down"], lora_down.to(new_el.params["lora_down"].dtype)))
+            self.assertTrue(torch.allclose(new_el.params["lora_up"], lora_up.to(new_el.params["lora_up"].dtype)))
 
     def test_load_genome_invalid_metadata_fail_fast(self) -> None:
         """Verify that loading an incompatible/malformed safetensors file fails fast with a ValueError."""

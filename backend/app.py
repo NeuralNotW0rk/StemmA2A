@@ -63,6 +63,7 @@ from param_graph.elements.collections.group_element import Group
 from evolution.lora.lora_genome import LoRAGenome, genome_from_grating, express_to_grating, mutate_perturbation_gene
 import copy
 import uuid
+from coolname import generate_slug
 
 app = Flask(__name__)
 CORS(app)
@@ -851,8 +852,11 @@ async def start_evolution():
                     mutated_genes.append(mutated_gene)
                 child_genome._items = mutated_genes
 
-            # Generate individual elements in param graph
-            individual_id = f"individual_{uid_generator.from_string(str(uuid.uuid4()))}"
+            # Generate deterministic content-addressable ID for individual from its genome contents
+            genome_state_dict = child_genome.get_state_dict()
+            genome_uid = uid_generator.from_state_dict(genome_state_dict)
+            individual_id = f"individual_{genome_uid}"
+            
             output_dir = param_graph.root / "generate"
             os.makedirs(output_dir, exist_ok=True)
             genome_path = output_dir / f"{individual_id}.safetensors"
@@ -864,9 +868,10 @@ async def start_evolution():
             ind_context["baseline_file_path"] = str(base_grating_path)
 
             # Add Individual node to the parameter graph, nested under the population group
+            slug = generate_slug(2)
             individual_node = Individual(
                 id=individual_id,
-                name=f"{baseline_name} - Ind {i+1}",
+                name=f"{baseline_name} - Ind {i+1} ({slug})",
                 file=Asset(path=str(genome_path), uid=individual_id, extension=".safetensors"),
                 base_model_id=model_id,
                 baseline_grating_id=baseline_grating_id,

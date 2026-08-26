@@ -15,23 +15,20 @@ from neutral_selection.variation.recombination import RandomNPointCrossover
 class PerturbationGene:
     """
     A topology-agnostic gene representing a single LoRA perturbation site.
-    Decoupled into normalized directions and a scalar magnitude.
+    Stores lora_down and lora_up weights directly.
     """
     address: str
-    a_dir: torch.Tensor
-    b_dir: torch.Tensor
-    magnitude: float
+    lora_down: torch.Tensor
+    lora_up: torch.Tensor
     active: bool
 
     def __post_init__(self) -> None:
         if not isinstance(self.address, str):
             raise TypeError("address must be a string")
-        if not isinstance(self.a_dir, torch.Tensor):
-            raise TypeError("a_dir must be a torch.Tensor")
-        if not isinstance(self.b_dir, torch.Tensor):
-            raise TypeError("b_dir must be a torch.Tensor")
-        if not isinstance(self.magnitude, (int, float)):
-            raise TypeError("magnitude must be a float or int")
+        if not isinstance(self.lora_down, torch.Tensor):
+            raise TypeError("lora_down must be a torch.Tensor")
+        if not isinstance(self.lora_up, torch.Tensor):
+            raise TypeError("lora_up must be a torch.Tensor")
         if not isinstance(self.active, bool):
             raise TypeError("active must be a boolean")
 
@@ -44,57 +41,23 @@ class PerturbationGene:
         active: bool = True
     ) -> "PerturbationGene":
         """
-        Creates a PerturbationGene by normalizing the given weight tensors.
+        Creates a PerturbationGene by cloning the given weight tensors.
         """
         if not isinstance(lora_down, torch.Tensor) or not isinstance(lora_up, torch.Tensor):
             raise TypeError("lora_down and lora_up must be torch.Tensors")
 
-        norm_a = float(torch.linalg.norm(lora_down).item())
-        norm_b = float(torch.linalg.norm(lora_up).item())
-        magnitude = norm_a * norm_b
-
-        # Normalize a_dir
-        if norm_a > 1e-9:
-            a_dir = lora_down.clone() / norm_a
-        else:
-            a_dir = torch.zeros_like(lora_down)
-            if a_dir.numel() > 0:
-                a_dir = torch.randn_like(lora_down)
-                norm_a_rand = torch.linalg.norm(a_dir)
-                if norm_a_rand > 1e-9:
-                    a_dir = a_dir / norm_a_rand
-
-        # Normalize b_dir
-        if norm_b > 1e-9:
-            b_dir = lora_up.clone() / norm_b
-        else:
-            b_dir = torch.zeros_like(lora_up)
-            if b_dir.numel() > 0:
-                b_dir = torch.randn_like(lora_up)
-                norm_b_rand = torch.linalg.norm(b_dir)
-                if norm_b_rand > 1e-9:
-                    b_dir = b_dir / norm_b_rand
-
         return cls(
             address=address,
-            a_dir=a_dir,
-            b_dir=b_dir,
-            magnitude=magnitude,
+            lora_down=lora_down.clone(),
+            lora_up=lora_up.clone(),
             active=active
         )
 
     def to_tensors(self) -> tuple[torch.Tensor, torch.Tensor]:
         """
-        Reconstructs the scaled lora_down and lora_up tensors.
+        Reconstructs the lora_down and lora_up tensors.
         """
-        factor = torch.sqrt(
-            torch.tensor(
-                max(0.0, self.magnitude),
-                dtype=self.a_dir.dtype,
-                device=self.a_dir.device
-            )
-        )
-        return factor * self.a_dir, factor * self.b_dir
+        return self.lora_down, self.lora_up
 
 
 class LoRAGenome(Genome):
@@ -104,10 +67,24 @@ class LoRAGenome(Genome):
     def __init__(self, items: list[PerturbationGene]) -> None:
         super().__init__(items)
 
+    def get_state_dict(self) -> dict[str, torch.Tensor]:
+        """
+        Returns a dict of tensors representing the genome's state (lora_down, lora_up, active flags).
+        This can be used to compute a deterministic content-addressable UID.
+        """
+        state_dict: dict[str, torch.Tensor] = {}
+        for gene in self._items:
+            state_dict[f"{gene.address}.lora_down"] = gene.lora_down
+            state_dict[f"{gene.address}.lora_up"] = gene.lora_up
+            state_dict[f"{gene.address}.active"] = torch.tensor(
+                gene.active, dtype=torch.bool, device=gene.lora_down.device
+            )
+        return state_dict
+
     def save(self, path: Union[str, Path]) -> None:
         """
         Saves the genome to a safetensors file.
-        Only serializes the gene names, weights (a_dir, b_dir), and basic scalar states,
+        Only serializes the gene names, weights (lora_down, lora_up), and basic active state,
         avoiding duplicating the full topology (ranks, alpha, dimensions) which is stored in the base grating.
         """
         from safetensors.torch import save_file
@@ -119,11 +96,10 @@ class LoRAGenome(Genome):
         for gene in self._items:
             addresses.append(gene.address)
             # Store directions in the state dict
-            state_dict[f"{gene.address}.a_dir"] = gene.a_dir
-            state_dict[f"{gene.address}.b_dir"] = gene.b_dir
+            state_dict[f"{gene.address}.lora_down"] = gene.lora_down
+            state_dict[f"{gene.address}.lora_up"] = gene.lora_up
             # Store scalars/states in the metadata
             gene_metadata[gene.address] = {
-                "magnitude": float(gene.magnitude),
                 "active": bool(gene.active)
             }
 
@@ -154,17 +130,15 @@ class LoRAGenome(Genome):
             gene_metadata = json.loads(metadata["gene_metadata"])
 
             for address in addresses:
-                a_dir = f.get_tensor(f"{address}.a_dir")
-                b_dir = f.get_tensor(f"{address}.b_dir")
+                lora_down = f.get_tensor(f"{address}.lora_down")
+                lora_up = f.get_tensor(f"{address}.lora_up")
                 meta = gene_metadata[address]
-                magnitude = meta["magnitude"]
                 active = meta["active"]
 
                 gene = PerturbationGene(
                     address=address,
-                    a_dir=a_dir,
-                    b_dir=b_dir,
-                    magnitude=magnitude,
+                    lora_down=lora_down,
+                    lora_up=lora_up,
                     active=active
                 )
                 genes.append(gene)
@@ -190,7 +164,6 @@ class LoRAGenome(Genome):
         return cls(genes)
 
 
-
 def mutate_perturbation_gene(
     gene: PerturbationGene,
     direction_noise: float = 0.05,
@@ -202,27 +175,26 @@ def mutate_perturbation_gene(
     """
     new_gene = copy.deepcopy(gene)
 
-    if new_gene.active:
-        # Mutate direction vector a_dir
+    # If the weights are currently zero (baseline champion), initialize them with a random normal distribution
+    if torch.all(new_gene.lora_down == 0.0) and torch.all(new_gene.lora_up == 0.0):
+        rank = new_gene.lora_down.size(0)
+        # Use standard LoRA init scaling factor: std = 1 / sqrt(rank)
+        std = 1.0 / (rank ** 0.5) if rank > 0 else 1.0
+        
+        # Scale the initialized weights by magnitude_noise so the user's slider affects the initial variance
+        new_gene.lora_down = torch.randn_like(new_gene.lora_down) * std * magnitude_noise
+        new_gene.lora_up = torch.randn_like(new_gene.lora_up) * std * magnitude_noise
+    else:
+        # Otherwise, perturb the existing weights by adding scaled random normal noise
         if direction_noise > 0.0:
-            noise_a = torch.randn_like(new_gene.a_dir) * direction_noise
-            new_a = new_gene.a_dir + noise_a
-            norm_a = torch.linalg.norm(new_a)
-            if norm_a > 1e-9:
-                new_gene.a_dir = new_a / norm_a
+            norm_down = torch.linalg.norm(new_gene.lora_down).item()
+            scale = norm_down if norm_down > 1e-9 else 1.0
+            new_gene.lora_down += torch.randn_like(new_gene.lora_down) * direction_noise * scale
 
-        # Mutate direction vector b_dir
-        if direction_noise > 0.0:
-            noise_b = torch.randn_like(new_gene.b_dir) * direction_noise
-            new_b = new_gene.b_dir + noise_b
-            norm_b = torch.linalg.norm(new_b)
-            if norm_b > 1e-9:
-                new_gene.b_dir = new_b / norm_b
-
-        # Mutate magnitude
         if magnitude_noise > 0.0:
-            noise_mag = float(torch.randn(1).item()) * magnitude_noise
-            new_gene.magnitude = max(0.0, new_gene.magnitude + noise_mag)
+            norm_up = torch.linalg.norm(new_gene.lora_up).item()
+            scale = norm_up if norm_up > 1e-9 else 1.0
+            new_gene.lora_up += torch.randn_like(new_gene.lora_up) * magnitude_noise * scale
 
     # Mutate active status
     if random.random() < active_flip_prob:

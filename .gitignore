@@ -18,3 +18,4 @@ data
 
 # Shared models configuration
 backend/shared_models.json
+execution-engine.tar

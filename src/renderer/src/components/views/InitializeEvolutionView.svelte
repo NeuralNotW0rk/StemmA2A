@@ -28,7 +28,7 @@
   let loraAlpha = $state(1.0)
   let populationSize = $state(10)
   let directionNoise = $state(0.05)
-  let magnitudeNoise = $state(0.1)
+  let magnitudeNoise = $state(0.5)
   let activeFlipProb = $state(0.05)
 
   let inProgress = $state(false)
@@ -185,7 +185,6 @@
             job.status = 'success'
             job.result = res
             updateJob(job)
-            onrefresh()
           })
           .catch((err: unknown) => {
             job.status = 'error'
@@ -194,7 +193,6 @@
               message: err instanceof Error ? err.message : String(err)
             }
             updateJob(job)
-            onrefresh()
           })
       }
 
@@ -258,7 +256,7 @@
           <span>Magnitude Noise</span>
           <span>{magnitudeNoise.toFixed(2)}</span>
         </div>
-        <input type="range" min="0.0" max="1.0" step="0.01" bind:value={magnitudeNoise} />
+        <input type="range" min="0.0" max="5.0" step="0.05" bind:value={magnitudeNoise} />
       </label>
 
       <label class="slider-label">

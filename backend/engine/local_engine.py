@@ -312,7 +312,9 @@ class LocalEngine(Engine):
             # Revert the model to its original state so it can remain safely in the cache
             adapter.actant.deactivate()
 
-        local_path = self.data_root / path_from_uid(artifact.id)
+        job_id = kwargs.get("job_id", str(uuid.uuid4()))
+        ext = getattr(artifact.file, "extension", ".wav") or ".wav"
+        local_path = self.data_root / f"temp_{job_id}{ext}"
         local_path.parent.mkdir(parents=True, exist_ok=True)
 
         if artifact.type == "image":
@@ -366,7 +368,9 @@ class LocalEngine(Engine):
 
         artifact, tensor = adapter.invert(**kwargs)
 
-        local_path = self.data_root / path_from_uid(artifact.id)
+        job_id = kwargs.get("job_id", str(uuid.uuid4()))
+        ext = getattr(artifact.file, "extension", ".pt") or ".pt"
+        local_path = self.data_root / f"temp_{job_id}{ext}"
         local_path.parent.mkdir(parents=True, exist_ok=True)
 
         # Save the latent tensor file
@@ -419,6 +423,7 @@ class LocalEngine(Engine):
                 func = getattr(self, operation_id)
                 
                 # We need to run the async function in the current thread's event loop
+                op_kwargs['job_id'] = job_id
                 result = asyncio.run(func(**op_kwargs))
 
                 self.job_statuses[job_id] = {"status": "completed", "result": result}
