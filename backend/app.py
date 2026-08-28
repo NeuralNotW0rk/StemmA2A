@@ -60,7 +60,7 @@ from diffracture.topology.grating import Grating as DiffractureGrating
 from param_graph.elements.artifacts.individual_element import Individual
 from param_graph.elements.artifacts.bundle_element import Bundle
 from param_graph.elements.collections.group_element import Group
-from evolution.lora.lora_genome import LoRAGenome, genome_from_grating, express_to_grating, mutate_perturbation_gene
+from evolution.lora.lora_genome import LoRAGenome, express_to_grating
 import copy
 import uuid
 from coolname import generate_slug
@@ -739,8 +739,7 @@ async def start_evolution():
         baseline_grating_id = data.get("baseline_grating_id")
         precursor_audio_id = data.get("precursor_audio_id")
         population_size = int(data.get("population_size", 10))
-        direction_noise = float(data.get("direction_noise", 0.05))
-        magnitude_noise = float(data.get("magnitude_noise", 0.1))
+        lora_noise = float(data.get("lora_noise", data.get("lora_down_noise", data.get("direction_noise", 0.05))))
         active_flip_prob = float(data.get("active_flip_prob", 0.05))
         generation_context = data.get("generation_context", {})
 
@@ -781,7 +780,7 @@ async def start_evolution():
             baseline_name = precursor_audio.name or precursor_audio.alias or "Artifact"
 
         diff_base_grating = DiffractureGrating.load(base_grating_path)
-        base_genome = genome_from_grating(diff_base_grating)
+        base_genome = LoRAGenome.from_grating(diff_base_grating)
 
         # Resolve other linked source nodes if present (like source_audio)
         source_audio_id = generation_context.get("source_audio_id") or generation_context.get("source_audio")
@@ -809,8 +808,7 @@ async def start_evolution():
                 "model_id": model_id,
                 "baseline_grating_id": baseline_grating_id,
                 "population_size": population_size,
-                "direction_noise": direction_noise,
-                "magnitude_noise": magnitude_noise,
+                "lora_noise": lora_noise,
                 "active_flip_prob": active_flip_prob,
                 "generation_context": generation_context
             }
@@ -836,22 +834,14 @@ async def start_evolution():
         individual_ids = []
 
         # Create population N individuals
-        for i in range(population_size):
-            child_genome = copy.deepcopy(base_genome)
-            
-            # i == 0 is the unmutated baseline champion; mutate child for i > 0
-            if i > 0:
-                mutated_genes = []
-                for gene in child_genome:
-                    mutated_gene = mutate_perturbation_gene(
-                        gene,
-                        direction_noise=direction_noise,
-                        magnitude_noise=magnitude_noise,
-                        active_flip_prob=active_flip_prob
-                    )
-                    mutated_genes.append(mutated_gene)
-                child_genome._items = mutated_genes
+        population = LoRAGenome.create_initial_population(
+            base_grating=diff_base_grating,
+            population_size=population_size,
+            lora_noise=lora_noise,
+            active_flip_prob=active_flip_prob
+        )
 
+        for child_genome in population:
             # Generate deterministic content-addressable ID for individual from its genome contents
             genome_state_dict = child_genome.get_state_dict()
             genome_uid = uid_generator.from_state_dict(genome_state_dict)

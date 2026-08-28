@@ -8,7 +8,6 @@ from pathlib import Path
 import torch
 from diffracture.topology.grating import Grating
 from neutral_selection.representation.genome import Genome
-from neutral_selection.variation.recombination import RandomNPointCrossover
 
 
 @dataclass
@@ -163,51 +162,42 @@ class LoRAGenome(Genome):
                 genes.append(gene)
         return cls(genes)
 
+    @classmethod
+    def create_initial_population(
+        cls,
+        base_grating: Grating,
+        population_size: int,
+        lora_noise: float,
+        active_flip_prob: float
+    ) -> list["LoRAGenome"]:
+        """
+        Creates an initial population of LoRAGenomes from a base grating.
+        All individuals in the population are mutated copies of the base genome.
+        """
+        from neutral_selection.variation.mutation import mutate, UniformMutation, attribute_mutator, bit_flip_mutator
 
-def mutate_perturbation_gene(
-    gene: PerturbationGene,
-    direction_noise: float = 0.05,
-    magnitude_noise: float = 0.1,
-    active_flip_prob: float = 0.05
-) -> PerturbationGene:
-    """
-    Creates a mutated copy of the given gene.
-    """
-    new_gene = copy.deepcopy(gene)
+        base_genome = cls.from_grating(base_grating)
+        population: list[LoRAGenome] = []
 
-    # If the weights are currently zero (baseline champion), initialize them with a random normal distribution
-    if torch.all(new_gene.lora_down == 0.0) and torch.all(new_gene.lora_up == 0.0):
-        rank = new_gene.lora_down.size(0)
-        # Use standard LoRA init scaling factor: std = 1 / sqrt(rank)
-        std = 1.0 / (rank ** 0.5) if rank > 0 else 1.0
-        
-        # Scale the initialized weights by magnitude_noise so the user's slider affects the initial variance
-        new_gene.lora_down = torch.randn_like(new_gene.lora_down) * std * magnitude_noise
-        new_gene.lora_up = torch.randn_like(new_gene.lora_up) * std * magnitude_noise
-    else:
-        # Otherwise, perturb the existing weights by adding scaled random normal noise
-        if direction_noise > 0.0:
-            norm_down = torch.linalg.norm(new_gene.lora_down).item()
-            scale = norm_down if norm_down > 1e-9 else 1.0
-            new_gene.lora_down += torch.randn_like(new_gene.lora_down) * direction_noise * scale
+        mutation_strategy = UniformMutation(
+            mutation_rate=1.0,
+            mutation_fn=attribute_mutator({
+                "lora_down": lora_gaussian_noise_mutator(std=lora_noise),
+                "lora_up": lora_gaussian_noise_mutator(std=lora_noise),
+                "active": bit_flip_mutator(prob=active_flip_prob)
+            })
+        )
 
-        if magnitude_noise > 0.0:
-            norm_up = torch.linalg.norm(new_gene.lora_up).item()
-            scale = norm_up if norm_up > 1e-9 else 1.0
-            new_gene.lora_up += torch.randn_like(new_gene.lora_up) * magnitude_noise * scale
+        for _ in range(population_size):
+            child_genome = copy.deepcopy(base_genome)
+            child_genome = mutate(child_genome, mutation_strategy)
+            
+            if not isinstance(child_genome, cls):
+                child_genome = cls(list(child_genome))
+            population.append(child_genome)
 
-    # Mutate active status
-    if random.random() < active_flip_prob:
-        new_gene.active = not new_gene.active
+        return population
 
-    return new_gene
-
-
-def genome_from_grating(grating: Grating) -> LoRAGenome:
-    """
-    Deprecated alias. Use LoRAGenome.from_grating(grating) instead.
-    """
-    return LoRAGenome.from_grating(grating)
 
 
 def express_to_grating(genome: LoRAGenome, base_grating: Union[Grating, str, Path]) -> Grating:
@@ -270,3 +260,26 @@ def express_to_grating(genome: LoRAGenome, base_grating: Union[Grating, str, Pat
         new_grating.add_element(new_el)
 
     return new_grating
+
+
+def lora_gaussian_noise_mutator(std: float, mean: float = 0.0) -> Callable[[Any], Any]:
+    """
+    Returns a mutator function that adds Gaussian noise to numeric values,
+    with custom LoRA-specific scaling initialization for zero-initialized torch Tensors.
+    """
+    from neutral_selection.variation.mutation import gaussian_noise_mutator
+
+    base_mutator = gaussian_noise_mutator(std, mean=mean)
+
+    def mutate_fn(val: Any) -> Any:
+        if hasattr(val, "device") and hasattr(val, "dtype") and hasattr(val, "clone"):
+            # Check for torch Tensor
+            if torch.all(val == 0.0):
+                # Standard LoRA-style initialization: scale std by 1 / sqrt(rank)
+                rank = val.size(0)
+                init_std = 1.0 / (rank ** 0.5) if rank > 0 else 1.0
+                return torch.randn_like(val) * init_std * std + mean
+        return base_mutator(val)
+
+    return mutate_fn
+

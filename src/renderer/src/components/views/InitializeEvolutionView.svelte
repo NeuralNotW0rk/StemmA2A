@@ -27,8 +27,7 @@
   let loraRank = $state(4)
   let loraAlpha = $state(1.0)
   let populationSize = $state(10)
-  let directionNoise = $state(0.05)
-  let magnitudeNoise = $state(0.5)
+  let loraNoise = $state(0.05)
   let activeFlipProb = $state(0.05)
 
   let inProgress = $state(false)
@@ -152,8 +151,7 @@
         elements: elements,
         precursor_audio_id: audioElement.id,
         population_size: populationSize,
-        direction_noise: directionNoise,
-        magnitude_noise: magnitudeNoise,
+        lora_noise: loraNoise,
         active_flip_prob: activeFlipProb,
         generation_context: generationContext
       }
@@ -245,18 +243,10 @@
 
       <label class="slider-label">
         <div class="slider-header">
-          <span>Direction Noise</span>
-          <span>{directionNoise.toFixed(2)}</span>
+          <span>LoRA Noise</span>
+          <span>{loraNoise.toFixed(2)}</span>
         </div>
-        <input type="range" min="0.0" max="1.0" step="0.01" bind:value={directionNoise} />
-      </label>
-
-      <label class="slider-label">
-        <div class="slider-header">
-          <span>Magnitude Noise</span>
-          <span>{magnitudeNoise.toFixed(2)}</span>
-        </div>
-        <input type="range" min="0.0" max="5.0" step="0.05" bind:value={magnitudeNoise} />
+        <input type="range" min="0.0" max="2.0" step="0.01" bind:value={loraNoise} />
       </label>
 
       <label class="slider-label">

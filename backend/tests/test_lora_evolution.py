@@ -6,11 +6,11 @@ from diffracture.topology.lora import LoRAElement
 from evolution.lora.lora_genome import (
     PerturbationGene,
     LoRAGenome,
-    genome_from_grating,
     express_to_grating,
-    RandomNPointCrossover,
-    mutate_perturbation_gene
+    lora_gaussian_noise_mutator
 )
+from neutral_selection.variation.mutation import mutate, UniformMutation, attribute_mutator, bit_flip_mutator
+from neutral_selection.variation.recombination import RandomNPointCrossover
 from neutral_selection.representation.individual import Individual
 from neutral_selection.representation.population import Population
 
@@ -115,37 +115,87 @@ class TestLoRAEvolution(unittest.TestCase):
         """Verify gene mutation perturbs weights and active status."""
         gene = PerturbationGene("l1", torch.tensor([1.0, 0.0]), torch.tensor([0.0, 1.0]), True)
 
-        mutated = mutate_perturbation_gene(
-            gene,
-            direction_noise=0.1,
-            magnitude_noise=0.2,
-            active_flip_prob=0.0
-        )
+        # Mutate using composed generic attribute mutators
+        gene_mutator = attribute_mutator({
+            "lora_down": lora_gaussian_noise_mutator(std=0.1),
+            "lora_up": lora_gaussian_noise_mutator(std=0.2),
+            "active": bit_flip_mutator(prob=0.0)
+        })
+        mutated = gene_mutator(gene)
 
         # Check weights changed
         self.assertFalse(torch.equal(mutated.lora_down, gene.lora_down))
         self.assertFalse(torch.equal(mutated.lora_up, gene.lora_up))
+        self.assertTrue(mutated.active)
 
         # Verify mutation still occurs for inactive genes (recessive/dormant mutation)
         inactive_gene = PerturbationGene("l1", torch.tensor([1.0, 0.0]), torch.tensor([0.0, 1.0]), False)
-        mutated_inactive = mutate_perturbation_gene(
-            inactive_gene,
-            direction_noise=0.1,
-            magnitude_noise=0.2,
-            active_flip_prob=0.0
-        )
+        mutated_inactive = gene_mutator(inactive_gene)
         self.assertFalse(torch.equal(mutated_inactive.lora_down, inactive_gene.lora_down))
+        self.assertFalse(mutated_inactive.active)
 
         # Verify that mutating a zero weight gene initializes it with random weights
         zero_gene = PerturbationGene("l1", torch.zeros(2, 2), torch.zeros(2, 2), True)
-        mutated_zero = mutate_perturbation_gene(
-            zero_gene,
-            direction_noise=0.1,
-            magnitude_noise=0.2,
-            active_flip_prob=0.0
-        )
+        mutated_zero = gene_mutator(zero_gene)
         self.assertFalse(torch.all(mutated_zero.lora_down == 0.0))
         self.assertFalse(torch.all(mutated_zero.lora_up == 0.0))
+
+    def test_lora_genome_mutation_strategy(self) -> None:
+        """Verify UniformMutation with attribute_mutator mutates the entire LoRAGenome."""
+        genes = [
+            PerturbationGene("l1", torch.tensor([1.0, 0.0]), torch.tensor([0.0, 1.0]), True),
+            PerturbationGene("l2", torch.zeros(2, 2), torch.zeros(2, 2), False)
+        ]
+        genome = LoRAGenome(genes)
+
+        strategy = UniformMutation(
+            mutation_rate=1.0,
+            mutation_fn=attribute_mutator({
+                "lora_down": lora_gaussian_noise_mutator(std=0.1),
+                "lora_up": lora_gaussian_noise_mutator(std=0.2),
+                "active": bit_flip_mutator(prob=0.0)
+            })
+        )
+
+        mutated_genome = mutate(genome, strategy)
+        self.assertIsInstance(mutated_genome, LoRAGenome)
+        self.assertEqual(len(mutated_genome), 2)
+
+        # First gene weights should be perturbed
+        self.assertFalse(torch.equal(mutated_genome[0].lora_down, genome[0].lora_down))
+        self.assertFalse(torch.equal(mutated_genome[0].lora_up, genome[0].lora_up))
+        self.assertTrue(mutated_genome[0].active)
+
+        # Second gene (zero init) should be initialized
+        self.assertFalse(torch.all(mutated_genome[1].lora_down == 0.0))
+        self.assertFalse(torch.all(mutated_genome[1].lora_up == 0.0))
+        self.assertFalse(mutated_genome[1].active)
+
+    def test_create_initial_population(self) -> None:
+        """Verify LoRAGenome.create_initial_population generates expected copies and mutations."""
+        grating = Grating()
+        el = LoRAElement("l1", rank=2, alpha=1.0, in_features=2, out_features=2)
+        grating.add_element(el)
+
+        # Force the grating parameters to have specific values
+        el.params["lora_down"].data.fill_(1.0)
+        el.params["lora_up"].data.fill_(2.0)
+
+        population = LoRAGenome.create_initial_population(
+            base_grating=grating,
+            population_size=3,
+            lora_noise=0.1,
+            active_flip_prob=0.0
+        )
+
+        self.assertEqual(len(population), 3)
+        for gen in population:
+            self.assertIsInstance(gen, LoRAGenome)
+
+        # All index positions (including 0, 1, and 2) are mutated
+        self.assertFalse(torch.all(population[0][0].lora_down == 1.0))
+        self.assertFalse(torch.all(population[1][0].lora_down == 1.0))
+        self.assertFalse(torch.all(population[2][0].lora_down == 1.0))
 
     def test_fail_fast_mismatch(self) -> None:
         """Verify fail-fast behavior when shape mismatches occur."""
@@ -357,8 +407,7 @@ class TestLoRAEvolution(unittest.TestCase):
                 "baseline_grating_id": "grating_test",
                 "precursor_audio_id": "precursor_audio_test",
                 "population_size": 3,
-                "direction_noise": 0.05,
-                "magnitude_noise": 0.1,
+                "lora_noise": 0.05,
                 "active_flip_prob": 0.05,
                 "generation_context": {
                     "operation": "generate",
@@ -481,8 +530,7 @@ class TestLoRAEvolution(unittest.TestCase):
                 ],
                 "precursor_audio_id": "precursor_audio_test",
                 "population_size": 2,
-                "direction_noise": 0.05,
-                "magnitude_noise": 0.1,
+                "lora_noise": 0.05,
                 "active_flip_prob": 0.05
             }
             resp = client.post("/start_evolution", json=payload)
