@@ -841,7 +841,7 @@ async def start_evolution():
             active_flip_prob=active_flip_prob
         )
 
-        for child_genome in population:
+        for i, child_genome in enumerate(population):
             # Generate deterministic content-addressable ID for individual from its genome contents
             genome_state_dict = child_genome.get_state_dict()
             genome_uid = uid_generator.from_state_dict(genome_state_dict)
@@ -1098,6 +1098,9 @@ async def get_job_status(job_id):
             elif status == "failed":
                 error_msg = status_info.get("error", "Unknown error during generation.")
                 traceback_msg = status_info.get("traceback")
+                print(f"Error: Job {job_id} failed: {error_msg}")
+                if traceback_msg:
+                    print(f"Traceback:\n{traceback_msg}")
                 return jsonify({"status": "failed", "error": error_msg, "traceback": traceback_msg}), 500
 
             elif status == "not_found":

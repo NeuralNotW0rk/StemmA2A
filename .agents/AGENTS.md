@@ -25,3 +25,8 @@
 - **Do Not Mask Failures:** Avoid implementing silent fallback blocks or catch-default statements that hide underlying errors (e.g., catching file loading errors and returning random or empty data).
 - **Raise Errors Immediately:** If a resource (like a model weight file or configuration) is missing, malformed, or incompatible, raise an explicit exception immediately during the validation/import phase so that the developer gets instant feedback.
 - **Fail Fast over Graceful Degradation:** Prefer throwing descriptive errors early rather than attempting to recover silently with degraded or mocked behaviors, which complicates downstream debugging.
+
+## 5. Architectural Boundaries & Data Conventions
+- **Preserve Storage Conventions:** Never change storage layout conventions, filename structures, or content-addressable storage (CAS) patterns (such as moving between CAS `path_from_uid` paths and temporary `temp_{job_id}` paths) without explicitly reviewing and updating all distributed services, endpoints, and download handlers (e.g., `/download_asset`) that depend on those assumptions.
+- **CAS for Downloadable Assets:** Retain content-addressable storage (CAS) based on deterministic content hashes (`path_from_uid`) for all generated, downloadable, and cached assets. This ensures efficient distributed access, verification, and deduplication across engine boundaries.
+- **Cross-Boundary Verification:** Ensure any changes modifying interfaces or shared file assumptions between `app.py` and `engine_service.py` are fully synchronized and validated on both sides of the host/container or client/server boundary.

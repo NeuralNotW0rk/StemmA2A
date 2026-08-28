@@ -184,8 +184,11 @@ class RemoteEngine(Engine):
                                 status_info["result"] = anchored_element.to_dict()
                             else:
                                 # If download fails, update status to reflect that
+                                error_text = await file_response.text()
+                                error_msg = f"Failed to download asset {result_element.id}. Status: {file_response.status}. Body: {error_text}"
+                                print(f"Error: {error_msg}")
                                 status_info["status"] = "failed"
-                                status_info["error"] = f"Failed to download asset {result_element.id}"
+                                status_info["error"] = error_msg
 
                     return status_info
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
