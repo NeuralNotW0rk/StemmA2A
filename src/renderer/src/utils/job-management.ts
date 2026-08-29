@@ -138,26 +138,31 @@ export function focusJobNode(job: Job): void {
   }
 }
 
-export async function pollJobStatus(jobId: string, intervalMs = 1500): Promise<any> {
+export async function pollJobStatus(jobId: string, intervalMs = 1500): Promise<unknown> {
   while (true) {
     // Use the IPC bridge instead of a direct HTTP fetch
-    const data = await window.api.pollJobStatus(jobId)
+    const data = (await window.api.pollJobStatus(jobId)) as Record<string, unknown>
     
     if (data.status === 'completed') {
       return data // Returns the fully processed artifact and context
     } else if (data.status === 'failed' || data.status === 'not_found' || data.error) {
-      let errMsg = data.error || 'Job failed'
+      let errMsg = (data.error as string) || 'Job failed'
       if (data.traceback) {
         errMsg += `\n\nTraceback:\n${data.traceback}`
       }
       throw new Error(errMsg)
     } else if (data.status === 'running' || data.status === 'pending') {
-      // Update the job store with the intermediate status to reflect in the UI
-      jobStore.update((jobs) => {
-        const index = jobs.findIndex((j) => j.id === jobId)
-        if (index > -1 && jobs[index].status !== data.status) {
+      // Update the job store with the intermediate status and progress to reflect in the UI
+      jobStore.update((jobs: Job[]): Job[] => {
+        const index = jobs.findIndex((j: Job): boolean => j.id === jobId)
+        if (index > -1) {
           const newJobs = [...jobs]
-          newJobs[index] = { ...jobs[index], status: data.status, updatedAt: Date.now() }
+          newJobs[index] = { 
+            ...jobs[index], 
+            status: data.status as JobStatus, 
+            progress: (data.progress as JobProgress | null) || null,
+            updatedAt: Date.now() 
+          }
           return newJobs
         }
         return jobs
@@ -165,6 +170,8 @@ export async function pollJobStatus(jobId: string, intervalMs = 1500): Promise<a
     }
     
     // Wait for the next interval before asking the backend again
-    await new Promise((resolve) => setTimeout(resolve, intervalMs))
+    await new Promise((resolve: (value: void) => void): void => {
+      setTimeout((): void => resolve(), intervalMs)
+    })
   }
 }

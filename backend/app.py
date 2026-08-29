@@ -810,7 +810,13 @@ async def _initialize_evolution_task(
     elements_input: list
 ) -> None:
     try:
+        print(f"[_initialize_evolution_task] Started background evolution task for job {parent_job_id}")
         local_jobs[parent_job_id]["status"] = "running"
+        local_jobs[parent_job_id]["progress"] = {
+            "value": 0,
+            "total": population_size,
+            "description": "Starting population initialization..."
+        }
 
         model_element = param_graph.get_element(model_id)
         precursor_audio = param_graph.get_element(precursor_audio_id)
@@ -834,6 +840,7 @@ async def _initialize_evolution_task(
             baseline_elements = baseline_grating.elements
             baseline_name = precursor_audio.name or precursor_audio.alias or "Artifact"
 
+        print(f"[_initialize_evolution_task] Loaded baseline grating at {base_grating_path}")
         diff_base_grating = DiffractureGrating.load(base_grating_path)
         from evolution.lora.lora_genome import LoRAGenome
 
@@ -895,12 +902,21 @@ async def _initialize_evolution_task(
             lora_noise=lora_noise,
             active_flip_prob=active_flip_prob
         )
+        print(f"[_initialize_evolution_task] Created initial population of size {population_size}")
 
         for i, child_genome in enumerate(population):
+            # Update progress status
+            local_jobs[parent_job_id]["progress"] = {
+                "value": i,
+                "total": population_size,
+                "description": f"Initializing individual {i+1} of {population_size}..."
+            }
+
             # Generate deterministic content-addressable ID for individual from its genome contents
             genome_state_dict = child_genome.get_state_dict()
             genome_uid = uid_generator.from_state_dict(genome_state_dict)
             individual_id = f"individual_{genome_uid}"
+            print(f"[_initialize_evolution_task] Processing individual {i+1}/{population_size} (ID: {individual_id})")
             
             output_dir = param_graph.root / "generate"
             os.makedirs(output_dir, exist_ok=True)
@@ -952,6 +968,7 @@ async def _initialize_evolution_task(
             returned_job_id = await engine.execute(operation, job_id=job_id, **engine_args, **dumped_params)
             if returned_job_id != job_id:
                 job_id = returned_job_id
+            print(f"[_initialize_evolution_task] Submitted execution job for individual {i+1} (Job ID: {job_id})")
 
             job_ids.append(job_id)
 
@@ -969,17 +986,24 @@ async def _initialize_evolution_task(
             }
 
         local_jobs[parent_job_id]["status"] = "completed"
+        local_jobs[parent_job_id]["progress"] = {
+            "value": population_size,
+            "total": population_size,
+            "description": "Initialization complete."
+        }
         local_jobs[parent_job_id]["result"] = {
             "job_ids": job_ids,
             "individual_ids": individual_ids,
             "bundle_id": population_bundle_id,
             "group_id": population_group_id
         }
+        print(f"[_initialize_evolution_task] Evolution initialization completed successfully for job {parent_job_id}")
 
     except Exception as e:
         print(f"Failed in async evolution initialization: {e}")
         traceback.print_exc()
         local_jobs[parent_job_id]["status"] = "failed"
+        local_jobs[parent_job_id]["progress"] = None
         local_jobs[parent_job_id]["error"] = str(e)
         local_jobs[parent_job_id]["traceback"] = traceback.format_exc()
 
