@@ -142,7 +142,7 @@
 
       // 1. Build the generation context for evolved variants
       const generationContext = {
-        ...((audioElement?.context as Record<string, any>) || {}),
+        ...((audioElement?.context as Record<string, unknown>) || {}),
         model_id: selectedModel.id
       }
 
@@ -156,43 +156,92 @@
         generation_context: generationContext
       }
 
-      // 2. Start evolution step to produce genomes and queue jobs
-      const evolutionResult = await window.api.startEvolution(evolutionPayload)
-      const jobIds = evolutionResult.job_ids as string[]
-
-      // 4. Register and poll each child job in Svelte jobStore
-      for (let i = 0; i < jobIds.length; i++) {
-        const jId = jobIds[i]
-        const job = {
-          id: jId,
-          name: `Evolution - Ind ${i + 1}`,
-          status: 'pending' as JobStatus,
-          payload: evolutionPayload,
-          progress: null,
-          result: null,
-          error: null,
-          createdAt: Date.now(),
-          updatedAt: Date.now()
-        }
-
-        jobStore.update((jobs) => [...jobs, job])
-
-        // Run async background polling
-        pollJobStatus(jId)
-          .then((res) => {
-            job.status = 'success'
-            job.result = res
-            updateJob(job)
-          })
-          .catch((err: unknown) => {
-            job.status = 'error'
-            job.error = {
-              title: 'Evolution Job Failed',
-              message: err instanceof Error ? err.message : String(err)
-            }
-            updateJob(job)
-          })
+      // 2. Start evolution step to produce genomes and queue jobs (parent job)
+      const evolutionResult = (await window.api.startEvolution(evolutionPayload)) as Record<string, unknown>
+      if (
+        !evolutionResult ||
+        typeof evolutionResult !== 'object' ||
+        evolutionResult.success !== true ||
+        typeof evolutionResult.job_id !== 'string'
+      ) {
+        throw new Error('Backend failed to start evolution.')
       }
+
+      const parentJobId = evolutionResult.job_id as string
+      const parentJob = {
+        id: parentJobId,
+        name: 'Initializing Evolution Population',
+        status: 'pending' as JobStatus,
+        payload: evolutionPayload,
+        progress: null,
+        result: null,
+        error: null,
+        createdAt: Date.now(),
+        updatedAt: Date.now()
+      }
+
+      jobStore.update((jobs) => [...jobs, parentJob])
+
+      // Poll the local parent job status
+      pollJobStatus(parentJobId)
+        .then((res: unknown): void => {
+          parentJob.status = 'success'
+          parentJob.result = res as Record<string, unknown>
+          updateJob(parentJob)
+
+          // Upon success, register and poll each child job
+          if (
+            res &&
+            typeof res === 'object' &&
+            'result' in res &&
+            res.result &&
+            typeof res.result === 'object'
+          ) {
+            const resultData = res.result as Record<string, unknown>
+            const jobIds = resultData.job_ids as string[]
+
+            for (let i = 0; i < jobIds.length; i++) {
+              const jId = jobIds[i]
+              const childJob = {
+                id: jId,
+                name: `Evolution - Ind ${i + 1}`,
+                status: 'pending' as JobStatus,
+                payload: evolutionPayload,
+                progress: null,
+                result: null,
+                error: null,
+                createdAt: Date.now(),
+                updatedAt: Date.now()
+              }
+
+              jobStore.update((jobs) => [...jobs, childJob])
+
+              pollJobStatus(jId)
+                .then((childRes: unknown): void => {
+                  childJob.status = 'success'
+                  childJob.result = childRes as Record<string, unknown>
+                  updateJob(childJob)
+                })
+                .catch((childErr: unknown): void => {
+                  childJob.status = 'error'
+                  childJob.error = {
+                    title: 'Evolution Job Failed',
+                    message: childErr instanceof Error ? childErr.message : String(childErr)
+                  }
+                  updateJob(childJob)
+                })
+            }
+          }
+          onrefresh()
+        })
+        .catch((err: unknown): void => {
+          parentJob.status = 'error'
+          parentJob.error = {
+            title: 'Evolution Initialization Failed',
+            message: err instanceof Error ? err.message : String(err)
+          }
+          updateJob(parentJob)
+        })
 
       onclose()
       onrefresh()

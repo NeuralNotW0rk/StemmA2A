@@ -53,7 +53,7 @@ class TestLoRAEvolution(unittest.TestCase):
         grating.add_element(el2)
 
         # Create genome
-        genome = genome_from_grating(grating)
+        genome = LoRAGenome.from_grating(grating)
         self.assertEqual(len(genome), 2)
         self.assertEqual(genome[0].address, "module1")
         self.assertEqual(genome[1].address, "module2")
@@ -416,14 +416,28 @@ class TestLoRAEvolution(unittest.TestCase):
             }
 
             resp = client.post("/start_evolution", json=payload)
-            self.assertEqual(resp.status_code, 200)
+            self.assertEqual(resp.status_code, 202)
             
             res_data = resp.get_json()
             self.assertTrue(res_data["success"])
-            self.assertIn("bundle_id", res_data)
-            self.assertIn("group_id", res_data)
-            self.assertEqual(len(res_data["job_ids"]), 3)
-            self.assertEqual(len(res_data["individual_ids"]), 3)
+            self.assertIn("job_id", res_data)
+            
+            parent_job_id = res_data["job_id"]
+            import time
+            completed_data = None
+            for _ in range(50):
+                status_resp = client.get(f"/job_status/{parent_job_id}")
+                if status_resp.status_code == 200:
+                    status_data = status_resp.get_json()
+                    if status_data.get("status") == "completed":
+                        completed_data = status_data.get("result")
+                        break
+                    elif status_data.get("status") == "failed":
+                        self.fail(f"Evolution init job failed: {status_data.get('error')}")
+                time.sleep(0.1)
+                
+            self.assertIsNotNone(completed_data, "Job did not complete in time")
+            res_data = completed_data
 
             # 5. Reload graph and verify elements & relationships
             g_reloaded = ParameterGraph(tmp_dir)
@@ -534,8 +548,27 @@ class TestLoRAEvolution(unittest.TestCase):
                 "active_flip_prob": 0.05
             }
             resp = client.post("/start_evolution", json=payload)
-            self.assertEqual(resp.status_code, 200)
+            self.assertEqual(resp.status_code, 202)
             res_data = resp.get_json()
+            self.assertTrue(res_data["success"])
+            self.assertIn("job_id", res_data)
+            
+            parent_job_id = res_data["job_id"]
+            import time
+            completed_data = None
+            for _ in range(50):
+                status_resp = client.get(f"/job_status/{parent_job_id}")
+                if status_resp.status_code == 200:
+                    status_data = status_resp.get_json()
+                    if status_data.get("status") == "completed":
+                        completed_data = status_data.get("result")
+                        break
+                    elif status_data.get("status") == "failed":
+                        self.fail(f"Evolution init job failed: {status_data.get('error')}")
+                time.sleep(0.1)
+                
+            self.assertIsNotNone(completed_data, "Job did not complete in time")
+            res_data = completed_data
 
             # 4. Verify no baseline grating node was added to the graph database
             g_reloaded = ParameterGraph(tmp_dir)

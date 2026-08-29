@@ -742,8 +742,6 @@ async def start_evolution():
         lora_noise = float(data.get("lora_noise", data.get("lora_down_noise", data.get("direction_noise", 0.05))))
         active_flip_prob = float(data.get("active_flip_prob", 0.05))
         generation_context = data.get("generation_context", {})
-
-        baseline_grating_id = data.get("baseline_grating_id")
         elements_input = data.get("elements")
 
         if not model_id or not precursor_audio_id:
@@ -752,6 +750,7 @@ async def start_evolution():
         if not baseline_grating_id and not elements_input:
             return jsonify({"error": "Either baseline_grating_id or elements configuration is required"}), 400
 
+        # Validate existence of model and precursor audio early
         model_element = param_graph.get_element(model_id)
         if not isinstance(model_element, Model):
             return jsonify({"error": f"Node '{model_id}' is not a valid model."}), 400
@@ -760,6 +759,62 @@ async def start_evolution():
         if not precursor_audio:
             return jsonify({"error": f"Precursor audio node '{precursor_audio_id}' not found."}), 400
 
+        # Generate unique local job ID
+        parent_job_id = f"evolution_init_{uuid.uuid4().hex[:12]}"
+        local_jobs[parent_job_id] = {
+            "status": "pending",
+            "progress": None,
+            "result": None,
+            "error": None
+        }
+
+        # Spawn background evolution initialization task via background thread
+        import asyncio
+        thread = threading.Thread(
+            target=lambda: asyncio.run(
+                _initialize_evolution_task(
+                    parent_job_id=parent_job_id,
+                    model_id=model_id,
+                    baseline_grating_id=baseline_grating_id,
+                    precursor_audio_id=precursor_audio_id,
+                    population_size=population_size,
+                    lora_noise=lora_noise,
+                    active_flip_prob=active_flip_prob,
+                    generation_context=generation_context,
+                    elements_input=elements_input
+                )
+            )
+        )
+        thread.start()
+
+        return jsonify({
+            "success": True,
+            "job_id": parent_job_id
+        }), 202
+
+    except Exception as e:
+        print(f"Failed to start evolution: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
+async def _initialize_evolution_task(
+    parent_job_id: str,
+    model_id: str,
+    baseline_grating_id: str,
+    precursor_audio_id: str,
+    population_size: int,
+    lora_noise: float,
+    active_flip_prob: float,
+    generation_context: dict,
+    elements_input: list
+) -> None:
+    try:
+        local_jobs[parent_job_id]["status"] = "running"
+
+        model_element = param_graph.get_element(model_id)
+        precursor_audio = param_graph.get_element(precursor_audio_id)
+
         engine = engine_provider.get_engine()
         operation = generation_context.get("operation", "generate")
 
@@ -767,7 +822,7 @@ async def start_evolution():
         if baseline_grating_id:
             baseline_grating = param_graph.get_element(baseline_grating_id)
             if not isinstance(baseline_grating, Grating):
-                return jsonify({"error": f"Node '{baseline_grating_id}' is not a valid grating."}), 400
+                raise ValueError(f"Node '{baseline_grating_id}' is not a valid grating.")
             base_grating_path = baseline_grating.file.path
             baseline_elements = baseline_grating.elements
             baseline_name = baseline_grating.name
@@ -780,7 +835,7 @@ async def start_evolution():
             baseline_name = precursor_audio.name or precursor_audio.alias or "Artifact"
 
         diff_base_grating = DiffractureGrating.load(base_grating_path)
-        base_genome = LoRAGenome.from_grating(diff_base_grating)
+        from evolution.lora.lora_genome import LoRAGenome
 
         # Resolve other linked source nodes if present (like source_audio)
         source_audio_id = generation_context.get("source_audio_id") or generation_context.get("source_audio")
@@ -794,7 +849,7 @@ async def start_evolution():
         # Prepare parameters for the engine
         dumped_params = {}
         for k, v in generation_context.items():
-            if isinstance(v, (str, int, float, bool)) and k not in ["model_id", "operation", "gratings", "source_audio_id", "source_audio"]:
+            if isinstance(v, (str, int, float, bool)) and k not in ["model_id", "operation", "gratings", "source_audio_id", "source_audio", "job_id"]:
                 dumped_params[k] = v
 
         # 1. Create the Population Bundle Node
@@ -913,19 +968,20 @@ async def start_evolution():
                 "operation": operation
             }
 
-        return jsonify({
-            "success": True,
-            "message": f"Evolution population of size {population_size} started with bundle {population_bundle_id}.",
+        local_jobs[parent_job_id]["status"] = "completed"
+        local_jobs[parent_job_id]["result"] = {
             "job_ids": job_ids,
             "individual_ids": individual_ids,
             "bundle_id": population_bundle_id,
             "group_id": population_group_id
-        }), 200
+        }
 
     except Exception as e:
-        print(f"Failed to start evolution: {e}")
+        print(f"Failed in async evolution initialization: {e}")
         traceback.print_exc()
-        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+        local_jobs[parent_job_id]["status"] = "failed"
+        local_jobs[parent_job_id]["error"] = str(e)
+        local_jobs[parent_job_id]["traceback"] = traceback.format_exc()
 
 
 @app.route("/express_individual", methods=["POST"])
