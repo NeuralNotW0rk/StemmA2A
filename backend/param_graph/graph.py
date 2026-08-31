@@ -1,5 +1,6 @@
 import os
 import json
+import shutil
 from pathlib import Path
 from time import time
 
@@ -11,6 +12,47 @@ from .elements.base_elements import GraphElement
 from .registry import resolve_element
 
 DEFAULT_SR = 48000
+
+
+def _safe_json_default(obj):
+    """
+    Fallback serializer for custom or non-standard objects in graph nodes.
+    Converts NumPy types, Path objects, Sets, and PyTorch tensors safely.
+    """
+    if isinstance(obj, Path):
+        return str(obj)
+    
+    if isinstance(obj, (set, frozenset)):
+        return list(obj)
+    
+    try:
+        import numpy as np
+        if isinstance(obj, (np.integer, np.floating)):
+            return obj.item()
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        if isinstance(obj, np.bool_):
+            return bool(obj)
+    except ImportError:
+        pass
+    
+    try:
+        import torch
+        if isinstance(obj, torch.Tensor):
+            return obj.detach().cpu().tolist()
+        if isinstance(obj, torch.dtype):
+            return str(obj)
+    except ImportError:
+        pass
+    
+    if hasattr(obj, "to_dict") and callable(obj.to_dict):
+        return obj.to_dict()
+    
+    if hasattr(obj, "__dict__"):
+        return obj.__dict__
+        
+    return str(obj)
+
 
 class ParameterGraph:
     def __init__(self, data_path, backend=None) -> None:
@@ -24,42 +66,97 @@ class ParameterGraph:
         check_dir(self.root)
 
         data_path = self.root / DICT_FILE
-        if os.path.exists(data_path):
-            with open(data_path, 'r') as df:
-                data = json.load(df)
-                self.project_name = data['project_name']
-                self.G = nx.cytoscape.cytoscape_graph(data['graph'])
-                
-                # Clean up legacy edge nodes that were added as nodes
-                legacy_edge_nodes = [
-                    n for n, d in self.G.nodes(data=True) if d.get('type') == 'edge'
-                ]
-                if legacy_edge_nodes:
-                    self.G.remove_nodes_from(legacy_edge_nodes)
+        bak_path = self.root / f"{DICT_FILE}.bak"
 
-                # Ensure all model nodes have output_type populated
-                for node, d in self.G.nodes(data=True):
-                    if d.get('type') == 'model':
-                        if 'output_type' not in d:
-                            adapter = d.get('adapter')
-                            if adapter == 'stable_audio_tools':
-                                d['output_type'] = 'audio'
-                            elif adapter == 'stylegan2':
-                                d['output_type'] = 'image'
-            return True
-        return False
+        target_path = None
+
+        if os.path.exists(data_path) and os.path.getsize(data_path) > 0:
+            target_path = data_path
+        elif os.path.exists(bak_path) and os.path.getsize(bak_path) > 0:
+            print(f"[ParameterGraph] Warning: '{data_path}' is missing or empty. Recovering from backup '{bak_path}'.")
+            target_path = bak_path
+
+        if not target_path:
+            return False
+
+        try:
+            with open(target_path, 'r', encoding='utf-8') as df:
+                data = json.load(df)
+        except json.JSONDecodeError as e:
+            # If main file is corrupted, try backup if available
+            if target_path != bak_path and os.path.exists(bak_path) and os.path.getsize(bak_path) > 0:
+                print(f"[ParameterGraph] Warning: '{data_path}' is corrupted ({e}). Falling back to backup '{bak_path}'.")
+                try:
+                    with open(bak_path, 'r', encoding='utf-8') as df:
+                        data = json.load(df)
+                except Exception as bak_err:
+                    raise ValueError(f"Corrupted project graph file at '{data_path}' and backup at '{bak_path}': {bak_err}") from e
+            else:
+                raise ValueError(f"Corrupted project graph file at '{target_path}': {e}") from e
+
+        self.project_name = data.get('project_name', self.root.name)
+        self.G = nx.cytoscape.cytoscape_graph(data.get('graph', {}))
+        
+        # Clean up legacy edge nodes that were added as nodes
+        legacy_edge_nodes = [
+            n for n, d in self.G.nodes(data=True) if d.get('type') == 'edge'
+        ]
+        if legacy_edge_nodes:
+            self.G.remove_nodes_from(legacy_edge_nodes)
+
+        # Clean up legacy edges between compound parent and direct child
+        legacy_parent_child_edges = [
+            (u, v) for u, v in self.G.edges()
+            if self.G.has_node(u) and self.G.has_node(v) and self.G.nodes[v].get('parent') == u
+        ]
+        if legacy_parent_child_edges:
+            self.G.remove_edges_from(legacy_parent_child_edges)
+
+        # Ensure all model nodes have output_type populated
+        for node, d in self.G.nodes(data=True):
+            if d.get('type') == 'model':
+                if 'output_type' not in d:
+                    adapter = d.get('adapter')
+                    if adapter == 'stable_audio_tools':
+                        d['output_type'] = 'audio'
+                    elif adapter == 'stylegan2':
+                        d['output_type'] = 'image'
+        return True
 
     def save(self):
         check_dir(self.root)
         data_path = self.root / DICT_FILE
+        temp_path = self.root / f"{DICT_FILE}.tmp"
+        bak_path = self.root / f"{DICT_FILE}.bak"
 
-        # Write new json
-        with open(data_path, 'w') as df:
-            data = {
-                'project_name': self.project_name,
-                'graph': nx.cytoscape.cytoscape_data(self.G, ident='id'),
-            }
-            df.write(json.dumps(data, indent=4))
+        data = {
+            'project_name': self.project_name or self.root.name,
+            'graph': nx.cytoscape.cytoscape_data(self.G, ident='id'),
+        }
+
+        # 1. Serialize in-memory FIRST. If this fails, the file on disk is untouched.
+        json_str = json.dumps(data, indent=4, default=_safe_json_default)
+
+        # 2. Write to temporary file with explicit flush and fsync
+        with open(temp_path, 'w', encoding='utf-8') as df:
+            df.write(json_str)
+            df.flush()
+            os.fsync(df.fileno())
+
+        # 3. Create rolling backup if target file currently exists and is non-empty
+        if data_path.exists() and data_path.stat().st_size > 0:
+            try:
+                shutil.copy2(str(data_path), str(bak_path))
+            except Exception as e:
+                print(f"[ParameterGraph] Warning: Failed to create backup {bak_path}: {e}")
+
+        # 4. Atomically swap temp_path to data_path
+        try:
+            os.replace(str(temp_path), str(data_path))
+        except Exception:
+            if os.path.exists(str(data_path)):
+                os.remove(str(data_path))
+            os.rename(str(temp_path), str(data_path))
 
     def to_json(self, mode='batch'):
         if mode == 'batch':

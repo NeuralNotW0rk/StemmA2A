@@ -92,10 +92,12 @@
     return unsub
   })
 
-  onMount(async () => {
-    await initialHealthCheck()
+  onMount(async (): Promise<void> => {
+    const ready = await initialHealthCheck()
     setupHealthCheckPolling()
-    await loadOperations()
+    if (ready) {
+      await loadOperations()
+    }
   })
 
   async function loadOperations(): Promise<void> {
@@ -104,66 +106,75 @@
       if (res && res.success && Array.isArray(res.operations)) {
         allOperations = res.operations
       }
-    } catch (error) {
+    } catch (error: unknown) {
       console.error('Failed to pre-load operations:', error)
     }
   }
 
-  onDestroy(() => {
+  onDestroy((): void => {
     if (healthCheckInterval) {
       clearInterval(healthCheckInterval)
     }
   })
 
-  async function initialHealthCheck(): Promise<void> {
+  async function initialHealthCheck(): Promise<boolean> {
     try {
       const status = await window.api.getHealth()
-      backendStatus.set(status)
-      serverInstanceId = status.server_instance_id || null
-      console.log('Backend status:', status)
-      isWaitingForBackend = false
-    } catch (error) {
-      console.error('Failed to get backend health:', error)
-      const MAX_RETRIES = 20
-      const RETRY_INTERVAL = 3000
-      for (let i = 0; i < MAX_RETRIES; i++) {
-        await new Promise((resolve) => setTimeout(resolve, RETRY_INTERVAL))
-        try {
-          const status = await window.api.getHealth()
+      if (status && status.status === 'healthy') {
+        backendStatus.set(status)
+        serverInstanceId = status.server_instance_id || null
+        console.log('Backend status:', status)
+        isWaitingForBackend = false
+        return true
+      }
+    } catch {
+      // Backend not yet ready; proceed to retry loop
+    }
+
+    const MAX_RETRIES = 20
+    const RETRY_INTERVAL = 1500
+    for (let i = 0; i < MAX_RETRIES; i++) {
+      await new Promise((resolve): number => window.setTimeout(resolve, RETRY_INTERVAL))
+      try {
+        const status = await window.api.getHealth()
+        if (status && status.status === 'healthy') {
           backendStatus.set(status)
           serverInstanceId = status.server_instance_id || null
+          console.log(`Backend connected after ${i + 1} attempt(s):`, status)
           isWaitingForBackend = false
-          return
-        } catch (e) {
-          console.error(`Backend connection attempt ${i + 1} failed:`, e)
+          return true
         }
-      }
-      isWaitingForBackend = false
-      errorInInfoPanel = {
-        title: 'Backend Connection Failed',
-        message:
-          'Could not connect to the backend server. Please ensure it is running and accessible.'
+      } catch {
+        // Suppress noisy logs during normal startup retries
       }
     }
+    isWaitingForBackend = false
+    errorInInfoPanel = {
+      title: 'Backend Connection Failed',
+      message:
+        'Could not connect to the backend server. Please ensure it is running and accessible.'
+    }
+    return false
   }
 
   function setupHealthCheckPolling(): void {
     if (healthCheckInterval) {
       clearInterval(healthCheckInterval)
     }
-    healthCheckInterval = window.setInterval(async () => {
+    healthCheckInterval = window.setInterval(async (): Promise<void> => {
       try {
         const status = await window.api.getHealth()
-        backendStatus.set(status)
+        if (status && status.status === 'healthy') {
+          backendStatus.set(status)
 
-        if (serverInstanceId && status.server_instance_id !== serverInstanceId) {
-          console.warn('Backend has restarted. Resetting project state.')
-          handleBackendRestart()
+          if (serverInstanceId && status.server_instance_id !== serverInstanceId) {
+            console.warn('Backend has restarted. Resetting project state.')
+            handleBackendRestart()
+          }
+          serverInstanceId = status.server_instance_id || null
         }
-        serverInstanceId = status.server_instance_id || null
-      } catch (error) {
-        console.error('Health check poll failed:', error)
-        // Optionally handle polling errors, e.g., show a banner
+      } catch (error: unknown) {
+        console.debug('Health check poll failed:', error)
       }
     }, 3000) // Poll every 3 seconds
   }

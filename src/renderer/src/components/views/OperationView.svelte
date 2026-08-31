@@ -1217,21 +1217,6 @@
     font-size: 0.8rem;
     font-weight: 500;
   }
-  .sub-label input[type='number'],
-  .sub-label input[type='text'] {
-    width: 100%;
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid var(--color-overlay-border-primary, rgba(255, 255, 255, 0.1));
-    color: var(--color-overlay-text);
-    padding: 0.35rem;
-    border-radius: 0.25rem;
-    margin-top: 0.25rem;
-    font-size: 0.8rem;
-  }
-  .sub-label input[type='range'] {
-    width: 100%;
-    margin-top: 0.25rem;
-  }
   .sub-target-selector {
     display: flex;
     flex-direction: column;

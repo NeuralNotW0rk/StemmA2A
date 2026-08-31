@@ -49,12 +49,16 @@ def migrate_batch_to_group(project_path: Path) -> None:
         return
 
     graph_file = project_path / "graph.json"
-    if not graph_file.exists():
+    if not graph_file.exists() or graph_file.stat().st_size == 0:
         return
 
     import json
-    with open(graph_file, "r") as f:
-        data = json.load(f)
+    try:
+        with open(graph_file, "r") as f:
+            data = json.load(f)
+    except json.JSONDecodeError as e:
+        print(f"Warning: Could not parse {graph_file} for migration (invalid JSON): {e}")
+        return
 
     modified = False
     

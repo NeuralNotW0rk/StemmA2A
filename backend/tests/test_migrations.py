@@ -76,5 +76,25 @@ def test_batch_to_group_migration():
     finally:
         shutil.rmtree(tmp_dir)
 
+def test_empty_and_missing_graph_migration():
+    print("=== Testing migrate_batch_to_group on Empty / Missing Files ===")
+    tmp_dir = tempfile.mkdtemp()
+    project_path = Path(tmp_dir)
+    
+    try:
+        # 1. Missing graph.json
+        migrate_batch_to_group(project_path)
+        
+        # 2. Empty graph.json (0-bytes)
+        graph_file = project_path / "graph.json"
+        graph_file.touch()
+        migrate_batch_to_group(project_path)
+        assert graph_file.stat().st_size == 0
+        
+        print("Empty and missing graph files handled cleanly without errors!")
+    finally:
+        shutil.rmtree(tmp_dir)
+
 if __name__ == "__main__":
     test_batch_to_group_migration()
+    test_empty_and_missing_graph_migration()

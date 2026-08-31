@@ -202,8 +202,9 @@ def load_project():
                     "success": True
                 })
             
-            # If load fails, it might be a directory without a project file yet.
-            # We can still "load" it to create one.
+            # If load fails, it is a new/uninitialized directory.
+            # Initialize project_name and save initial graph.
+            param_graph.project_name = project_path.name
             param_graph.save()
 
         return jsonify({
@@ -980,7 +981,7 @@ async def _initialize_evolution_task(
 
             active_jobs[job_id] = {
                 "parent_id": individual_id,
-                "linked_elements": [individual_node, *linked_elements],
+                "linked_elements": linked_elements,
                 "validated_params": v_params,
                 "operation": operation
             }
@@ -1160,6 +1161,8 @@ async def get_job_status(job_id):
                         update_group_labels(group_id)
 
                     for element in job_context.get("linked_elements", []):
+                        if parent_id and element.id == parent_id:
+                            continue
                         print(f"Linking {element.id} to {final_artifact.id}")
                         param_graph.link(element, final_artifact, relation='source')
                     param_graph.save()

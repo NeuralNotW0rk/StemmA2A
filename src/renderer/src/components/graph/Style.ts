@@ -1,4 +1,4 @@
-import type { CssStyleDeclaration, NodeSingular } from 'cytoscape'
+import type { CssStyleDeclaration, NodeSingular, EdgeSingular } from 'cytoscape'
 import { getCssVar } from '../../utils/css'
 import modelIcon from '../../assets/icons/model.svg'
 import gratingIcon from '../../assets/icons/grating.svg'
@@ -6,6 +6,16 @@ import audioIcon from '../../assets/icons/audio.svg'
 import latentIcon from '../../assets/icons/latent.svg'
 import pathIcon from '../../assets/icons/local_path.svg'
 import imageIcon from '../../assets/icons/image.svg'
+import dnaIcon from '../../assets/icons/dna.svg'
+
+import audioSvg from '../../assets/icons/audio.svg?raw'
+import imageSvg from '../../assets/icons/image.svg?raw'
+import latentSvg from '../../assets/icons/latent.svg?raw'
+import gratingSvg from '../../assets/icons/grating.svg?raw'
+import modelSvg from '../../assets/icons/model.svg?raw'
+import pathSvg from '../../assets/icons/local_path.svg?raw'
+import dnaSvg from '../../assets/icons/dna.svg?raw'
+import bundleSvg from '../../assets/icons/bundle.svg?raw'
 
 const gradientColor1 = getCssVar('--graph-gradient-1')
 const gradientColor2 = getCssVar('--graph-gradient-2')
@@ -16,12 +26,70 @@ const gradientColor5 = getCssVar('--graph-gradient-5')
 const mediaColor = getCssVar('--graph-media')
 const groupColor = getCssVar('--graph-batch')
 const selectedColor = getCssVar('--graph-selected')
+const genomeColor = getCssVar('--graph-genome') || '#ff7a00'
 const modelColor = gradientColor3
 const externalColor = gradientColor2
 const gratingColor = gradientColor4
 const latentColor = gradientColor5
 const favoriteColor = 'rgb(0, 255, 255)'
 const validColor = '#4CAF50'
+
+function extractSvgInner(svgContent: string): string {
+  const match = svgContent.match(/<svg[^>]*>([\s\S]*?)<\/svg>/i)
+  return match ? match[1].trim() : svgContent
+}
+
+function createStackedBundleSvg(rawSvg: string): string {
+  const inner = extractSvgInner(rawSvg)
+  const stackedSvg = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
+  <defs>
+    <g id="icon">
+      ${inner}
+    </g>
+  </defs>
+  <use href="#icon" xlink:href="#icon" transform="translate(7.5, 7.5) scale(0.65) translate(-12, -12)" opacity="0.45" />
+  <use href="#icon" xlink:href="#icon" transform="translate(12, 12) scale(0.65) translate(-12, -12)" opacity="0.75" />
+  <use href="#icon" xlink:href="#icon" transform="translate(16.5, 16.5) scale(0.65) translate(-12, -12)" opacity="1" />
+</svg>`
+
+  return `data:image/svg+xml;utf8,${encodeURIComponent(stackedSvg)}`
+}
+
+const BUNDLE_STACKED_ICONS: Record<string, string> = {
+  individual: createStackedBundleSvg(dnaSvg),
+  audio: createStackedBundleSvg(audioSvg),
+  image: createStackedBundleSvg(imageSvg),
+  latent: createStackedBundleSvg(latentSvg),
+  grating: createStackedBundleSvg(gratingSvg),
+  model: createStackedBundleSvg(modelSvg),
+  local_path: createStackedBundleSvg(pathSvg),
+  default: `data:image/svg+xml;utf8,${encodeURIComponent(bundleSvg)}`
+}
+
+function getBundleIcon(memberType?: string): string {
+  if (memberType && BUNDLE_STACKED_ICONS[memberType]) {
+    return BUNDLE_STACKED_ICONS[memberType]
+  }
+  return BUNDLE_STACKED_ICONS.default
+}
+
+function getBundleColor(memberType?: string): string {
+  switch (memberType) {
+    case 'individual':
+      return genomeColor
+    case 'audio':
+    case 'image':
+      return mediaColor
+    case 'latent':
+      return latentColor
+    case 'grating':
+      return gratingColor
+    case 'model':
+      return modelColor
+    default:
+      return externalColor
+  }
+}
 
 const defaultStyle: CssStyleDeclaration[] = [
   // General style configuration
@@ -247,29 +315,97 @@ const defaultStyle: CssStyleDeclaration[] = [
     }
   },
   {
+    selector: 'node[type="group"][member_type="individual"]',
+    style: {
+      'border-color': genomeColor
+    }
+  },
+  {
     selector: 'node[type="individual"]',
     style: {
-      label: (node: NodeSingular) => node.data('name') || node.data('id'),
+      label: (node: NodeSingular): string => node.data('name') || node.data('id'),
       'text-valign': 'top',
       'text-margin-y': -8,
       'border-width': 2,
-      'border-color': gratingColor,
+      'border-color': genomeColor,
       'border-style': 'dashed',
-      'background-color': gratingColor,
+      'background-color': genomeColor,
       'background-opacity': 0.08,
-      shape: 'ellipse',
-      padding: '15px'
+      'background-image': (node: NodeSingular): string =>
+        (node.isParent && node.isParent()) || node.children().length > 0 ? 'none' : dnaIcon,
+      'background-fit': 'contain',
+      'background-clip': 'node',
+      'background-width': '75%',
+      'background-height': '75%',
+      shape: 'rectangle',
+      'compound-sizing-wrt-labels': 'include',
+      padding: '12px',
+      width: 30,
+      height: 30
     }
   },
   {
     selector: 'node[type="bundle"]',
     style: {
-      label: (node: NodeSingular) => node.data('name') || node.data('alias') || node.data('id'),
-      'background-color': externalColor,
+      label: (node: NodeSingular): string => node.data('name') || node.data('alias') || node.data('id'),
+      'background-color': (node: NodeSingular): string => getBundleColor(node.data('member_type')),
+      'background-image': (node: NodeSingular): string => getBundleIcon(node.data('member_type')),
+      'background-fit': 'none',
+      'background-clip': 'node',
+      'background-width': '70%',
+      'background-height': '70%',
       'border-width': 3,
-      'border-color': gratingColor,
+      'border-color': (node: NodeSingular): string => getBundleColor(node.data('member_type')),
       width: 40,
       height: 40
+    }
+  },
+  {
+    selector: 'node[type="bundle"][member_type="individual"]',
+    style: {
+      'background-color': genomeColor,
+      'background-image': getBundleIcon('individual'),
+      'border-color': genomeColor
+    }
+  },
+  {
+    selector: 'node[type="bundle"][member_type="audio"]',
+    style: {
+      'background-color': mediaColor,
+      'background-image': getBundleIcon('audio'),
+      'border-color': mediaColor
+    }
+  },
+  {
+    selector: 'node[type="bundle"][member_type="image"]',
+    style: {
+      'background-color': mediaColor,
+      'background-image': getBundleIcon('image'),
+      'border-color': mediaColor
+    }
+  },
+  {
+    selector: 'node[type="bundle"][member_type="latent"]',
+    style: {
+      'background-color': latentColor,
+      'background-image': getBundleIcon('latent'),
+      'border-color': latentColor
+    }
+  },
+  {
+    selector: 'node[type="bundle"][member_type="grating"]',
+    style: {
+      'background-color': gratingColor,
+      'background-image': getBundleIcon('grating'),
+      'border-color': gratingColor
+    }
+  },
+  {
+    selector: 'node[type="bundle"][member_type="model"]',
+    style: {
+      'background-color': modelColor,
+      'background-image': getBundleIcon('model'),
+      'border-color': modelColor
     }
   },
   {
@@ -390,6 +526,42 @@ const defaultStyle: CssStyleDeclaration[] = [
     style: {
       'line-color': externalColor,
       'target-arrow-color': externalColor
+    }
+  },
+  {
+    selector: 'edge[type="individual"]',
+    style: {
+      'line-color': genomeColor,
+      'target-arrow-color': genomeColor
+    }
+  },
+  {
+    selector: 'edge[type="bundle"]',
+    style: {
+      'line-color': (edge: EdgeSingular): string => {
+        const sourceNode = edge.source()
+        return getBundleColor(sourceNode.data('member_type'))
+      },
+      'target-arrow-color': (edge: EdgeSingular): string => {
+        const sourceNode = edge.source()
+        return getBundleColor(sourceNode.data('member_type'))
+      }
+    }
+  },
+  {
+    selector: 'edge[relation="member"]',
+    style: {
+      'line-color': genomeColor,
+      'target-arrow-color': genomeColor,
+      'line-style': 'dashed'
+    }
+  },
+  {
+    selector: 'edge[relation="expressed_to"]',
+    style: {
+      'line-color': genomeColor,
+      'target-arrow-color': genomeColor,
+      'line-style': 'dotted'
     }
   },
 

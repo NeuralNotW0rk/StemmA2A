@@ -469,6 +469,25 @@ class TestLoRAEvolution(unittest.TestCase):
                 self.assertTrue(g_reloaded.G.has_edge(res_data["bundle_id"], ind_id))
                 self.assertEqual(g_reloaded.G.get_edge_data(res_data["bundle_id"], ind_id)["relation"], "member")
 
+            # Verify that registering a child artifact under an individual does NOT create an edge from the individual
+            sample_ind_id = res_data["individual_ids"][0]
+            exemplar_audio = Audio(
+                id="exemplar_child_audio",
+                name="Exemplar Audio",
+                context={},
+                file=Asset(path="mock_child.wav", uid="mock_child_uid", extension=".wav")
+            )
+            g_reloaded.add_element(exemplar_audio)
+            g_reloaded.update_element(exemplar_audio.id, {"parent": sample_ind_id})
+            self.assertFalse(g_reloaded.G.has_edge(sample_ind_id, exemplar_audio.id))
+
+            # Verify that legacy parent->child edges are removed during graph load
+            g_reloaded.G.add_edge(sample_ind_id, exemplar_audio.id, relation="source")
+            self.assertTrue(g_reloaded.G.has_edge(sample_ind_id, exemplar_audio.id))
+            g_reloaded.save()
+            g_reloaded.load()
+            self.assertFalse(g_reloaded.G.has_edge(sample_ind_id, exemplar_audio.id))
+
             # Restore original globals
             app_module.param_graph = old_graph
             app_module.engine_provider = old_provider

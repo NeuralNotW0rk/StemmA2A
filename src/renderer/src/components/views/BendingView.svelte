@@ -17,7 +17,11 @@
     onError: (error: ErrorInfo) => void
   }>()
 
-  let selectedModel = $state<NodeData | null>(modelElement)
+  let selectedModel = $state<NodeData | null>(null)
+
+  $effect((): void => {
+    selectedModel = modelElement
+  })
   let name = $state('')
   let inProgress = $state(false)
   let layers = $state<ModelLayer[]>([])
@@ -231,16 +235,14 @@
     flex-direction: column;
     gap: 1.25rem;
   }
-  label,
-  .field-label {
+  label {
     display: block;
     color: var(--color-overlay-text);
     font-weight: 500;
     font-size: 0.9rem;
   }
   input,
-  select,
-  .read-only-box {
+  select {
     width: 100%;
     background: var(--color-border-glass-1);
     border: 1px solid var(--color-overlay-border-primary);
@@ -253,10 +255,6 @@
   select option {
     background: var(--color-background-soft, #222222);
     color: var(--color-overlay-text, #ffffff);
-  }
-  .read-only-box {
-    background: rgba(255, 255, 255, 0.05);
-    border-color: transparent;
   }
   .loading-layers-box {
     display: flex;

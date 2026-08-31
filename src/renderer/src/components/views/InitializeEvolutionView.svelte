@@ -24,11 +24,11 @@
 
   // State
   let selectedModel = $state<NodeData | null>(null)
-  let loraRank = $state(4)
+  let loraRank = $state(1)
   let loraAlpha = $state(1.0)
   let populationSize = $state(10)
-  let loraNoise = $state(0.05)
-  let activeFlipProb = $state(0.05)
+  let loraNoise = $state(1.0)
+  let activeFlipProb = $state(0.5)
 
   let inProgress = $state(false)
   let layers = $state<ModelLayer[]>([])
@@ -157,7 +157,10 @@
       }
 
       // 2. Start evolution step to produce genomes and queue jobs (parent job)
-      const evolutionResult = (await window.api.startEvolution(evolutionPayload)) as Record<string, unknown>
+      const evolutionResult = (await window.api.startEvolution(evolutionPayload)) as Record<
+        string,
+        unknown
+      >
       if (
         !evolutionResult ||
         typeof evolutionResult !== 'object' ||
@@ -362,9 +365,7 @@
     font-weight: 500;
     font-size: 0.9rem;
   }
-  input[type='text'],
-  input[type='number'],
-  select {
+  input[type='number'] {
     width: 100%;
     background: var(--color-border-glass-1);
     border: 1px solid var(--color-overlay-border-primary);

@@ -27,6 +27,22 @@ async function fetchWithAuth(url: string, options: RequestInit = {}): Promise<Re
 let pythonBackend: ChildProcess | null = null
 const store = new Store()
 
+async function waitForBackendReady(maxWaitMs = 30000, intervalMs = 500): Promise<boolean> {
+  const startTime = Date.now()
+  while (Date.now() - startTime < maxWaitMs) {
+    try {
+      const response = await fetchWithAuth(`${BACKEND_URL}/health`)
+      if (response.ok) {
+        return true
+      }
+    } catch {
+      // Backend not yet ready, retry until timeout
+    }
+    await new Promise((resolve): NodeJS.Timeout => setTimeout(resolve, intervalMs))
+  }
+  return false
+}
+
 // Backend management
 function startPythonBackend(): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -46,17 +62,33 @@ function startPythonBackend(): Promise<void> {
 
     if (is.dev && process.platform === 'win32') {
       // In dev mode on Windows, open a new terminal that stays open
-      console.log('Starting Python backend in new window')
+      console.log('Starting Python backend in new window...')
       const command = ['/c', 'start', 'cmd.exe', '/k', venvPath, '-u', appPyPath]
       pythonBackend = spawn('cmd.exe', command, {
         cwd: join(app.getAppPath(), 'backend'),
         env: spawnEnv
       })
-      // Resolve after a delay to allow the backend to initialize
-      setTimeout(() => {
-        console.log('Assuming Python backend is ready')
-        resolve()
-      }, 5000) // 5 seconds delay
+
+      pythonBackend.on('error', (error): void => {
+        console.error('Failed to start Python backend launcher:', error)
+        reject(error)
+      })
+
+      pythonBackend.on('exit', (code): void => {
+        console.log(`Python backend launcher detached (exit code ${code})`)
+      })
+
+      // Wait for backend to be ready via health check polling
+      waitForBackendReady()
+        .then((ready): void => {
+          if (ready) {
+            console.log('Python backend is ready and listening')
+            resolve()
+          } else {
+            reject(new Error('Timed out waiting for Python backend to respond.'))
+          }
+        })
+        .catch(reject)
     } else {
       // For production or other dev platforms
       const cwd = is.dev ? join(app.getAppPath(), 'backend') : undefined
@@ -76,27 +108,27 @@ function startPythonBackend(): Promise<void> {
       }
 
       const stdoutReader = readline.createInterface({ input: pythonBackend.stdout! })
-      stdoutReader.on('line', (line) => {
+      stdoutReader.on('line', (line): void => {
         console.log(`Python Backend: ${line}`)
         handleMessage(line)
       })
 
       const stderrReader = readline.createInterface({ input: pythonBackend.stderr! })
-      stderrReader.on('line', (line) => {
+      stderrReader.on('line', (line): void => {
         // Log stderr as regular output, since Flask/Werkzeug logs INFO here
         console.log(`Python Backend: ${line}`)
         handleMessage(line)
       })
+
+      pythonBackend.on('error', (error): void => {
+        console.error('Failed to start Python backend:', error)
+        reject(error)
+      })
+
+      pythonBackend.on('exit', (code): void => {
+        console.log(`Python backend exited with code ${code}`)
+      })
     }
-
-    pythonBackend.on('error', (error) => {
-      console.error('Failed to start Python backend:', error)
-      reject(error)
-    })
-
-    pythonBackend.on('exit', (code) => {
-      console.log(`Python backend exited with code ${code}`)
-    })
   })
 }
 
@@ -125,7 +157,7 @@ function createWindow(): void {
 
   mainWindow.setMenu(null)
 
-  mainWindow.on('ready-to-show', () => {
+  mainWindow.on('ready-to-show', (): void => {
     mainWindow.show()
   })
 
@@ -146,7 +178,7 @@ function createWindow(): void {
 // This method will be called when Electron has finished
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
-app.whenReady().then(async () => {
+app.whenReady().then(async (): Promise<void> => {
   // Set app user model id for windows
   electronApp.setAppUserModelId('com.electron')
 
@@ -155,15 +187,23 @@ app.whenReady().then(async () => {
     callback({ path: decodeURIComponent(url) })
   })
 
-  ipcMain.handle('getHealth', async () => {
-    const response = await fetchWithAuth(`${BACKEND_URL}/health`)
-    if (!response.ok) {
-      const errorBody = await response.text()
-      throw new Error(
-        `Failed to get health status. Status: ${response.status}. Error: ${errorBody}`
-      )
+  ipcMain.handle('getHealth', async (): Promise<unknown> => {
+    try {
+      const response = await fetchWithAuth(`${BACKEND_URL}/health`)
+      if (!response.ok) {
+        const errorBody = await response.text()
+        return {
+          status: 'unhealthy',
+          error: `Failed to get health status. Status: ${response.status}. Error: ${errorBody}`
+        }
+      }
+      return await response.json()
+    } catch (error: unknown) {
+      return {
+        status: 'offline',
+        error: error instanceof Error ? error.message : String(error)
+      }
     }
-    return await response.json()
   })
 
   ipcMain.handle('dialog:newProject', async () => {

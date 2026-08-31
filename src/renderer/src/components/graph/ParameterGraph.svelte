@@ -435,7 +435,10 @@
     initializeGraph()
   })
 
+  let removeKeydownListener: (() => void) | null = null
+
   onDestroy(() => {
+    removeKeydownListener?.()
     cyInstanceStore.set(null) // Clean up
     if (cy) {
       cy.destroy()
@@ -835,52 +838,151 @@
 
     let ghostNode: cytoscape.NodeSingular | null = null
     let sourceNode: cytoscape.NodeSingular | null = null
+    let trackedMousedownNode: cytoscape.NodeSingular | null = null
+    let trackedInitialPositions: Record<string, { x: number; y: number }> = {}
+    let lastRenderedMousePos: { x: number; y: number } | null = null
+    let isMouseDown = false
+
+    function cleanupGhost(): void {
+      if (ghostNode) {
+        ghostNode.remove()
+        ghostNode = null
+      }
+      sourceNode = null
+      trackedMousedownNode = null
+      trackedInitialPositions = {}
+      lastRenderedMousePos = null
+      isMouseDown = false
+      cy?.nodes('[type="group"]').removeClass('compatible-drop-target active-drop-target')
+    }
+
+    function startGhostDrag(node: cytoscape.NodeSingular, initialPos: { x: number; y: number }): void {
+      if (ghostNode) return
+
+      // Restore original node (and any children) back to their initial positions before normal drag moved them
+      if (trackedInitialPositions[node.id()]) {
+        node.position({ ...trackedInitialPositions[node.id()] })
+      }
+      node.children().forEach((child) => {
+        if (trackedInitialPositions[child.id()]) {
+          child.position({ ...trackedInitialPositions[child.id()] })
+        }
+      })
+
+      sourceNode = node
+      ghostNode = cy!.add({
+        group: 'nodes',
+        data: { id: `ghost-node-${Date.now()}` },
+        position: { ...initialPos }
+      }) as unknown as cytoscape.NodeSingular
+
+      ghostNode.style({
+        'background-color': node.style('background-color'),
+        shape: node.style('shape'),
+        'corner-radius': node.style('corner-radius'),
+        width: node.style('width'),
+        height: node.style('height'),
+        label: node.style('label'),
+        opacity: 0.5,
+        'border-width': node.style('border-width'),
+        'border-color': node.style('border-color'),
+        'border-style': node.style('border-style'),
+        'text-valign': node.style('text-valign'),
+        'text-halign': node.style('text-halign'),
+        color: node.style('color'),
+        'z-index': 9999,
+        events: 'no' // Do not capture events on the ghost node
+      })
+
+      cy!.nodes('[type="group"]').forEach((group) => {
+        if (group.id() === sourceNode!.id()) return
+        if (isGroupCompatible(group as unknown as cytoscape.NodeSingular, sourceNode!)) {
+          group.addClass('compatible-drop-target')
+        }
+      })
+    }
+
+    const handleKeyDown = (e: KeyboardEvent): void => {
+      if (
+        (e.key === 'Control' || e.key === 'Meta' || e.ctrlKey || e.metaKey) &&
+        isMouseDown &&
+        !ghostNode &&
+        trackedMousedownNode
+      ) {
+        startGhostDrag(trackedMousedownNode, lastRenderedMousePos || trackedMousedownNode.position())
+      }
+    }
+
+    const handleWindowMouseUp = (): void => {
+      if (isMouseDown || ghostNode) {
+        handleMouseUp()
+      }
+    }
+
+    const handleWindowBlur = (): void => {
+      cleanupGhost()
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    window.addEventListener('mouseup', handleWindowMouseUp)
+    window.addEventListener('blur', handleWindowBlur)
+
+    removeKeydownListener = () => {
+      window.removeEventListener('keydown', handleKeyDown)
+      window.removeEventListener('mouseup', handleWindowMouseUp)
+      window.removeEventListener('blur', handleWindowBlur)
+    }
 
     cy.on('mousedown', 'node', (evt: EventObject) => {
-      const node = evt.target
+      const rawTarget = evt.target
       const oe = evt.originalEvent as MouseEvent
+
+      // If dragging an exemplar inside an individual compound node, resolve target to the individual itself
+      const parent = rawTarget.parent()
+      const isInsideIndividual = parent && parent.length > 0 && parent.data('type') === 'individual'
+      const node = isInsideIndividual ? parent : rawTarget
+
       const nodeType = node.data('type')
-      const parent = node.parent()
-      const parentType = parent && parent.length > 0 ? parent.data('type') : null
+      const nodeParent = node.parent()
+      const nodeParentType = nodeParent && nodeParent.length > 0 ? nodeParent.data('type') : null
 
       // Block ghost-dragging for members of directory nodes, directories, and groups
       const isGhostDraggable =
-        parentType !== 'directory' && nodeType !== 'directory' && nodeType !== 'group'
+        nodeParentType !== 'directory' && nodeType !== 'directory' && nodeType !== 'group'
 
-      if (node.children().length === 0 && isGhostDraggable && oe && (oe.ctrlKey || oe.metaKey)) {
-        sourceNode = node as unknown as cytoscape.NodeSingular
-        ghostNode = cy!.add({
-          group: 'nodes',
-          data: { id: `ghost-node-${Date.now()}` },
-          position: { ...node.position() }
-        }) as unknown as cytoscape.NodeSingular
+      const isEligible = node.children().length === 0 || nodeType === 'individual'
 
-        ghostNode.style({
-          'background-color': node.style('background-color'),
-          shape: node.style('shape'),
-          width: node.style('width'),
-          height: node.style('height'),
-          label: node.style('label'),
-          opacity: 0.5,
-          'border-width': node.style('border-width'),
-          'border-color': node.style('border-color'),
-          'text-valign': node.style('text-valign'),
-          'text-halign': node.style('text-halign'),
-          color: node.style('color'),
-          'z-index': 9999,
-          events: 'no' // Do not capture events on the ghost node
+      if (isEligible && isGhostDraggable) {
+        isMouseDown = true
+        trackedMousedownNode = node as unknown as cytoscape.NodeSingular
+        trackedInitialPositions = { [node.id()]: { ...node.position() } }
+        node.children().forEach((child: any) => {
+          trackedInitialPositions[child.id()] = { ...child.position() }
         })
+        lastRenderedMousePos = { ...evt.position }
 
-        cy!.nodes('[type="group"]').forEach((group) => {
-          if (group.id() === sourceNode!.id()) return
-          if (isGroupCompatible(group as unknown as cytoscape.NodeSingular, sourceNode!)) {
-            group.addClass('compatible-drop-target')
-          }
-        })
+        if (oe && (oe.ctrlKey || oe.metaKey)) {
+          startGhostDrag(trackedMousedownNode, evt.position)
+        }
       }
     })
 
     cy.on('mousemove', (evt: EventObject) => {
+      lastRenderedMousePos = { ...evt.position }
+      const oe = evt.originalEvent as MouseEvent
+
+      // If mouse buttons are not pressed, clean up any phantom drag state immediately
+      if (oe && oe.buttons === 0) {
+        if (ghostNode || isMouseDown) {
+          cleanupGhost()
+        }
+        return
+      }
+
+      if (isMouseDown && !ghostNode && trackedMousedownNode && oe && (oe.ctrlKey || oe.metaKey)) {
+        startGhostDrag(trackedMousedownNode, evt.position)
+      }
+
       if (ghostNode && sourceNode) {
         ghostNode.position(evt.position)
 
@@ -901,7 +1003,9 @@
       }
     })
 
-    cy.on('mouseup', async () => {
+    async function handleMouseUp(): Promise<void> {
+      isMouseDown = false
+
       if (ghostNode && sourceNode) {
         const nodePos = ghostNode.position()
         let targetGroupId: string | null = null
@@ -924,18 +1028,21 @@
           }
         })
 
-        // Ensure classes are cleared regardless of whether the drop was valid
-        cy!.nodes('[type="group"]').removeClass('compatible-drop-target active-drop-target')
-
         if (invalidDrop && !targetGroupId) {
-          ghostNode.remove()
-          ghostNode = null
-          sourceNode = null
+          cleanupGhost()
           return
         }
 
         const currentParentId = sourceNode.data('parent') || null
         const sourceNodeId = sourceNode.id()
+        const currentSourceNode = sourceNode
+
+        // Remove ghost node early before any graph updates
+        if (ghostNode) {
+          ghostNode.remove()
+          ghostNode = null
+        }
+        sourceNode = null
 
         if (currentParentId !== targetGroupId) {
           const oldMembers = currentParentId
@@ -948,14 +1055,20 @@
             ? [...(cy!.getElementById(targetGroupId).data('member_ids') || []), sourceNodeId]
             : []
 
-          // 1. Set the physical position immediately before snapshotting
-          sourceNode.position({ ...nodePos })
+          // 1. Set physical position: if sourceNode has children (e.g. compound individual), shift all its children by delta (dx, dy)
+          if (currentSourceNode.children().length > 0) {
+            const currentPos = currentSourceNode.position()
+            const dx = nodePos.x - currentPos.x
+            const dy = nodePos.y - currentPos.y
+            currentSourceNode.children().forEach((child) => {
+              const cp = child.position()
+              child.position({ x: cp.x + dx, y: cp.y + dy })
+            })
+          } else {
+            currentSourceNode.position({ ...nodePos })
+          }
 
-          // 2. Remove ghost node early so it isn't swept into the graph rebuild
-          ghostNode.remove()
-          ghostNode = null
-
-          // 3. Temporarily mutate local graphData to accurately recalculate proxy edges
+          // 2. Temporarily mutate local graphData to accurately recalculate proxy edges
           if (graphData && graphData.elements) {
             const elementsList = Array.isArray(graphData.elements)
               ? graphData.elements
@@ -971,10 +1084,10 @@
             }
           }
 
-          // 4. Instantly re-aggregate and redraw proxy edges without network delay
+          // 3. Instantly re-aggregate and redraw proxy edges without network delay
           updateGraph()
 
-          // 5. Persist
+          // 4. Persist
           await extractAndSavePositions()
           if (onchangeGroupMembership) {
             await onchangeGroupMembership(
@@ -986,15 +1099,25 @@
             )
           }
         } else {
-          sourceNode.position({ ...nodePos })
+          if (currentSourceNode.children().length > 0) {
+            const currentPos = currentSourceNode.position()
+            const dx = nodePos.x - currentPos.x
+            const dy = nodePos.y - currentPos.y
+            currentSourceNode.children().forEach((child) => {
+              const cp = child.position()
+              child.position({ x: cp.x + dx, y: cp.y + dy })
+            })
+          } else {
+            currentSourceNode.position({ ...nodePos })
+          }
           extractAndSavePositions()
         }
-
-        if (ghostNode) ghostNode.remove()
-        ghostNode = null
-        sourceNode = null
       }
-    })
+
+      cleanupGhost()
+    }
+
+    cy.on('mouseup', handleMouseUp)
 
     cy.on('dragfree', 'node', () => {
       // Always save position so it remains physically exactly where it was dropped
@@ -1213,14 +1336,38 @@
       // Pre-calculate raw structural dependencies before proxy-edge mutations
       const incomingMap: Record<string, string[]> = {}
       newElements.forEach((ele: any) => {
-        if ((ele.group === 'edges' || ele.data.source) && ele.data.type !== 'spring') {
+        if ((ele.group === 'edges' || ele.data?.source) && ele.data?.type !== 'spring') {
           const t = ele.data.target
-
           const sourceId = ele.data.source
 
-          if (!incomingMap[t]) incomingMap[t] = []
-          if (!incomingMap[t].includes(sourceId)) incomingMap[t].push(sourceId)
+          if (t && sourceId) {
+            if (!incomingMap[t]) incomingMap[t] = []
+            if (!incomingMap[t].includes(sourceId)) incomingMap[t].push(sourceId)
+          }
         }
+      })
+
+      // Pre-calculate which incoming node IDs are shared by ALL members of each parent/group
+      const allNodes = newElements.filter(
+        (ele: any) => ele.group === 'nodes' || (!ele.data?.source && !ele.data?.target)
+      )
+      const parentMembersMap: Record<string, any[]> = {}
+      allNodes.forEach((n: any) => {
+        const parentId = n.data?.parent
+        if (parentId) {
+          if (!parentMembersMap[parentId]) parentMembersMap[parentId] = []
+          parentMembersMap[parentId].push(n)
+        }
+      })
+
+      const parentSharedIncomingMap: Record<string, SvelteSet<string>> = {}
+      Object.entries(parentMembersMap).forEach(([parentId, members]) => {
+        if (members.length === 0) return
+        const firstMemberIncoming = incomingMap[members[0].data?.id] || []
+        const shared = firstMemberIncoming.filter((sourceId) =>
+          members.every((m) => incomingMap[m.data?.id]?.includes(sourceId))
+        )
+        parentSharedIncomingMap[parentId] = new SvelteSet(shared)
       })
 
       const seenProxyEdges = new SvelteSet<string>()
@@ -1235,47 +1382,67 @@
           ele.data._incoming_node_ids = incomingMap[ele.data.id] || []
         }
 
-        if (use_proxy_edges && (ele.group === 'edges' || ele.data.source)) {
-          const edgeData = ele.data
+        const isEdge = ele.group === 'edges' || Boolean(ele.data?.source && ele.data?.target)
 
-          // Ignore spring edges so they always connect to specific nodes, not parent batches
-          if (edgeData.type === 'spring') {
-            acc.push(ele)
+        if (isEdge) {
+          const edgeData = ele.data
+          const source = edgeData.source
+          const targetNode = newElements.find((n) => n.data.id === edgeData.target)
+          const sourceNode = newElements.find((n) => n.data.id === edgeData.source)
+
+          // Skip edges between a compound parent and its direct child (composition is already visual)
+          if (
+            targetNode?.data.parent === source ||
+            sourceNode?.data.parent === edgeData.target ||
+            source === edgeData.target
+          ) {
             return acc
           }
 
-          // We explicitly DO NOT proxy the source to its parent batch.
-          // This ensures that when a single sample is used as init_audio,
-          // the edge visually originates from that specific sample, not the whole batch.
-          const source = edgeData.source
-
-          // Find the actual nodes in your newElements list to check for parents
-          const targetNode = newElements.find((n) => n.data.id === edgeData.target)
-          let target = edgeData.target
-          if (
-            targetNode?.data.parent &&
-            targetNode.data.parent !== source &&
-            targetNode.data.type !== 'individual' &&
-            targetNode.data.type !== 'bundle' &&
-            targetNode.data.type !== 'group'
-          ) {
-            target = targetNode.data.parent
-          }
-
-          // Prevent alpha-stacking visual bugs by deduplicating edges that share the same endpoints
-          const sig = `${source}->${target}:${edgeData.type}`
-          if (seenProxyEdges.has(sig)) return acc
-          seenProxyEdges.add(sig)
-
-          acc.push({
-            ...ele,
-            data: {
-              ...edgeData,
-              // Redirect target to parent if it exists, but keep original source
-              source: source,
-              target: target
+          if (use_proxy_edges) {
+            // Ignore spring edges so they always connect to specific nodes, not parent batches
+            if (edgeData.type === 'spring') {
+              acc.push(ele)
+              return acc
             }
-          })
+
+            // We explicitly DO NOT proxy the source to its parent batch.
+            // This ensures that when a single sample is used as init_audio,
+            // the edge visually originates from that specific sample, not the whole batch.
+            let target = edgeData.target
+            const parentId = targetNode?.data?.parent
+
+            // If ALL members of the parent group share this incoming source,
+            // aggregate and redirect the target to the group itself.
+            if (
+              parentId &&
+              parentId !== source &&
+              parentSharedIncomingMap[parentId]?.has(source)
+            ) {
+              target = parentId
+            }
+
+            if (source === target) return acc
+
+            // Prevent alpha-stacking visual bugs by deduplicating edges that share the same endpoints
+            const sig = `${source}->${target}:${edgeData.type}`
+            if (seenProxyEdges.has(sig)) return acc
+            seenProxyEdges.add(sig)
+
+            acc.push({
+              ...ele,
+              data: {
+                ...edgeData,
+                // Redirect target to parent if shared by all members, but keep original source
+                source: source,
+                target: target
+              }
+            })
+            return acc
+          } else {
+            acc.push(ele)
+            return acc
+          }
         } else {
           acc.push(ele)
         }
