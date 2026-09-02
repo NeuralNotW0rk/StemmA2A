@@ -2477,12 +2477,12 @@ def update_element():
         return jsonify({"error": "No project loaded"}), 400
     
     try:
-        data = request.get_json()
-        element_name = data.get('name')
+        data = request.get_json() or {}
+        element_name = data.get('id') or data.get('name')
         attributes = data.get('attributes', {})
         
         if not element_name:
-            return jsonify({"error": "name is required"}), 400
+            return jsonify({"error": "id or name is required"}), 400
         
         with graph_lock:
             param_graph.update_element(element_name, attributes)

@@ -10,6 +10,7 @@
   import { createPopper } from '@popperjs/core'
   import graphStyle from './Style'
   import layoutConfig from './Layout'
+  import NodePropertyPopper from './NodePropertyPopper.svelte'
   import { cyInstanceStore, selectionStore } from '../../utils/stores'
   import { GROUPING_CONFIG } from '../../utils/app-config'
 
@@ -92,6 +93,21 @@
   let loadingOperations = $state(false)
   let operationsError: string | null = $state(null)
   let lastCxtTapPosition = { x: 0, y: 0 }
+
+  // --- Inline Node Property Popper State ---
+  interface NodePropertyPopperConfig {
+    targetNode: cytoscape.NodeSingular
+    title: string
+    inputType?: 'number' | 'text'
+    initialValue?: string | number | null
+    placeholder?: string
+    submitLabel?: string
+    allowClear?: boolean
+    clearLabel?: string
+    step?: string
+    onsubmit: (value: string | number | null) => Promise<void> | void
+  }
+  let activePropertyPopper = $state<NodePropertyPopperConfig | null>(null)
 
   const displayType = $derived(
     targetNode
@@ -282,6 +298,49 @@
     }
     return undefined
   })
+
+  function openScorePopper(ele: Singular): void {
+    const node = ele as cytoscape.NodeSingular
+    const currentFitness = node.data('fitness')
+    activePropertyPopper = {
+      targetNode: node,
+      title: 'Fitness Score',
+      inputType: 'number',
+      initialValue: currentFitness !== undefined && currentFitness !== null ? currentFitness : null,
+      placeholder: 'Score (e.g. 1.0, 0.85)',
+      submitLabel: 'Set Score',
+      allowClear: true,
+      onsubmit: async (val: string | number | null): Promise<void> => {
+        const numVal = val !== null && val !== '' ? Number(val) : null
+        node.data('fitness', numVal)
+        await window.api.updateElement(node.id(), { fitness: numVal })
+        onnodeSelect?.(node.data())
+      }
+    }
+  }
+
+  function openRenamePopper(ele: Singular): void {
+    const node = ele as cytoscape.NodeSingular
+    const currentName = (node.data('name') || node.data('alias') || node.id()) as string
+    activePropertyPopper = {
+      targetNode: node,
+      title: 'Rename Node',
+      inputType: 'text',
+      initialValue: currentName,
+      placeholder: 'Enter new name...',
+      submitLabel: 'Rename',
+      allowClear: false,
+      onsubmit: async (val: string | number | null): Promise<void> => {
+        const newName = val == null ? '' : String(val).trim()
+        if (!newName) {
+          throw new Error('Name cannot be empty.')
+        }
+        node.data('name', newName)
+        await window.api.updateElement(node.id(), { name: newName })
+        onnodeSelect?.(node.data())
+      }
+    }
+  }
 
   function matchesFilter(node: cytoscape.NodeSingular, filter: Record<string, any>): boolean {
     const data = node.data()
@@ -562,7 +621,10 @@
     ]
 
     const nodeCommands = (ele: Singular): Command[] => [
-      // Inherits from elementCommands
+      {
+        content: 'Rename',
+        select: () => openRenamePopper(ele)
+      },
       ...elementCommands(ele)
     ]
 
@@ -588,6 +650,10 @@
       {
         content: 'Express',
         select: () => handleExpressIndividual(ele.id())
+      },
+      {
+        content: 'Score',
+        select: () => openScorePopper(ele)
       },
       ...nodeCommands(ele)
     ]
@@ -631,17 +697,6 @@
         content: 'Evolve',
         select: () => onevolveAudio?.(ele.data())
       })
-
-      const parentId = ele.data('parent')
-      if (parentId) {
-        const parentNode = cy!.getElementById(parentId)
-        if (parentNode.length > 0 && parentNode.data('type') === 'individual') {
-          specificCommands.push({
-            content: 'Express',
-            select: () => handleExpressIndividual(parentId)
-          })
-        }
-      }
 
       specificCommands.push({
         content: 'Operations...',
@@ -856,7 +911,10 @@
       cy?.nodes('[type="group"]').removeClass('compatible-drop-target active-drop-target')
     }
 
-    function startGhostDrag(node: cytoscape.NodeSingular, initialPos: { x: number; y: number }): void {
+    function startGhostDrag(
+      node: cytoscape.NodeSingular,
+      initialPos: { x: number; y: number }
+    ): void {
       if (ghostNode) return
 
       // Restore original node (and any children) back to their initial positions before normal drag moved them
@@ -909,7 +967,10 @@
         !ghostNode &&
         trackedMousedownNode
       ) {
-        startGhostDrag(trackedMousedownNode, lastRenderedMousePos || trackedMousedownNode.position())
+        startGhostDrag(
+          trackedMousedownNode,
+          lastRenderedMousePos || trackedMousedownNode.position()
+        )
       }
     }
 
@@ -1414,11 +1475,7 @@
 
             // If ALL members of the parent group share this incoming source,
             // aggregate and redirect the target to the group itself.
-            if (
-              parentId &&
-              parentId !== source &&
-              parentSharedIncomingMap[parentId]?.has(source)
-            ) {
+            if (parentId && parentId !== source && parentSharedIncomingMap[parentId]?.has(source)) {
               target = parentId
             }
 
@@ -1608,6 +1665,22 @@
         {/if}
       </div>
     </div>
+  {/if}
+
+  {#if activePropertyPopper}
+    <NodePropertyPopper
+      targetNode={activePropertyPopper.targetNode}
+      title={activePropertyPopper.title}
+      inputType={activePropertyPopper.inputType}
+      initialValue={activePropertyPopper.initialValue}
+      placeholder={activePropertyPopper.placeholder}
+      submitLabel={activePropertyPopper.submitLabel}
+      allowClear={activePropertyPopper.allowClear}
+      clearLabel={activePropertyPopper.clearLabel}
+      step={activePropertyPopper.step}
+      onsubmit={activePropertyPopper.onsubmit}
+      onclose={() => (activePropertyPopper = null)}
+    />
   {/if}
 </div>
 

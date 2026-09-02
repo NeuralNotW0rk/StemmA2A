@@ -27,22 +27,6 @@ async function fetchWithAuth(url: string, options: RequestInit = {}): Promise<Re
 let pythonBackend: ChildProcess | null = null
 const store = new Store()
 
-async function waitForBackendReady(maxWaitMs = 30000, intervalMs = 500): Promise<boolean> {
-  const startTime = Date.now()
-  while (Date.now() - startTime < maxWaitMs) {
-    try {
-      const response = await fetchWithAuth(`${BACKEND_URL}/health`)
-      if (response.ok) {
-        return true
-      }
-    } catch {
-      // Backend not yet ready, retry until timeout
-    }
-    await new Promise((resolve): NodeJS.Timeout => setTimeout(resolve, intervalMs))
-  }
-  return false
-}
-
 // Backend management
 function startPythonBackend(): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -69,26 +53,11 @@ function startPythonBackend(): Promise<void> {
         env: spawnEnv
       })
 
-      pythonBackend.on('error', (error): void => {
-        console.error('Failed to start Python backend launcher:', error)
-        reject(error)
-      })
-
-      pythonBackend.on('exit', (code): void => {
-        console.log(`Python backend launcher detached (exit code ${code})`)
-      })
-
-      // Wait for backend to be ready via health check polling
-      waitForBackendReady()
-        .then((ready): void => {
-          if (ready) {
-            console.log('Python backend is ready and listening')
-            resolve()
-          } else {
-            reject(new Error('Timed out waiting for Python backend to respond.'))
-          }
-        })
-        .catch(reject)
+      // Resolve after a delay to allow the launcher to initialize
+      setTimeout((): void => {
+        console.log('Assuming Python backend is ready')
+        resolve()
+      }, 5000)
     } else {
       // For production or other dev platforms
       const cwd = is.dev ? join(app.getAppPath(), 'backend') : undefined

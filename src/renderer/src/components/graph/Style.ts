@@ -323,7 +323,14 @@ const defaultStyle: CssStyleDeclaration[] = [
   {
     selector: 'node[type="individual"]',
     style: {
-      label: (node: NodeSingular): string => node.data('name') || node.data('id'),
+      label: (node: NodeSingular): string => {
+        const name = (node.data('name') || node.data('id')) as string
+        const fitness = node.data('fitness')
+        if (fitness !== undefined && fitness !== null) {
+          return `${name}\n[fit: ${fitness}]`
+        }
+        return name
+      },
       'text-valign': 'top',
       'text-margin-y': -8,
       'border-width': 2,
@@ -347,7 +354,14 @@ const defaultStyle: CssStyleDeclaration[] = [
   {
     selector: 'node[type="bundle"]',
     style: {
-      label: (node: NodeSingular): string => node.data('name') || node.data('alias') || node.data('id'),
+      label: (node: NodeSingular): string => {
+        const name = (node.data('name') || node.data('alias') || node.data('id')) as string
+        const fitness = node.data('fitness')
+        if (fitness !== undefined && fitness !== null) {
+          return `${name}\n[fit: ${fitness}]`
+        }
+        return name
+      },
       'background-color': (node: NodeSingular): string => getBundleColor(node.data('member_type')),
       'background-image': (node: NodeSingular): string => getBundleIcon(node.data('member_type')),
       'background-fit': 'none',
