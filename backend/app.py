@@ -60,7 +60,20 @@ from diffracture.topology.grating import Grating as DiffractureGrating
 from param_graph.elements.artifacts.individual_element import Individual
 from param_graph.elements.artifacts.bundle_element import Bundle
 from param_graph.elements.collections.group_element import Group
-from evolution.lora.lora_genome import LoRAGenome, express_to_grating
+from evolution.registry import get_genome_class, get_expression_function
+from evolution.reproduction import (
+    breed_offspring,
+    build_selection_strategy,
+    build_crossover_strategy,
+    ReproducedOffspring,
+)
+from evolution.lora.lora_genome import (
+    LoRAGenome,
+    express_to_grating,
+    get_lora_mutation_strategy,
+    get_lora_crossover_strategy,
+)
+from neutral_selection.representation.individual import Individual as NSIndividual
 import copy
 import uuid
 from coolname import generate_slug
@@ -1002,6 +1015,369 @@ async def _initialize_evolution_task(
 
     except Exception as e:
         print(f"Failed in async evolution initialization: {e}")
+        traceback.print_exc()
+        local_jobs[parent_job_id]["status"] = "failed"
+        local_jobs[parent_job_id]["progress"] = None
+        local_jobs[parent_job_id]["error"] = str(e)
+        local_jobs[parent_job_id]["traceback"] = traceback.format_exc()
+
+
+@app.route("/reproduce_evolution", methods=["POST"])
+async def reproduce_evolution():
+    """
+    Starts an evolutionary reproduction (breeding) run.
+    Selects, crosses over, and mutates parent individuals to produce a new generation.
+    """
+    if param_graph is None:
+        return jsonify({"error": "No project loaded"}), 400
+
+    try:
+        data = request.get_json() or {}
+        parent_ids = data.get("parent_ids")
+        parent_bundle_id = data.get("parent_bundle_id")
+        offspring_size = data.get("offspring_size")
+        selection_cfg = data.get("selection") or {"type": "tournament", "tournament_size": 2}
+        crossover_cfg = data.get("crossover") or {"type": "random_n_point", "num_cut_points": 1}
+        mutation_cfg = data.get("mutation") or {}
+        crossover_prob = float(data.get("crossover_prob", crossover_cfg.get("prob", 0.8)))
+        elitism = int(data.get("elitism", 0))
+        generation_context = data.get("generation_context") or {}
+
+        if not parent_ids and not parent_bundle_id:
+            return jsonify({"error": "Either parent_ids or parent_bundle_id must be provided."}), 400
+
+        # Validate existence of parents or parent bundle early
+        with graph_lock:
+            if parent_ids:
+                if not isinstance(parent_ids, list) or len(parent_ids) == 0:
+                    return jsonify({"error": "parent_ids must be a non-empty list of individual IDs."}), 400
+                for pid in parent_ids:
+                    p_node = param_graph.get_element(pid)
+                    if not isinstance(p_node, Individual):
+                        return jsonify({"error": f"Node '{pid}' is not a valid individual."}), 400
+            elif parent_bundle_id:
+                bundle_node = param_graph.get_element(parent_bundle_id)
+                if not isinstance(bundle_node, Bundle):
+                    return jsonify({"error": f"Node '{parent_bundle_id}' is not a valid bundle."}), 400
+                if len(bundle_node.member_ids) == 0:
+                    return jsonify({"error": f"Parent bundle '{parent_bundle_id}' has no members."}), 400
+
+        # Generate unique local job ID
+        parent_job_id = f"evolution_reproduce_{uuid.uuid4().hex[:12]}"
+        local_jobs[parent_job_id] = {
+            "status": "pending",
+            "progress": None,
+            "result": None,
+            "error": None
+        }
+
+        # Spawn background evolution reproduction task via background thread
+        import asyncio
+        thread = threading.Thread(
+            target=lambda: asyncio.run(
+                _reproduce_evolution_task(
+                    parent_job_id=parent_job_id,
+                    parent_ids=parent_ids,
+                    parent_bundle_id=parent_bundle_id,
+                    offspring_size=offspring_size,
+                    selection_cfg=selection_cfg,
+                    crossover_cfg=crossover_cfg,
+                    mutation_cfg=mutation_cfg,
+                    crossover_prob=crossover_prob,
+                    elitism=elitism,
+                    generation_context=generation_context,
+                )
+            )
+        )
+        thread.start()
+
+        return jsonify({
+            "success": True,
+            "message": "Evolutionary reproduction started",
+            "job_id": parent_job_id
+        }), 202
+
+    except Exception as e:
+        print(f"Failed to start reproduction: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
+async def _reproduce_evolution_task(
+    parent_job_id: str,
+    parent_ids: list[str] | None,
+    parent_bundle_id: str | None,
+    offspring_size: int | None,
+    selection_cfg: dict,
+    crossover_cfg: dict,
+    mutation_cfg: dict,
+    crossover_prob: float,
+    elitism: int,
+    generation_context: dict,
+) -> None:
+    """
+    Background worker that breeds a new generation from parent individuals,
+    creates child nodes in the parameter graph with lineage relationships,
+    and queues audio generation jobs for each offspring.
+    """
+    try:
+        local_jobs[parent_job_id]["status"] = "running"
+        print(f"[_reproduce_evolution_task] Started reproduction task for job {parent_job_id}")
+
+        engine = engine_provider.get_engine()
+
+        with graph_lock:
+            # 1. Resolve parent individual nodes
+            parent_nodes: list[Individual] = []
+            if parent_ids:
+                for pid in parent_ids:
+                    node = param_graph.get_element(pid)
+                    if isinstance(node, Individual):
+                        parent_nodes.append(node)
+            elif parent_bundle_id:
+                bundle_node = param_graph.get_element(parent_bundle_id)
+                if isinstance(bundle_node, Bundle):
+                    for mid in bundle_node.member_ids:
+                        node = param_graph.get_element(mid)
+                        if isinstance(node, Individual):
+                            parent_nodes.append(node)
+
+            if not parent_nodes:
+                raise ValueError("No valid parent individuals could be resolved.")
+
+            first_parent = parent_nodes[0]
+            model_id = first_parent.base_model_id
+            baseline_grating_id = first_parent.baseline_grating_id
+            baseline_elements = first_parent.context.get("baseline_elements")
+            baseline_file_path = first_parent.context.get("baseline_file_path")
+
+            # Precursor baseline grating resolution
+            base_grating = None
+            if baseline_grating_id:
+                base_grating = param_graph.get_element(baseline_grating_id)
+
+            model_element = param_graph.get_element(model_id)
+            if not model_element:
+                raise ValueError(f"Base model '{model_id}' not found in parameter graph.")
+
+            # Calculate generation index
+            max_gen = max(getattr(p, "generation", 0) for p in parent_nodes)
+            next_generation = max_gen + 1
+
+            # Determine offspring count
+            target_offspring_count = offspring_size if (offspring_size and offspring_size > 0) else len(parent_nodes)
+
+            # Resolve generation context and arguments for execution
+            merged_context = copy.deepcopy(first_parent.context or {})
+            if generation_context:
+                merged_context.update(generation_context)
+
+            operation = merged_context.get("operation", "generate")
+            source_audio_id = merged_context.get("source_audio_id") or merged_context.get("source_audio")
+            node_engine_args = {}
+            linked_elements = []
+            source_audio_element = None
+            if source_audio_id:
+                source_audio_element = param_graph.get_element(source_audio_id)
+                if source_audio_element:
+                    node_engine_args["source_audio_element"] = source_audio_element
+                    linked_elements.append(source_audio_element)
+
+            # Dumped parameters for the engine
+            dumped_params = {}
+            for k, v in merged_context.items():
+                if isinstance(v, (str, int, float, bool)) and k not in [
+                    "model_id", "operation", "gratings", "source_audio_id", "source_audio", "job_id",
+                    "baseline_elements", "baseline_file_path", "lineage"
+                ]:
+                    dumped_params[k] = v
+
+            # 2. Load parent genomes into neutral_selection Individuals
+            parent_ns_individuals: list[NSIndividual] = []
+            parent_id_list: list[str] = []
+            for p_node in parent_nodes:
+                repr_name = p_node.context.get("representation", "lora")
+                genome_cls = get_genome_class(repr_name)
+                genome = genome_cls.load(p_node.file.path)
+                ns_ind = NSIndividual(genotype=genome)
+                ns_ind.fitness = p_node.fitness
+                parent_ns_individuals.append(ns_ind)
+                parent_id_list.append(p_node.id)
+
+            # 3. Build reproduction strategies
+            selection_strat = build_selection_strategy(selection_cfg)
+            crossover_strat = build_crossover_strategy(crossover_cfg)
+
+            lora_noise = float(mutation_cfg.get("lora_noise", merged_context.get("lora_noise", 0.05)))
+            active_flip_prob = float(mutation_cfg.get("active_flip_prob", merged_context.get("active_flip_prob", 0.05)))
+            mutation_rate = float(mutation_cfg.get("mutation_rate", 1.0))
+            mutation_strat = get_lora_mutation_strategy(
+                lora_noise=lora_noise,
+                active_flip_prob=active_flip_prob,
+                mutation_rate=mutation_rate
+            )
+
+            # 4. Perform breeding
+            offspring_records: list[ReproducedOffspring] = breed_offspring(
+                parents=parent_ns_individuals,
+                offspring_count=target_offspring_count,
+                selection_strategy=selection_strat,
+                crossover_strategy=crossover_strat,
+                mutation_strategy=mutation_strat,
+                crossover_prob=crossover_prob,
+                elitism=elitism,
+                parent_ids=parent_id_list,
+            )
+
+            # 5. Create Generation Bundle & Group Nodes
+            gen_bundle_id = f"bundle_{uid_generator.from_string(str(uuid.uuid4()))}"
+            gen_bundle = Bundle(
+                id=gen_bundle_id,
+                name=f"Generation {next_generation} Bundle",
+                member_ids=[],
+                member_type='individual',
+                context={
+                    "generation": next_generation,
+                    "model_id": model_id,
+                    "baseline_grating_id": baseline_grating_id,
+                    "parent_ids": parent_id_list,
+                    "parent_bundle_id": parent_bundle_id,
+                    "selection_cfg": selection_cfg,
+                    "crossover_cfg": crossover_cfg,
+                    "mutation_cfg": mutation_cfg,
+                    "crossover_prob": crossover_prob,
+                    "elitism": elitism,
+                    "generation_context": merged_context
+                }
+            )
+
+            gen_group_id = f"group_{uid_generator.from_string(str(uuid.uuid4()))}"
+            gen_group = Group(
+                id=gen_group_id,
+                member_ids=[],
+                member_type='individual'
+            )
+
+            param_graph.add_element(gen_bundle)
+            param_graph.add_element(gen_group)
+            param_graph.update_element(gen_group.id, {"alias": f"Generation {next_generation}"})
+
+            # Link parent bundle to next generation bundle
+            if parent_bundle_id:
+                p_bundle = param_graph.get_element(parent_bundle_id)
+                if p_bundle:
+                    param_graph.link(p_bundle, gen_bundle, relation='next_generation')
+
+            if source_audio_element:
+                param_graph.link(source_audio_element, gen_bundle, relation='precursor')
+
+            param_graph.save()
+
+        job_ids = []
+        individual_ids = []
+
+        # 6. Process each offspring individual
+        for i, record in enumerate(offspring_records):
+            local_jobs[parent_job_id]["progress"] = {
+                "value": i,
+                "total": target_offspring_count,
+                "description": f"Processing offspring {i+1} of {target_offspring_count}..."
+            }
+
+            child_genome = record.individual.genotype
+            genome_state_dict = child_genome.get_state_dict()
+            genome_uid = uid_generator.from_state_dict(genome_state_dict)
+            child_ind_id = f"individual_{genome_uid}"
+
+            output_dir = param_graph.root / "generate"
+            os.makedirs(output_dir, exist_ok=True)
+            child_genome_path = output_dir / f"{child_ind_id}.safetensors"
+            child_genome.save(str(child_genome_path))
+
+            child_context = copy.deepcopy(merged_context)
+            child_context["baseline_elements"] = baseline_elements
+            child_context["baseline_file_path"] = str(baseline_file_path) if baseline_file_path else None
+            child_context["lineage"] = {
+                "parent_ids": record.lineage.parent_ids,
+                "crossover_applied": record.lineage.crossover_applied,
+                "mutated": record.lineage.mutated
+            }
+
+            slug = generate_slug(2)
+            child_node = Individual(
+                id=child_ind_id,
+                name=f"Gen {next_generation} - Ind {i+1} ({slug})",
+                file=Asset(path=str(child_genome_path), uid=child_ind_id, extension=".safetensors"),
+                base_model_id=model_id,
+                baseline_grating_id=baseline_grating_id,
+                generation=next_generation,
+                fitness=record.individual.fitness,
+                context=child_context
+            )
+
+            with graph_lock:
+                param_graph.add_element(child_node)
+                param_graph.update_element(child_node.id, {"parent": gen_group_id})
+                param_graph.link(model_element, child_node, relation='binds_to')
+                param_graph.link(gen_bundle, child_node, relation='member')
+
+                for pid in record.lineage.parent_ids:
+                    p_node_elem = param_graph.get_element(pid)
+                    if p_node_elem:
+                        param_graph.link(p_node_elem, child_node, relation='parent')
+
+                gen_bundle.member_ids.append(child_ind_id)
+                gen_group.member_ids.append(child_ind_id)
+                param_graph.update_element(gen_bundle.id, {"member_ids": gen_bundle.member_ids})
+                param_graph.update_element(gen_group.id, {"member_ids": gen_group.member_ids})
+                param_graph.save()
+
+            individual_ids.append(child_ind_id)
+
+            # Queue execution job
+            job_id = str(uuid.uuid4())
+            engine_args = {
+                "model_element": model_element,
+                "individual_elements": [child_node],
+                "baseline_grating": base_grating,
+                **node_engine_args
+            }
+
+            returned_job_id = await engine.execute(operation, job_id=job_id, **engine_args, **dumped_params)
+            if returned_job_id != job_id:
+                job_id = returned_job_id
+
+            job_ids.append(job_id)
+
+            v_params = {**dumped_params}
+            v_params["model_id"] = model_id
+            v_params["operation"] = operation
+            v_params["individuals"] = [{"id": child_ind_id, "strength": 1.0}]
+
+            active_jobs[job_id] = {
+                "parent_id": child_ind_id,
+                "linked_elements": linked_elements,
+                "validated_params": v_params,
+                "operation": operation
+            }
+
+        local_jobs[parent_job_id]["status"] = "completed"
+        local_jobs[parent_job_id]["progress"] = {
+            "value": target_offspring_count,
+            "total": target_offspring_count,
+            "description": "Reproduction complete."
+        }
+        local_jobs[parent_job_id]["result"] = {
+            "job_ids": job_ids,
+            "individual_ids": individual_ids,
+            "bundle_id": gen_bundle_id,
+            "group_id": gen_group_id,
+            "generation": next_generation
+        }
+        print(f"[_reproduce_evolution_task] Evolution reproduction completed successfully for job {parent_job_id}")
+
+    except Exception as e:
+        print(f"Failed in async evolution reproduction: {e}")
         traceback.print_exc()
         local_jobs[parent_job_id]["status"] = "failed"
         local_jobs[parent_job_id]["progress"] = None

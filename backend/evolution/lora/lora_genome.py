@@ -179,13 +179,10 @@ class LoRAGenome(Genome):
         base_genome = cls.from_grating(base_grating)
         population: list[LoRAGenome] = []
 
-        mutation_strategy = UniformMutation(
-            mutation_rate=1.0,
-            mutation_fn=attribute_mutator({
-                "lora_down": lora_gaussian_noise_mutator(std=lora_noise),
-                "lora_up": lora_gaussian_noise_mutator(std=lora_noise),
-                "active": bit_flip_mutator(prob=active_flip_prob)
-            })
+        mutation_strategy = get_lora_mutation_strategy(
+            lora_noise=lora_noise,
+            active_flip_prob=active_flip_prob,
+            mutation_rate=1.0
         )
 
         for _ in range(population_size):
@@ -197,7 +194,6 @@ class LoRAGenome(Genome):
             population.append(child_genome)
 
         return population
-
 
 
 def express_to_grating(genome: LoRAGenome, base_grating: Union[Grating, str, Path]) -> Grating:
@@ -283,3 +279,45 @@ def lora_gaussian_noise_mutator(std: float, mean: float = 0.0) -> Callable[[Any]
 
     return mutate_fn
 
+
+def get_lora_mutation_strategy(
+    lora_noise: float = 0.05,
+    active_flip_prob: float = 0.05,
+    mutation_rate: float = 1.0
+) -> Any:
+    """
+    Returns a UniformMutation strategy tailored for LoRAGenome instances.
+    """
+    from neutral_selection.variation.mutation import UniformMutation, attribute_mutator, bit_flip_mutator
+
+    return UniformMutation(
+        mutation_rate=mutation_rate,
+        mutation_fn=attribute_mutator({
+            "lora_down": lora_gaussian_noise_mutator(std=lora_noise),
+            "lora_up": lora_gaussian_noise_mutator(std=lora_noise),
+            "active": bit_flip_mutator(prob=active_flip_prob)
+        })
+    )
+
+
+def get_lora_crossover_strategy(num_cut_points: int = 1) -> Any:
+    """
+    Returns a RandomNPointCrossover strategy for LoRAGenome instances.
+    """
+    from neutral_selection.variation.recombination import RandomNPointCrossover
+
+    return RandomNPointCrossover(num_cut_points=num_cut_points)
+
+
+# Register representation with global registry
+try:
+    from evolution.registry import register_representation
+    register_representation(
+        "lora",
+        LoRAGenome,
+        express_to_grating,
+        get_lora_mutation_strategy,
+        get_lora_crossover_strategy
+    )
+except ImportError:
+    pass

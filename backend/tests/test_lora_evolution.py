@@ -10,7 +10,7 @@ from evolution.lora.lora_genome import (
     lora_gaussian_noise_mutator
 )
 from neutral_selection.variation.mutation import mutate, UniformMutation, attribute_mutator, bit_flip_mutator
-from neutral_selection.variation.recombination import RandomNPointCrossover
+from neutral_selection.variation.recombination import RandomNPointCrossover, recombine
 from neutral_selection.representation.individual import Individual
 from neutral_selection.representation.population import Population
 
@@ -238,8 +238,6 @@ class TestLoRAEvolution(unittest.TestCase):
 
     def test_generic_recombine_interface(self) -> None:
         """Verify the recombine polymorphic helper works for both Genomes and Individuals."""
-        from neutral_selection.variation.recombination import recombine
-
         genes_p1 = [PerturbationGene("l1", torch.ones(1, 1), torch.ones(1, 1), True)]
         genes_p2 = [PerturbationGene("l1", torch.zeros(1, 1), torch.zeros(1, 1), False)]
         genome_p1 = LoRAGenome(genes_p1)
@@ -623,4 +621,3 @@ class TestLoRAEvolution(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
