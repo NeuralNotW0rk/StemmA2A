@@ -1,7 +1,7 @@
 import { writable } from 'svelte/store'
 import type { Core } from 'cytoscape'
-import type { ModelData, NodeData } from './forms'
-import type { NodeFilter } from './types'
+import type { NodeData, ModelData } from './forms'
+import type { NodeFilter, OperationInfo } from './types'
 
 export const cyInstanceStore = writable<Core | null>(null);
 
@@ -136,4 +136,4 @@ function createFormStateStore() {
 
 export const formStateStore = createFormStateStore()
 
-export const selectedOperation = writable<any>(null)
+export const selectedOperation = writable<OperationInfo | null>(null)

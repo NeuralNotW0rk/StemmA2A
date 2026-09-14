@@ -618,6 +618,136 @@ class TestLoRAEvolution(unittest.TestCase):
         finally:
             shutil.rmtree(tmp_dir)
 
+    def test_execute_operation_mutate(self) -> None:
+        """Test `/execute_operation` endpoint with operation='mutate'."""
+        import tempfile
+        import shutil
+        from unittest.mock import AsyncMock
+        from engine.engine_provider import EngineProvider
+        import app as app_module
+        from param_graph.graph import ParameterGraph
+        from param_graph.elements.models.stylegan_element import StyleGANModel
+        from param_graph.elements.artifacts.audio_element import Audio
+        from param_graph.elements.base_elements import Asset
+
+        tmp_dir = tempfile.mkdtemp()
+        try:
+            g = ParameterGraph(tmp_dir)
+            provider = EngineProvider(data_root=tmp_dir)
+
+            mock_engine = provider.get_engine()
+            mock_engine.execute = AsyncMock(return_value="mock-job-id")
+
+            old_graph = app_module.param_graph
+            old_provider = app_module.engine_provider
+            app_module.param_graph = g
+            app_module.engine_provider = provider
+            
+            client = app_module.app.test_client()
+
+            # 1. Add model node
+            model_node = StyleGANModel(
+                id="model_test",
+                name="Test Model",
+                context={},
+                checkpoint=Asset(path="mock_model_path", uid="mock_model_uid", extension=".pt"),
+                adapter="stylegan2"
+            )
+            g.add_element(model_node)
+
+            # 2. Add precursor audio node
+            precursor_audio = Audio(
+                id="precursor_audio_test",
+                name="Precursor Audio",
+                context={"model_id": "model_test", "prompt": "mutant test sound"},
+                file=Asset(path="mock_audio.wav", uid="mock_audio_uid", extension=".wav")
+            )
+            g.add_element(precursor_audio)
+            g.save()
+
+            # 3. Invoke /execute_operation with operation='mutate' (inferring model from precursor)
+            payload = {
+                "operation": "mutate",
+                "execution_mode": "async",
+                "source_audio": "precursor_audio_test",
+                "elements": [
+                    {
+                        "address": "layer1",
+                        "kernel_type": "lora",
+                        "params": {
+                            "rank": 4,
+                            "alpha": 1.0,
+                            "in_features": 4,
+                            "out_features": 4
+                        }
+                    }
+                ],
+                "population_size": 2,
+                "lora_noise": 0.05,
+                "active_flip_prob": 0.05
+            }
+            resp = client.post("/execute_operation", json=payload)
+            self.assertEqual(resp.status_code, 202)
+            res_data = resp.get_json()
+            self.assertTrue(res_data["success"])
+            self.assertIn("job_id", res_data)
+            
+            parent_job_id = res_data["job_id"]
+            import time
+            completed_data = None
+            for _ in range(50):
+                status_resp = client.get(f"/job_status/{parent_job_id}")
+                if status_resp.status_code == 200:
+                    status_data = status_resp.get_json()
+                    if status_data.get("status") == "completed":
+                        completed_data = status_data.get("result")
+                        break
+                    elif status_data.get("status") == "failed":
+                        self.fail(f"Evolution init job failed: {status_data.get('error')}")
+                time.sleep(0.1)
+                
+            self.assertIsNotNone(completed_data, "Job did not complete in time")
+            
+            # Verify graph state
+            g_reloaded = ParameterGraph(tmp_dir)
+            g_reloaded.load()
+            
+            individual_id = completed_data["individual_ids"][0]
+            ind_node = g_reloaded.get_element(individual_id)
+            self.assertEqual(ind_node.type, "individual")
+            self.assertEqual(ind_node.context.get("prompt"), "mutant test sound")
+
+            # Restore original globals
+            app_module.param_graph = old_graph
+            app_module.engine_provider = old_provider
+
+        finally:
+            shutil.rmtree(tmp_dir)
+
+    def test_get_all_operations_endpoint(self) -> None:
+        """Verify that /operations returns all operations and to_dict succeeds for every operation."""
+        import app as app_module
+        client = app_module.app.test_client()
+        
+        resp = client.get("/operations")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.get_json()
+        self.assertTrue(data.get("success"))
+        ops = data.get("operations", [])
+        self.assertGreater(len(ops), 0)
+        
+        op_names = {op["name"] for op in ops}
+        self.assertIn("mutate", op_names)
+        self.assertIn("gain", op_names)
+        self.assertIn("normalize", op_names)
+        
+        for op in ops:
+            self.assertIn("name", op)
+            self.assertIn("category", op)
+            self.assertIn("execution", op)
+            self.assertIn("context_overrides", op)
+            self.assertIn("form_config", op)
+
 
 if __name__ == "__main__":
     unittest.main()

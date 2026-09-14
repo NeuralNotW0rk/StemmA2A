@@ -204,122 +204,105 @@
       )
 
       // Pre-population for node fields
-      if (op.execution_mode === 'async') {
-        let modelId: string | null = null
-        if ($contextStore?.model_id) {
-          modelId = $contextStore.model_id
-        } else if ($initiatorNodeStore?.base_model_id) {
-          modelId = $initiatorNodeStore.base_model_id
-        } else if ($initiatorNodeStore?.context?.model_id) {
-          modelId = $initiatorNodeStore.context.model_id
-        } else if ($initiatorNodeStore?.type === 'model') {
-          modelId = $initiatorNodeStore.id
-        }
+      let modelId: string | null = null
+      if ($contextStore?.model_id) {
+        modelId = $contextStore.model_id
+      } else if ($initiatorNodeStore?.base_model_id) {
+        modelId = $initiatorNodeStore.base_model_id
+      } else if ($initiatorNodeStore?.context?.model_id) {
+        modelId = $initiatorNodeStore.context.model_id
+      } else if ($initiatorNodeStore?.type === 'model') {
+        modelId = $initiatorNodeStore.id
+      }
 
-        if (modelId) {
-          initialData.model = modelId
-        }
+      if (modelId && baseFieldsConfig.some((f) => f.name === 'model')) {
+        initialData.model = modelId
+      }
 
-        if (isReplicated && $contextStore?.gratings && $cyInstanceStore) {
-          const contextGratings = $contextStore.gratings as Array<{
-            id: string
-            strength: number
-            overrides?: any[]
-          }>
-          selectedGratings = contextGratings.map((g, index) => {
-            const node = $cyInstanceStore.$id(g.id).data()
-            const item: NodeListItem = {
-              id: index,
-              node: node || g.id,
-              strength: g.strength
-            }
-            if (g.overrides) {
-              item.overrides = g.overrides.map((ov) => {
-                const meta = ov.metadata || {}
-                const el = node?.elements?.find((e: any) => e.address === ov.address)
-                const ktype = el?.kernel_type || 'erode'
-
-                let targetType: 'all' | 'indices' | 'cluster' = 'all'
-                if (meta.indices && Array.isArray(meta.indices) && meta.indices.length > 0) {
-                  targetType = 'indices'
-                } else if (meta.cluster !== null && meta.cluster !== undefined) {
-                  targetType = 'cluster'
-                }
-
-                const params: Record<string, any> = {}
-                if (ktype === 'erode' || ktype === 'dilate') {
-                  params.radius = meta.radius ?? el?.metadata?.radius ?? 1
-                } else if (ktype === 'scale') {
-                  params.scale_factor = meta.scale_factor ?? el?.metadata?.scale_factor ?? 1.0
-                } else if (ktype === 'rotate') {
-                  params.angle = meta.angle ?? el?.metadata?.angle ?? 0.0
-                } else if (ktype === 'translate') {
-                  params.offset_x = meta.offset_x ?? el?.metadata?.offset_x ?? 0.0
-                  params.offset_y = meta.offset_y ?? el?.metadata?.offset_y ?? 0.0
-                } else if (ktype === 'scalar-multiply') {
-                  params.factor =
-                    meta.factor ??
-                    meta.multiplier ??
-                    el?.metadata?.factor ??
-                    el?.metadata?.multiplier ??
-                    1.0
-                } else if (ktype === 'resize') {
-                  params.scale_x = meta.scale_x ?? el?.metadata?.scale_x ?? 1.0
-                  params.scale_y = meta.scale_y ?? el?.metadata?.scale_y ?? 1.0
-                } else if (ktype === 'binary-thresh') {
-                  params.threshold = meta.threshold ?? el?.metadata?.threshold ?? 0.0
-                }
-
-                return {
-                  address: ov.address,
-                  kernel_type: ktype,
-                  targetType,
-                  indicesText: meta.indices ? meta.indices.join(', ') : '',
-                  cluster: meta.cluster ?? 0,
-                  params,
-                  batchFields: ov.batchFields || {}
-                }
-              })
-              item.loadedNodeId = node?.id || g.id
-            }
-            return item
-          })
-        }
-
-        if ($initiatorNodeStore && !isReplicated) {
-          const type = $initiatorNodeStore.type
-          const effectiveType = type === 'group' ? $initiatorNodeStore.member_type : type
-          if (effectiveType === 'audio') {
-            if (baseFieldsConfig.some((f) => f.name === 'init_audio')) {
-              initialData.init_audio = $initiatorNodeStore
-            }
-            if (baseFieldsConfig.some((f) => f.name === 'source_audio')) {
-              initialData.source_audio = $initiatorNodeStore
-            }
-          } else if (effectiveType === 'latent') {
-            if (baseFieldsConfig.some((f) => f.name === 'init_latent')) {
-              initialData.init_latent = $initiatorNodeStore
-            }
-          } else if (effectiveType === 'grating') {
-            selectedGratings = [
-              { id: -1, node: $initiatorNodeStore as unknown as NodeData, strength: 1.0 }
-            ]
+      if (isReplicated && $contextStore?.gratings && $cyInstanceStore) {
+        const contextGratings = $contextStore.gratings as Array<{
+          id: string
+          strength: number
+          overrides?: any[]
+        }>
+        selectedGratings = contextGratings.map((g, index) => {
+          const node = $cyInstanceStore.$id(g.id).data()
+          const item: NodeListItem = {
+            id: index,
+            node: node || g.id,
+            strength: g.strength
           }
-        }
-      } else {
-        // Synchronous operations fallback
-        if (!isReplicated) {
-          for (const field of baseFieldsConfig) {
-            if (field.type === 'node') {
-              const isAudioInitiator =
-                $initiatorNodeStore?.type === 'audio' ||
-                ($initiatorNodeStore?.type === 'group' &&
-                  $initiatorNodeStore?.member_type === 'audio')
-              if (field.name === 'source_audio' && isAudioInitiator) {
-                initialData[field.name] = $initiatorNodeStore
+          if (g.overrides) {
+            item.overrides = g.overrides.map((ov) => {
+              const meta = ov.metadata || {}
+              const el = node?.elements?.find((e: any) => e.address === ov.address)
+              const ktype = el?.kernel_type || 'erode'
+
+              let targetType: 'all' | 'indices' | 'cluster' = 'all'
+              if (meta.indices && Array.isArray(meta.indices) && meta.indices.length > 0) {
+                targetType = 'indices'
+              } else if (meta.cluster !== null && meta.cluster !== undefined) {
+                targetType = 'cluster'
               }
-            }
+
+              const params: Record<string, any> = {}
+              if (ktype === 'erode' || ktype === 'dilate') {
+                params.radius = meta.radius ?? el?.metadata?.radius ?? 1
+              } else if (ktype === 'scale') {
+                params.scale_factor = meta.scale_factor ?? el?.metadata?.scale_factor ?? 1.0
+              } else if (ktype === 'rotate') {
+                params.angle = meta.angle ?? el?.metadata?.angle ?? 0.0
+              } else if (ktype === 'translate') {
+                params.offset_x = meta.offset_x ?? el?.metadata?.offset_x ?? 0.0
+                params.offset_y = meta.offset_y ?? el?.metadata?.offset_y ?? 0.0
+              } else if (ktype === 'scalar-multiply') {
+                params.factor =
+                  meta.factor ??
+                  meta.multiplier ??
+                  el?.metadata?.factor ??
+                  el?.metadata?.multiplier ??
+                  1.0
+              } else if (ktype === 'resize') {
+                params.scale_x = meta.scale_x ?? el?.metadata?.scale_x ?? 1.0
+                params.scale_y = meta.scale_y ?? el?.metadata?.scale_y ?? 1.0
+              } else if (ktype === 'binary-thresh') {
+                params.threshold = meta.threshold ?? el?.metadata?.threshold ?? 0.0
+              }
+
+              return {
+                address: ov.address,
+                kernel_type: ktype,
+                targetType,
+                indicesText: meta.indices ? meta.indices.join(', ') : '',
+                cluster: meta.cluster ?? 0,
+                params,
+                batchFields: ov.batchFields || {}
+              }
+            })
+            item.loadedNodeId = node?.id || g.id
           }
+          return item
+        })
+      }
+
+      if ($initiatorNodeStore && !isReplicated) {
+        const type = $initiatorNodeStore.type
+        const effectiveType = type === 'group' ? $initiatorNodeStore.member_type : type
+        if (effectiveType === 'audio') {
+          if (baseFieldsConfig.some((f) => f.name === 'init_audio')) {
+            initialData.init_audio = $initiatorNodeStore
+          }
+          if (baseFieldsConfig.some((f) => f.name === 'source_audio')) {
+            initialData.source_audio = $initiatorNodeStore
+          }
+        } else if (effectiveType === 'latent') {
+          if (baseFieldsConfig.some((f) => f.name === 'init_latent')) {
+            initialData.init_latent = $initiatorNodeStore
+          }
+        } else if (effectiveType === 'grating') {
+          selectedGratings = [
+            { id: -1, node: $initiatorNodeStore as unknown as NodeData, strength: 1.0 }
+          ]
         }
       }
 
@@ -331,14 +314,15 @@
     }
   })
 
-  // Load dynamic adapter fields when model is chosen in async operations
+  // Load dynamic adapter fields when model is chosen in generative operations
   $effect(() => {
     const op = $selectedOperation
     const modelNode = formData.model
     const cy = $cyInstanceStore
 
     untrack(() => {
-      if (op && op.execution_mode === 'async' && modelNode) {
+      const isGenerative = op && (op.category === 'generative' || op.name === 'generate' || op.name === 'invert')
+      if (isGenerative && modelNode && baseFields.length <= 1) {
         const isObj = typeof modelNode === 'object' && modelNode !== null
         const rawModelId = isObj
           ? String((modelNode as Record<string, unknown>).id || '')
@@ -423,6 +407,9 @@
 
         // Merge fields while keeping existing formData keys intact
         formData = { ...adapterData, ...formData }
+      } else if (baseFields.length > 1) {
+        // Self-contained operation (e.g. mutate) where form fields are defined directly on the operation
+        adapterFields = []
       } else {
         throw new Error(`Adapter "${adapterName}" does not support operation "${opName}".`)
       }
@@ -482,6 +469,45 @@
     const jobName = op.name ? op.name.toUpperCase() : 'Operation'
 
     const basePayload: Record<string, unknown> = { ...payload }
+
+    // Ensure initiator and context are attached to payload
+    if ($initiatorNodeStore) {
+      basePayload.initiator = $initiatorNodeStore
+      const initiatorId = $initiatorNodeStore.id
+      const effectiveType =
+        $initiatorNodeStore.type === 'group'
+          ? $initiatorNodeStore.member_type
+          : $initiatorNodeStore.type
+
+      if (effectiveType === 'audio') {
+        if (!basePayload.source_audio && !basePayload.source_audio_id) {
+          basePayload.source_audio = initiatorId
+          basePayload.source_audio_id = initiatorId
+        }
+        if (!basePayload.precursor_audio_id) {
+          basePayload.precursor_audio_id = initiatorId
+        }
+      } else if (effectiveType === 'bundle') {
+        if (!basePayload.parent_bundle_id) {
+          basePayload.parent_bundle_id = initiatorId
+        }
+      } else if (effectiveType === 'group') {
+        if (!basePayload.parent_group_id) {
+          basePayload.parent_group_id = initiatorId
+        }
+      }
+    }
+
+    if ($contextStore) {
+      if ($contextStore.model_id && !basePayload.model && !basePayload.model_id) {
+        basePayload.model_id = $contextStore.model_id
+      }
+      if ($contextStore.source_audio_id && !basePayload.source_audio && !basePayload.source_audio_id) {
+        basePayload.source_audio = $contextStore.source_audio_id
+        basePayload.source_audio_id = $contextStore.source_audio_id
+        basePayload.precursor_audio_id = $contextStore.source_audio_id
+      }
+    }
 
     // Map Gratings if the operation supports them
     if (op.name === 'generate') {
@@ -566,7 +592,7 @@
       }
 
       // Single run
-      runJob(jobName, basePayload, op.name, op.execution_mode)
+      runJob(jobName, basePayload, op.name)
       onClose()
       return
     }
@@ -691,7 +717,7 @@
 
         batchPayload.group_id = groupId
 
-        runJob(jobName, batchPayload, op.name, op.execution_mode)
+        runJob(jobName, batchPayload, op.name)
       })
 
       onClose()
@@ -706,8 +732,8 @@
     }
   }
 
-  function runJob(jobName: string, payload: unknown, opName: string, mode: 'sync' | 'async'): void {
-    startExecution(jobName, payload, opName, mode).catch((err: unknown) => {
+  function runJob(jobName: string, payload: unknown, opName: string): void {
+    startExecution(jobName, payload, opName).catch((err: unknown) => {
       console.error('Execution failed:', err)
       onError({
         title: 'Execution Failed',

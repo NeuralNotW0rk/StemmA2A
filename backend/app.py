@@ -22,6 +22,7 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 import threading
+import asyncio
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 import torch
@@ -73,6 +74,7 @@ from evolution.lora.lora_genome import (
     get_lora_mutation_strategy,
     get_lora_crossover_strategy,
 )
+from evolution.operations import get_evolution_operations
 from neutral_selection.representation.individual import Individual as NSIndividual
 import copy
 import uuid
@@ -1607,24 +1609,42 @@ def get_sync_operations():
 
 @app.route("/operations", methods=["GET"])
 async def get_all_operations():
-    """Returns a unified list of both Synchronous and Asynchronous operations."""
+    """Returns a unified list of operations across DSP, Evolution, and Generative Engine."""
     try:
         operations = []
+
+        # 1. Local DSP Operations (immediate)
         for op in sync_registry.get_all():
-            op_dict = op.to_dict()
-            op_dict["execution_mode"] = "sync"
-            operations.append(op_dict)
-            
+            operations.append(op.to_dict())
+
+        # 2. Local Evolutionary Operations (queued)
+        for op in get_evolution_operations():
+            operations.append(dict(op))
+
+        # 3. Neural Engine Generative Operations (queued)
         if engine_provider is not None:
             engine = engine_provider.get_engine()
             if engine is not None:
                 async_ops = await engine.get_supported_operations()
                 for op in async_ops:
                     op_dict = dict(op)
-                    op_dict["execution_mode"] = "async"
+                    if "category" not in op_dict:
+                        op_dict["category"] = "generative"
+                    if "execution" not in op_dict:
+                        op_dict["execution"] = "queued"
+                    if "execution_mode" not in op_dict:
+                        op_dict["execution_mode"] = "async"
                     operations.append(op_dict)
-                    
-        return jsonify({"operations": operations, "success": True}), 200
+
+        # Deduplicate by operation name, preserving local priority
+        seen = set()
+        deduped_operations = []
+        for op in operations:
+            if op["name"] not in seen:
+                seen.add(op["name"])
+                deduped_operations.append(op)
+
+        return jsonify({"operations": deduped_operations, "success": True}), 200
     except Exception as e:
         print(f"Error getting operations: {e}")
         import traceback
@@ -1635,26 +1655,29 @@ async def get_all_operations():
 async def execute_operation():
     """
     Unified Operation Dispatcher Endpoint.
-    Routes operations to either the synchronous registry or the async Engine.
+    Auto-dispatches operations based on operation identity and registry membership.
     """
     if param_graph is None:
         return jsonify({"error": "No project loaded"}), 400
         
     try:
-        payload = request.get_json()
-        
-        # Map legacy 'type' payloads for backward compatibility, preferring 'execution_mode'
-        legacy_type = payload.get("type")
-        mode = payload.get("execution_mode", "sync")
-        if legacy_type == "dsp": mode = "sync"
-        elif legacy_type == "ai": mode = "async"
-        
-        if mode == "sync":
+        payload = request.get_json() or {}
+        operation = payload.get("operation")
+        if not operation:
+            return jsonify({"error": "'operation' is required"}), 400
+
+        # 1. DSP / Immediate Synchronous Operations
+        if sync_registry.has(operation):
             return _dispatch_sync_operation(payload)
-        elif mode == "async":
-            return await _dispatch_async_operation(payload)
-        else:
-            return jsonify({"error": f"Unknown execution mode: {mode}"}), 400
+
+        # 2. Evolutionary Operations
+        if operation == "mutate":
+            return await _dispatch_mutate_operation(payload)
+        elif operation == "reproduce":
+            return await _dispatch_reproduce_operation(payload)
+
+        # 3. Generative Engine Operations
+        return await _dispatch_async_operation(payload)
             
     except Exception as e:
         traceback.print_exc()
@@ -1788,7 +1811,7 @@ def _dispatch_sync_operation(data):
             "status": "completed"
         }
         
-        if req_batch_id:
+        if req_group_id:
             response_data["artifact"] = final_artifacts[0].to_dict()
             response_data["node_id"] = final_artifacts[0].id
             if collection_dict:
@@ -1810,12 +1833,254 @@ def _dispatch_sync_operation(data):
         traceback.print_exc()
         return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
+async def _dispatch_mutate_operation(data):
+    """
+    Handles the 'mutate' async operation dispatched via /execute_operation.
+    Initializes a mutant population from precursor audio and target model.
+    """
+    if param_graph is None or engine_provider is None:
+        return jsonify({"error": "No project loaded"}), 400
+
+    try:
+        params = data.get("params", {}) or {}
+        
+        # 1. Resolve precursor_audio_id
+        initiator = data.get("initiator") or params.get("initiator") or {}
+        initiator_id = initiator.get("id") if isinstance(initiator, dict) else (str(initiator).strip() if initiator else None)
+
+        precursor_val = (
+            data.get("precursor_audio_id")
+            or data.get("source_audio_id")
+            or data.get("source_audio")
+            or data.get("init_audio")
+            or data.get("node_id")
+            or params.get("precursor_audio_id")
+            or params.get("source_audio_id")
+            or params.get("source_audio")
+            or params.get("init_audio")
+            or initiator_id
+        )
+        if isinstance(precursor_val, dict):
+            precursor_audio_id = precursor_val.get("id")
+        else:
+            precursor_audio_id = str(precursor_val).strip() if precursor_val else None
+
+        if not precursor_audio_id:
+            return jsonify({"error": "Precursor audio is required for mutate operation."}), 400
+
+        precursor_audio = param_graph.get_element(precursor_audio_id)
+        if not precursor_audio:
+            return jsonify({"error": f"Precursor audio node '{precursor_audio_id}' not found."}), 400
+
+        # 2. Resolve model_id: extract from explicit param, precursor audio context, or graph lineage
+        model_val = data.get("model_id") or data.get("model") or params.get("model") or params.get("model_id")
+        if isinstance(model_val, dict):
+            model_id = model_val.get("id")
+        else:
+            model_id = str(model_val).strip() if model_val else None
+
+        if not model_id:
+            ctx = getattr(precursor_audio, "context", {}) or {}
+            model_id = ctx.get("model_id")
+
+        if not model_id:
+            # Inspect graph incomers for a Model element
+            incomers = param_graph.get_incomers(precursor_audio.id)
+            for inc in incomers:
+                if isinstance(inc, Model):
+                    model_id = inc.id
+                    break
+
+        if not model_id:
+            node_name = getattr(precursor_audio, "name", precursor_audio_id)
+            return jsonify({
+                "error": f"Precursor audio '{node_name}' has no associated generative model in its history and cannot be mutated."
+            }), 400
+
+        model_element = param_graph.get_element(model_id)
+        if not isinstance(model_element, Model):
+            return jsonify({"error": f"Associated model '{model_id}' was not found in the project graph."}), 400
+
+        population_size = int(data.get("population_size") or params.get("population_size") or 10)
+        lora_rank = int(data.get("lora_rank") or params.get("lora_rank") or 1)
+        lora_alpha = float(data.get("lora_alpha") or params.get("lora_alpha") or 1.0)
+        lora_noise = float(data.get("lora_noise") or params.get("lora_noise") or 1.0)
+        active_flip_prob = float(data.get("active_flip_prob") or params.get("active_flip_prob") or 0.5)
+
+        generation_context = copy.deepcopy(getattr(precursor_audio, "context", {}) or {})
+        generation_context["model_id"] = model_id
+
+        parent_job_id = data.get("job_id") or f"evolution_init_{uuid.uuid4().hex[:12]}"
+        local_jobs[parent_job_id] = {
+            "status": "pending",
+            "progress": None,
+            "result": None,
+            "error": None
+        }
+
+        # Build elements_input from linear layers if not supplied
+        elements_input = data.get("elements") or params.get("elements")
+        if not elements_input:
+            engine = engine_provider.get_engine()
+            layers = await engine.get_model_layers(model_element)
+            linear_layers = [l for l in layers if "Linear" in l.get("type", "")]
+            if not linear_layers:
+                return jsonify({"error": f"No compatible Linear layers found on model '{model_id}' for LoRA mutation."}), 400
+
+            elements_input = [
+                {
+                    "address": l["address"],
+                    "kernel_type": "lora",
+                    "params": {
+                        "rank": lora_rank,
+                        "alpha": lora_alpha,
+                        "in_features": l.get("in_features", 0) or 0,
+                        "out_features": l.get("out_features", 0) or 0,
+                        "kernel_size": None
+                    },
+                    "indices": [],
+                    "perform_clustering": False,
+                    "num_clusters": None,
+                    "cluster": None
+                }
+                for l in linear_layers
+            ]
+
+        # Launch background task
+        thread = threading.Thread(
+            target=lambda: asyncio.run(
+                _initialize_evolution_task(
+                    parent_job_id=parent_job_id,
+                    model_id=model_id,
+                    baseline_grating_id=None,
+                    precursor_audio_id=precursor_audio_id,
+                    population_size=population_size,
+                    lora_noise=lora_noise,
+                    active_flip_prob=active_flip_prob,
+                    generation_context=generation_context,
+                    elements_input=elements_input
+                )
+            )
+        )
+        thread.start()
+
+        return jsonify({
+            "success": True,
+            "job_id": parent_job_id,
+            "status": "pending",
+            "message": f"Mutation initialized for {precursor_audio_id}"
+        }), 202
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
+async def _dispatch_reproduce_operation(data):
+    """
+    Handles the 'reproduce' evolutionary operation dispatched via /execute_operation.
+    Breeds a new generation of individuals from parent bundle/group.
+    """
+    if param_graph is None:
+        return jsonify({"error": "No project loaded"}), 400
+
+    try:
+        params = data.get("params", {}) or {}
+        initiator = data.get("initiator") or params.get("initiator") or {}
+        initiator_id = initiator.get("id") if isinstance(initiator, dict) else (str(initiator).strip() if initiator else None)
+        initiator_type = initiator.get("type") if isinstance(initiator, dict) else None
+
+        parent_bundle_id = (
+            data.get("parent_bundle_id")
+            or params.get("parent_bundle_id")
+            or (initiator_id if initiator_type == "bundle" else None)
+        )
+        parent_group_id = (
+            data.get("parent_group_id")
+            or params.get("parent_group_id")
+            or (initiator_id if initiator_type == "group" else None)
+        )
+        parent_ids = data.get("parent_ids") or params.get("parent_ids")
+
+        # Resolve bundle from group members if group passed
+        if not parent_bundle_id and parent_group_id:
+            with graph_lock:
+                grp = param_graph.get_element(parent_group_id)
+                if grp and hasattr(grp, "member_ids") and grp.member_ids:
+                    first_member = param_graph.get_element(grp.member_ids[0])
+                    if first_member:
+                        incomers = param_graph.get_incomers(first_member.id)
+                        for inc in incomers:
+                            if isinstance(inc, Bundle):
+                                parent_bundle_id = inc.id
+                                break
+
+        if not parent_ids and not parent_bundle_id:
+            return jsonify({"error": "Either parent_ids, parent_bundle_id, or parent_group_id must be provided."}), 400
+
+        offspring_size = data.get("offspring_size") or params.get("offspring_size")
+        if offspring_size is not None:
+            offspring_size = int(offspring_size)
+
+        crossover_rate = float(data.get("crossover_rate") or params.get("crossover_rate") or 0.8)
+        mutation_rate = float(data.get("mutation_rate") or params.get("mutation_rate") or 0.1)
+        elitism = int(data.get("elitism") or params.get("elitism") or 0)
+
+        selection_cfg = data.get("selection") or params.get("selection") or {"type": "tournament", "tournament_size": 2}
+        crossover_cfg = data.get("crossover") or params.get("crossover") or {"type": "random_n_point", "num_cut_points": 1, "prob": crossover_rate}
+        mutation_cfg = data.get("mutation") or params.get("mutation") or {"mutation_rate": mutation_rate}
+        generation_context = data.get("generation_context") or params.get("generation_context") or {}
+
+        parent_job_id = data.get("job_id") or f"evolution_reproduce_{uuid.uuid4().hex[:12]}"
+        local_jobs[parent_job_id] = {
+            "status": "pending",
+            "progress": None,
+            "result": None,
+            "error": None
+        }
+
+        thread = threading.Thread(
+            target=lambda: asyncio.run(
+                _reproduce_evolution_task(
+                    parent_job_id=parent_job_id,
+                    parent_ids=parent_ids,
+                    parent_bundle_id=parent_bundle_id,
+                    offspring_size=offspring_size,
+                    selection_cfg=selection_cfg,
+                    crossover_cfg=crossover_cfg,
+                    mutation_cfg=mutation_cfg,
+                    crossover_prob=crossover_rate,
+                    elitism=elitism,
+                    generation_context=generation_context
+                )
+            )
+        )
+        thread.start()
+
+        return jsonify({
+            "success": True,
+            "job_id": parent_job_id,
+            "status": "pending",
+            "message": "Evolution reproduction job initiated"
+        }), 202
+
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
 async def _dispatch_async_operation(data):
     """Routes an AI operation to the async Engine."""
     if engine_provider is None:
         return jsonify({"error": "Engine provider not initialized"}), 400
         
     try:
+        operation = data.get("operation")
+        if operation == "mutate":
+            return await _dispatch_mutate_operation(data)
+        elif operation == "reproduce":
+            return await _dispatch_reproduce_operation(data)
+
         model_id = data.get("model_id")
         job_id = data.get("job_id")
         operation = data.get("operation")

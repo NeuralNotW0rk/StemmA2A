@@ -97,6 +97,9 @@ class Engine(ABC):
                             supported_ops[op_name] = {
                                 "name": op_name,
                                 "description": description,
+                                "category": "generative",
+                                "execution": "queued",
+                                "execution_mode": "async",  # backward compatibility alias
                                 "initiator_types": set(initiator_types),
                                 "context_overrides": dict(context_overrides),
                                 "form_config": [
@@ -115,13 +118,15 @@ class Engine(ABC):
                         supported_ops[namespaced_name] = {
                             "name": namespaced_name,
                             "description": description,
+                            "category": "generative",
+                            "execution": "queued",
+                            "execution_mode": "async",
                             "initiator_types": list(initiator_types),
                             "context_overrides": dict(context_overrides),
                             "form_config": [
                                 {"name": "model", "type": "node", "label": "Model", "filter": {"type": "model"}, "required": True}
                             ]
                         }
-
         for op in supported_ops.values():
             if isinstance(op["initiator_types"], set):
                 op["initiator_types"] = list(op["initiator_types"])

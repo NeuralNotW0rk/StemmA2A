@@ -43,7 +43,6 @@
       newMembers: string[]
     ) => void | Promise<void>
     onselectOperation?: (op: any, initiatorNode: any, useContext?: boolean) => void
-    onevolveAudio?: (data: any) => void
     onrefresh?: () => void | Promise<void>
   }
 
@@ -67,7 +66,6 @@
     ontoggleFavorite,
     onchangeGroupMembership,
     onselectOperation,
-    onevolveAudio,
     onrefresh
   }: Props = $props()
 
@@ -131,6 +129,28 @@
     return targetNode.data('output_type') || null
   })
 
+  function hasAssociatedModel(node: any): boolean {
+    if (!node) return false
+    const data = typeof node.data === 'function' ? node.data() : node
+    if (!data) return false
+    if (data.context?.model_id || data.context?.model || data.base_model_id) {
+      return true
+    }
+    if (
+      typeof node.predecessors === 'function' &&
+      node.predecessors('node[type = "model"]').length > 0
+    ) {
+      return true
+    }
+    if (data.type === 'group' && Array.isArray(data.member_ids) && data.member_ids.length > 0 && cy) {
+      const firstMember = cy.getElementById(data.member_ids[0])
+      if (firstMember && firstMember.length > 0) {
+        return hasAssociatedModel(firstMember)
+      }
+    }
+    return false
+  }
+
   let filteredOperations = $derived.by(() => {
     const initiatorType = targetNode ? targetNode.data('type') : null
     let ops = operations
@@ -146,6 +166,14 @@
         })
       }
     }
+
+    // Filter out 'mutate' if target audio node does not have an associated generative model
+    if (targetNode && (initiatorType === 'audio' || targetNode.data('member_type') === 'audio')) {
+      if (!hasAssociatedModel(targetNode)) {
+        ops = ops.filter((op) => op.name !== 'mutate')
+      }
+    }
+
     if (!searchQuery) return ops
     const q = searchQuery.toLowerCase()
     return ops.filter((op) => {
@@ -685,17 +713,9 @@
         specificCommands.push(replicateCmd)
       }
 
-      // Inject pinned dynamic operations (e.g. Audio to Audio, Invert)
-      specificCommands.push(...getPinnedOperations(ele))
-
       specificCommands.push({
         content: 'Export',
         select: () => onexport?.({ names: [ele.data('name')] })
-      })
-
-      specificCommands.push({
-        content: 'Evolve',
-        select: () => onevolveAudio?.(ele.data())
       })
 
       specificCommands.push({
@@ -1651,8 +1671,13 @@
                 >
                   <div class="op-title-row">
                     <span class="op-name">{display.name.toUpperCase()}</span>
-                    <span class="op-badge" class:async={op.execution_mode === 'async'}>
-                      {op.execution_mode}
+                    <span
+                      class="op-badge"
+                      class:dsp={op.category === 'dsp' || (!op.category && op.execution_mode === 'sync')}
+                      class:evolution={op.category === 'evolution'}
+                      class:generative={op.category === 'generative' || (!op.category && op.execution_mode === 'async')}
+                    >
+                      {op.category || op.execution_mode || 'op'}
                     </span>
                   </div>
                   {#if display.description}
@@ -1826,12 +1851,25 @@
     background: rgba(255, 255, 255, 0.1);
     color: var(--color-text-muted, #aaa);
     text-transform: uppercase;
+    font-weight: 500;
   }
 
-  .op-badge.async {
+  .op-badge.dsp {
+    background: rgba(148, 163, 184, 0.15);
+    color: #cbd5e1;
+    border: 1px solid rgba(148, 163, 184, 0.25);
+  }
+
+  .op-badge.evolution {
+    background: rgba(168, 85, 247, 0.2);
+    color: #d8b4fe;
+    border: 1px solid rgba(168, 85, 247, 0.35);
+  }
+
+  .op-badge.generative {
     background: rgba(59, 130, 246, 0.2);
     color: #93c5fd;
-    border: 1px solid rgba(59, 130, 246, 0.3);
+    border: 1px solid rgba(59, 130, 246, 0.35);
   }
 
   .op-desc {

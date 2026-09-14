@@ -29,15 +29,15 @@ export async function startExecution(
   name: string, 
   payload: unknown, 
   operation: string = 'generate',
-  executionMode: 'sync' | 'async' = 'async'
+  executionMode?: 'sync' | 'async'
 ): Promise<void> {
   const job = addJob(name, payload, 'pending')
 
   try {
     const payloadWithId =
       typeof payload === 'object' && payload !== null
-        ? { ...payload, job_id: job.id, operation, execution_mode: executionMode }
-        : { job_id: job.id, payload, operation, execution_mode: executionMode }
+        ? { ...payload, job_id: job.id, operation, ...(executionMode ? { execution_mode: executionMode } : {}) }
+        : { job_id: job.id, payload, operation, ...(executionMode ? { execution_mode: executionMode } : {}) }
     
     const initData = await window.api.executeOperation(payloadWithId)
     

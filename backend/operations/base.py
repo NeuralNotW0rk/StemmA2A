@@ -31,14 +31,24 @@ class SyncOperation(ABC):
         return []
 
     @property
+    def category(self) -> str:
+        return "dsp"
+
+    @property
+    def execution(self) -> str:
+        return "immediate"
+
+    @property
     def context_overrides(self) -> dict:
-        """Contextual naming/description overrides based on initiator type."""
         return {}
-        
+
     def to_dict(self):
         return {
             "name": self.name,
             "description": self.description,
+            "category": self.category,
+            "execution": self.execution,
+            "execution_mode": "sync",  # backward compatibility alias
             "form_config": self.get_form_config(),
             "initiator_types": self.initiator_types,
             "context_overrides": self.context_overrides

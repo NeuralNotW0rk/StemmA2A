@@ -26,5 +26,11 @@ class SyncRegistry:
             raise ValueError(f"Sync operation '{name}' not found in registry. Available operations: {list(self._operations.keys())}")
         return self._operations[name]
         
+    def __contains__(self, name: str) -> bool:
+        return name in self._operations
+
+    def has(self, name: str) -> bool:
+        return name in self._operations
+
     def get_all(self) -> List[SyncOperation]:
         return list(self._operations.values())
