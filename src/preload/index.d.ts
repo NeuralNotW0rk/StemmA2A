@@ -27,6 +27,8 @@ interface API {
   registerGrating: (data: { name: string; checkpoint_path: string; base_model_id: string }) => Promise<any>
   getModelLayers: (modelId: string) => Promise<any>
   createGrating: (data: any) => Promise<any>
+  startEvolution: (data: unknown) => Promise<unknown>
+  expressIndividual: (data: { individual_id: string } | unknown) => Promise<unknown>
   openFile: (options?: { title?: string; filters?: { name: string; extensions: string[] }[] }) => Promise<string | null>
   getSharedModels: () => Promise<any>
   importModel: (data: any) => Promise<any>

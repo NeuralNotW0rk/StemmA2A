@@ -3,7 +3,7 @@
   /* eslint-disable @typescript-eslint/no-explicit-any */
   import { onMount, onDestroy } from 'svelte'
   import { SvelteSet } from 'svelte/reactivity'
-  import cytoscape, { type EventObject, type Singular } from 'cytoscape'
+  import cytoscape, { type EventObject } from 'cytoscape'
   import fcose from 'cytoscape-fcose'
   import cxtmenu from 'cytoscape-cxtmenu'
   import popper from 'cytoscape-popper'
@@ -142,7 +142,12 @@
     ) {
       return true
     }
-    if (data.type === 'group' && Array.isArray(data.member_ids) && data.member_ids.length > 0 && cy) {
+    if (
+      data.type === 'group' &&
+      Array.isArray(data.member_ids) &&
+      data.member_ids.length > 0 &&
+      cy
+    ) {
       const firstMember = cy.getElementById(data.member_ids[0])
       if (firstMember && firstMember.length > 0) {
         return hasAssociatedModel(firstMember)
@@ -327,8 +332,7 @@
     return undefined
   })
 
-  function openScorePopper(ele: Singular): void {
-    const node = ele as cytoscape.NodeSingular
+  function openScorePopper(node: cytoscape.NodeSingular): void {
     const currentFitness = node.data('fitness')
     activePropertyPopper = {
       targetNode: node,
@@ -347,8 +351,7 @@
     }
   }
 
-  function openRenamePopper(ele: Singular): void {
-    const node = ele as cytoscape.NodeSingular
+  function openRenamePopper(node: cytoscape.NodeSingular): void {
     const currentName = (node.data('name') || node.data('alias') || node.id()) as string
     activePropertyPopper = {
       targetNode: node,
@@ -576,14 +579,14 @@
       try {
         await window.api.expressIndividual({ individual_id: individualId })
         await onrefresh?.()
-      } catch (err: any) {
+      } catch (err: unknown) {
         console.error('Failed to express individual:', err)
       }
     }
 
     const PINNED_OPERATIONS = new Set(['generate', 'invert'])
 
-    const getPinnedOperations = (ele: Singular): Command[] => {
+    const getPinnedOperations = (ele: cytoscape.NodeSingular): Command[] => {
       if (!operations) return []
       const type = ele.data('type')
       return operations
@@ -604,7 +607,7 @@
         })
     }
 
-    const getReplicateCommand = (ele: Singular): Command | null => {
+    const getReplicateCommand = (ele: cytoscape.NodeSingular): Command | null => {
       const context = ele.data().context
       if (!context) return null
 
@@ -634,7 +637,7 @@
       }
     }
 
-    const elementCommands = (ele: Singular): Command[] => [
+    const elementCommands = (ele: cytoscape.NodeSingular | cytoscape.EdgeSingular): Command[] => [
       {
         content: 'Remove',
         select: () => {
@@ -648,7 +651,7 @@
       }
     ]
 
-    const nodeCommands = (ele: Singular): Command[] => [
+    const nodeCommands = (ele: cytoscape.NodeSingular): Command[] => [
       {
         content: 'Rename',
         select: () => openRenamePopper(ele)
@@ -656,7 +659,7 @@
       ...elementCommands(ele)
     ]
 
-    const modelNodeCommands = (ele: Singular): Command[] => [
+    const modelNodeCommands = (ele: cytoscape.NodeSingular): Command[] => [
       ...getPinnedOperations(ele),
       {
         content: 'Bend',
@@ -669,12 +672,12 @@
       ...nodeCommands(ele)
     ]
 
-    const gratingNodeCommands = (ele: Singular): Command[] => [
+    const gratingNodeCommands = (ele: cytoscape.NodeSingular): Command[] => [
       ...getPinnedOperations(ele),
       ...nodeCommands(ele)
     ]
 
-    const individualNodeCommands = (ele: Singular): Command[] => [
+    const individualNodeCommands = (ele: cytoscape.NodeSingular): Command[] => [
       {
         content: 'Express',
         select: () => handleExpressIndividual(ele.id())
@@ -686,7 +689,7 @@
       ...nodeCommands(ele)
     ]
 
-    const latentNodeCommands = (ele: Singular): Command[] => {
+    const latentNodeCommands = (ele: cytoscape.NodeSingular): Command[] => {
       const specificCommands: Command[] = []
       const replicateCmd = getReplicateCommand(ele)
       if (replicateCmd) {
@@ -696,7 +699,7 @@
       return [...specificCommands, ...nodeCommands(ele)]
     }
 
-    const audioNodeCommands = (ele: Singular): Command[] => {
+    const audioNodeCommands = (ele: cytoscape.NodeSingular): Command[] => {
       const specificCommands: Command[] = [
         {
           content: ele.data('favorite') ? 'Unfavorite' : 'Favorite',
@@ -727,7 +730,7 @@
       return [...specificCommands, ...nodeCommands(ele)]
     }
 
-    const imageNodeCommands = (ele: Singular): Command[] => {
+    const imageNodeCommands = (ele: cytoscape.NodeSingular): Command[] => {
       const specificCommands: Command[] = [
         {
           content: ele.data('favorite') ? 'Unfavorite' : 'Favorite',
@@ -755,7 +758,7 @@
       return [...specificCommands, ...nodeCommands(ele)]
     }
 
-    const externalNodeCommands = (ele: Singular): Command[] => [
+    const externalNodeCommands = (ele: cytoscape.NodeSingular): Command[] => [
       // Inherits from elementCommands (cannot be grouped)
       {
         content: 'Rescan',
@@ -764,7 +767,7 @@
       ...elementCommands(ele)
     ]
 
-    const pathNodeCommands = (ele: Singular): Command[] => [
+    const pathNodeCommands = (ele: cytoscape.NodeSingular): Command[] => [
       {
         content: 'Expand',
         select: () => onexpandPath?.(ele.id())
@@ -772,7 +775,7 @@
       ...nodeCommands(ele)
     ]
 
-    const groupNodeCommands = (ele: Singular): Command[] => [
+    const groupNodeCommands = (ele: cytoscape.NodeSingular): Command[] => [
       {
         content: 'Update Group',
         select: () => onstartGrouping?.(ele.data())
@@ -823,7 +826,7 @@
 
     cy.cxtmenu({
       selector: 'node',
-      commands: (ele: Singular): Command[] => {
+      commands: (ele: cytoscape.NodeSingular): Command[] => {
         switch (ele.data('type')) {
           case 'model':
             return modelNodeCommands(ele)
@@ -1382,7 +1385,7 @@
     }
 
     // Filter out baseline nodes and edges connected to them to keep the visual graph clean
-    const baselineNodeIds = new Set<string>()
+    const baselineNodeIds = new SvelteSet<string>()
     newElements = newElements.filter((ele: any): boolean => {
       if (ele.group === 'nodes' && ele.data.type === 'grating' && ele.data.context?.is_baseline) {
         baselineNodeIds.add(ele.data.id)
@@ -1673,9 +1676,11 @@
                     <span class="op-name">{display.name.toUpperCase()}</span>
                     <span
                       class="op-badge"
-                      class:dsp={op.category === 'dsp' || (!op.category && op.execution_mode === 'sync')}
+                      class:dsp={op.category === 'dsp' ||
+                        (!op.category && op.execution_mode === 'sync')}
                       class:evolution={op.category === 'evolution'}
-                      class:generative={op.category === 'generative' || (!op.category && op.execution_mode === 'async')}
+                      class:generative={op.category === 'generative' ||
+                        (!op.category && op.execution_mode === 'async')}
                     >
                       {op.category || op.execution_mode || 'op'}
                     </span>

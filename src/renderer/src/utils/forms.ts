@@ -70,7 +70,46 @@ export interface BundleData {
   [key: string]: unknown
 }
 
-export type NodeData = ModelData | AudioData | GroupData | BundleData
+export interface GratingElementMetadata {
+  indices?: number[]
+  cluster?: number | null
+  cluster_map?: unknown
+  radius?: number
+  scale_factor?: number
+  angle?: number
+  offset_x?: number
+  offset_y?: number
+  factor?: number
+  multiplier?: number
+  scale_x?: number
+  scale_y?: number
+  threshold?: number
+  [key: string]: unknown
+}
+
+export interface GratingElement {
+  address: string
+  kernel_type: string
+  metadata?: GratingElementMetadata
+  params?: Record<string, unknown>
+  indices?: number[]
+  perform_clustering?: boolean
+  num_clusters?: number | null
+  cluster?: number | null
+  [key: string]: unknown
+}
+
+export interface GratingData {
+  id: string
+  name?: string
+  type: 'grating'
+  elements?: GratingElement[]
+  base_model_id?: string
+  alias?: string
+  [key: string]: unknown
+}
+
+export type NodeData = ModelData | AudioData | GroupData | BundleData | GratingData
 
 export function initializeFormData(
   fields: FormConfig,

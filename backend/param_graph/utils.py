@@ -2,10 +2,12 @@
 import shutil
 from pathlib import Path
 from dataclasses import replace
-from typing import Dict, Any, Tuple, List, TYPE_CHECKING
+from typing import Dict, Any, Tuple, List, TYPE_CHECKING, TypeVar
 
 from .elements.base_elements import GraphElement
 from .registry import resolve_element
+
+T = TypeVar("T", bound=GraphElement)
 
 if TYPE_CHECKING:
     from .graph import ParameterGraph
@@ -55,8 +57,8 @@ def find_elements(d: dict) -> dict[str, GraphElement]:
 
 
 def save_artifact_asset(
-    artifact: GraphElement, destination_dir: Path, asset_name: str = "file"
-) -> GraphElement:
+    artifact: T, destination_dir: Path, asset_name: str = "file"
+) -> T:
     """
     Moves a specific asset within an artifact from its current temporary
     location to a permanent one.

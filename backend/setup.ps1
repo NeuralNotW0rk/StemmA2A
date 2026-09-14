@@ -37,8 +37,7 @@ else {
     Write-Host "Step 2: Virtual environment already exists."
 }
 
-# Define paths to venv executables
-$PipExe = Join-Path $VenvPath "Scripts/pip.exe"
+# Define path to venv python executable
 $PythonExe = Join-Path $VenvPath "Scripts/python.exe"
 
 # 3. Upgrade pip/wheel
@@ -162,10 +161,10 @@ if ($DiffracturePath) {
         Write-Host "Found Diffracture at $DiffracturePath. Installing in editable mode..."
         try {
             if ($CudaVersion) {
-                & $PythonExe -m pip install -e $DiffracturePath --extra-index-url $IndexUrl
+                & $PythonExe -m pip install -e $DiffracturePath --config-settings editable_mode=compat --extra-index-url $IndexUrl
             }
             else {
-                & $PythonExe -m pip install -e $DiffracturePath --extra-index-url "https://download.pytorch.org/whl/cpu"
+                & $PythonExe -m pip install -e $DiffracturePath --config-settings editable_mode=compat --extra-index-url "https://download.pytorch.org/whl/cpu"
             }
             if ($LASTEXITCODE -ne 0) {
                 throw "pip install failed with exit code $LASTEXITCODE"
@@ -197,10 +196,10 @@ if ($NeutralSelectionPath) {
         Write-Host "Found NeutralSelection at $NeutralSelectionPath. Installing in editable mode..."
         try {
             if ($CudaVersion) {
-                & $PythonExe -m pip install -e $NeutralSelectionPath --extra-index-url $IndexUrl
+                & $PythonExe -m pip install -e $NeutralSelectionPath --config-settings editable_mode=compat --extra-index-url $IndexUrl
             }
             else {
-                & $PythonExe -m pip install -e $NeutralSelectionPath --extra-index-url "https://download.pytorch.org/whl/cpu"
+                & $PythonExe -m pip install -e $NeutralSelectionPath --config-settings editable_mode=compat --extra-index-url "https://download.pytorch.org/whl/cpu"
             }
             if ($LASTEXITCODE -ne 0) {
                 throw "pip install failed with exit code $LASTEXITCODE"

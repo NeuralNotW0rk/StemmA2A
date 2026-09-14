@@ -39,7 +39,7 @@ from param_graph.elements.artifacts.audio_element import Audio
 from param_graph.elements.artifacts.image_element import Image
 from param_graph.elements.artifacts.grating_element import Grating
 from param_graph.elements.artifacts.latent_element import Latent
-from param_graph.elements.base_elements import Asset
+from param_graph.elements.base_elements import Asset, Artifact
 from param_graph.elements.collections.group_element import Group
 from param_graph.elements.artifacts.bundle_element import Bundle
 from param_graph.elements.collections.directory_element import Directory
@@ -1516,7 +1516,7 @@ async def get_job_status(job_id):
                 final_artifact = save_artifact_asset(temp_artifact, output_dir, asset_name="file")
                 
                 # Ensure context is populated for labelling, and merge job-level validated params (like model_id, operation, gratings)
-                if hasattr(final_artifact, 'context'):
+                if isinstance(final_artifact, Artifact):
                     current_context = final_artifact.context or {}
                     merged_context = {**job_context.get("validated_params", {}), **current_context}
                     final_artifact = replace(final_artifact, context=merged_context)

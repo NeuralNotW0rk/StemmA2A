@@ -1,9 +1,9 @@
 <script lang="ts">
   import { initiatorNodeStore, cyInstanceStore, type GraphElement } from '../../utils/stores'
-  import NodeSelectorList, { type NodeListItem } from '../NodeSelectorList.svelte'
+  import NodeSelectorList from '../NodeSelectorList.svelte'
   import type { NodeData, GroupData } from '../../utils/forms'
   import { GROUPING_CONFIG } from '../../utils/app-config'
-  import type { ErrorInfo } from '../../utils/types'
+  import type { ErrorInfo, NodeListItem } from '../../utils/types'
 
   let {
     initiatorNode = $initiatorNodeStore,

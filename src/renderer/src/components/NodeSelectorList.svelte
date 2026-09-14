@@ -4,14 +4,7 @@
   import NodeSelector from './NodeSelector.svelte'
   import { selectionStore } from '../utils/stores'
   import type { NodeData } from '../utils/forms'
-  import type { NodeFilter } from '../utils/types'
-
-  export interface NodeListItem {
-    id: number | string
-    node: NodeData | string | null
-    strength?: number
-    [key: string]: any
-  }
+  import type { NodeFilter, NodeListItem } from '../utils/types'
 
   let {
     title = 'Items',
@@ -40,7 +33,7 @@
     strengthStep?: number
     defaultStrength?: number
     onAdd?: () => void
-    itemExtra?: Snippet<[any, number]>
+    itemExtra?: Snippet<[NodeListItem, number]>
   }>()
 
   let nextId = $state(0)
@@ -200,7 +193,7 @@
     font-size: 0.85rem;
     color: var(--color-text-muted);
   }
-  .strength-control input[type="range"] {
+  .strength-control input[type='range'] {
     flex-grow: 1;
     accent-color: var(--color-primary);
   }
