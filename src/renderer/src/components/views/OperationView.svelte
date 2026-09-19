@@ -521,7 +521,15 @@
         if (!basePayload.parent_group_id) {
           basePayload.parent_group_id = initiatorId
         }
+      } else if (effectiveType === 'individual') {
+        if (!basePayload.parent_ids && !basePayload.parents) {
+          basePayload.parent_ids = [initiatorId]
+        }
       }
+    }
+
+    if (basePayload.parents && !basePayload.parent_ids) {
+      basePayload.parent_ids = basePayload.parents
     }
 
     if ($contextStore) {

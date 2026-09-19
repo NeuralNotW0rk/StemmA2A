@@ -2,7 +2,7 @@ import random
 import copy
 import json
 from dataclasses import dataclass
-from typing import Callable, Any, Union
+from typing import Callable, Any, Union, Optional
 from pathlib import Path
 
 import torch
@@ -300,24 +300,62 @@ def get_lora_mutation_strategy(
     )
 
 
-def get_lora_crossover_strategy(num_cut_points: int = 1) -> Any:
+def lora_gene_blend_crossover_fn(gene_a: Any, gene_b: Any, blend_factor: float = 0.5) -> Any:
     """
-    Returns a RandomNPointCrossover strategy for LoRAGenome instances.
+    Blends two PerturbationGene instances by interpolating their lora_down and lora_up weights.
     """
-    from neutral_selection.variation.recombination import RandomNPointCrossover
+    if not isinstance(gene_a, PerturbationGene) or not isinstance(gene_b, PerturbationGene):
+        return gene_a if random.random() < 0.5 else gene_b
 
-    return RandomNPointCrossover(num_cut_points=num_cut_points)
+    alpha = float(blend_factor)
+    blended_down = (1.0 - alpha) * gene_a.lora_down + alpha * gene_b.lora_down
+    blended_up = (1.0 - alpha) * gene_a.lora_up + alpha * gene_b.lora_up
+    active = gene_a.active if random.random() < (1.0 - alpha) else gene_b.active
 
-
-# Register representation with global registry
-try:
-    from evolution.registry import register_representation
-    register_representation(
-        "lora",
-        LoRAGenome,
-        express_to_grating,
-        get_lora_mutation_strategy,
-        get_lora_crossover_strategy
+    return PerturbationGene(
+        address=gene_a.address,
+        lora_down=blended_down,
+        lora_up=blended_up,
+        active=active
     )
-except ImportError:
-    pass
+
+
+def get_lora_crossover_strategy(
+    strategy_type: str = "two_point",
+    num_cut_points: int = 1,
+    swap_prob: float = 0.5,
+    blend_factor: float = 0.5,
+    max_depth: Optional[int] = None,
+) -> Any:
+    """
+    Returns a RecombinationStrategy tailored for LoRAGenome instances.
+    Supports:
+      - "two_point": Two-point multi-scale crossover across the flattened hierarchy (Default).
+      - "one_point": One-point multi-scale crossover across the flattened hierarchy.
+      - "random_n_point" / "n_point": Random N-point multi-scale crossover across the flattened hierarchy.
+      - "layer_crossover": Wholesale layer splicing (constrained to max_depth=1).
+      - "uniform_crossover" / "uniform": Independent per-element coin-flip swap.
+      - "blend_crossover" / "blend" / "arithmetic": Continuous tensor weight blending.
+    """
+    from neutral_selection.variation.recombination import (
+        OnePointCrossover,
+        TwoPointCrossover,
+        RandomNPointCrossover,
+        UniformCrossover,
+        ElementwiseCrossover,
+    )
+
+    s_type = str(strategy_type).lower().strip()
+    if s_type in ("two_point", "2point", "2_point"):
+        return TwoPointCrossover(max_depth=max_depth)
+    elif s_type in ("one_point", "1point", "1_point"):
+        return OnePointCrossover(max_depth=max_depth)
+    elif s_type in ("layer_crossover", "wholesale_layer"):
+        return RandomNPointCrossover(num_cut_points=num_cut_points, max_depth=1)
+    elif s_type in ("blend_crossover", "blend", "arithmetic", "elementwise"):
+        return ElementwiseCrossover(blend_factor=blend_factor, crossover_fn=lora_gene_blend_crossover_fn)
+    elif s_type in ("uniform_crossover", "uniform"):
+        return UniformCrossover(swap_prob=swap_prob, max_depth=max_depth)
+    else:
+        return RandomNPointCrossover(num_cut_points=num_cut_points, max_depth=max_depth)
+

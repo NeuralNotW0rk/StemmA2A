@@ -7,12 +7,14 @@ export interface FormFieldOption {
 
 export interface FormField {
   name: string;
-  label:string;
-  type: 'string' | 'number' | 'boolean' | 'textarea' | 'select' | 'file' | 'directory' | 'node';
+  label: string;
+  type: 'string' | 'number' | 'boolean' | 'textarea' | 'select' | 'file' | 'directory' | 'node' | 'node-list';
   defaultValue?: any;
   filter?: NodeFilter;
   options?: FormFieldOption[];
   placeholder?: string;
+  minItems?: number;
+  itemLabel?: string;
   validation?: {
     required?: boolean;
     min?: number;
@@ -157,6 +159,27 @@ export function initializeFormData(
       ) {
         formData[field.name] = initiatorNode
       }
+    }
+    if (formData[field.name] === undefined && field.type === 'node-list') {
+      const listItems: Array<{ id: number; node: any }> = []
+      if (initiatorNode) {
+        if (Array.isArray(initiatorNode.selectedNodes) && initiatorNode.selectedNodes.length > 0) {
+          initiatorNode.selectedNodes.forEach((n: any, idx: number) => {
+            if (!field.filter || !field.filter.type || n.type === field.filter.type) {
+              listItems.push({ id: idx, node: n })
+            }
+          })
+        } else if (initiatorNode.type === 'group' && Array.isArray(initiatorNode.members) && initiatorNode.members.length > 0) {
+          initiatorNode.members.forEach((n: any, idx: number) => {
+            if (!field.filter || !field.filter.type || n.type === field.filter.type) {
+              listItems.push({ id: idx, node: n })
+            }
+          })
+        } else if (!field.filter || !field.filter.type || initiatorNode.type === field.filter.type) {
+          listItems.push({ id: 0, node: initiatorNode })
+        }
+      }
+      formData[field.name] = listItems
     }
     if (formData[field.name] === undefined) {
       let val = field.defaultValue;

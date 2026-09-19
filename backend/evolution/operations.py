@@ -8,7 +8,6 @@ def get_evolution_operations() -> list[dict]:
             "description": "Initialize a mutated population from this artifact",
             "category": "evolution",
             "execution": "queued",
-            "execution_mode": "async",  # backward compatibility alias
             "initiator_types": ["audio"],
             "context_overrides": {},
             "form_config": [
@@ -69,22 +68,53 @@ def get_evolution_operations() -> list[dict]:
             ]
         },
         {
-            "name": "reproduce",
-            "description": "Breed next generation of offspring from this population",
+            "name": "recombine",
+            "description": "Recombine selected individuals into a new generation of variants",
             "category": "evolution",
             "execution": "queued",
-            "execution_mode": "async",  # backward compatibility alias
-            "initiator_types": ["bundle", "group"],
+            "initiator_types": ["group", "individual", "bundle"],
             "context_overrides": {},
             "form_config": [
                 {
-                    "name": "crossover_rate",
-                    "type": "float",
-                    "label": "Crossover Rate",
-                    "defaultValue": 0.8,
-                    "min": 0.0,
-                    "max": 1.0,
-                    "step": 0.05,
+                    "name": "parents",
+                    "type": "node-list",
+                    "label": "Parent Individuals",
+                    "filter": {"type": "individual"},
+                    "required": True,
+                    "minItems": 1
+                },
+                {
+                    "name": "offspring_size",
+                    "type": "integer",
+                    "label": "Offspring Count (N)",
+                    "defaultValue": 10,
+                    "min": 1,
+                    "max": 100,
+                    "allowSequence": False
+                },
+                {
+                    "name": "crossover_type",
+                    "type": "select",
+                    "label": "Recombination Strategy",
+                    "defaultValue": "two_point",
+                    "options": [
+                        {"label": "Two-Point Crossover (Multi-Tier Default)", "value": "two_point"},
+                        {"label": "One-Point Crossover (Multi-Tier)", "value": "one_point"},
+                        {"label": "Wholesale Layer Splicing (Depth 1)", "value": "layer_crossover"},
+                        {"label": "Uniform Element Swap", "value": "uniform_crossover"},
+                        {"label": "Continuous Weight Blend (BLX)", "value": "blend_crossover"}
+                    ],
+                    "allowSequence": False
+                },
+                {
+                    "name": "selection_type",
+                    "type": "select",
+                    "label": "Selection Strategy",
+                    "defaultValue": "tournament",
+                    "options": [
+                        {"label": "Tournament (Fitness-Biased)", "value": "tournament"},
+                        {"label": "Uniform Random", "value": "uniform"}
+                    ],
                     "allowSequence": False
                 },
                 {
@@ -95,15 +125,6 @@ def get_evolution_operations() -> list[dict]:
                     "min": 0.0,
                     "max": 1.0,
                     "step": 0.01,
-                    "allowSequence": False
-                },
-                {
-                    "name": "elitism",
-                    "type": "integer",
-                    "label": "Elitism Count",
-                    "defaultValue": 1,
-                    "min": 0,
-                    "max": 10,
                     "allowSequence": False
                 }
             ]

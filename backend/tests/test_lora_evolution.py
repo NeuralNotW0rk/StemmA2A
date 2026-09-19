@@ -92,8 +92,8 @@ class TestLoRAEvolution(unittest.TestCase):
         genome_p1 = LoRAGenome(genes_p1)
         genome_p2 = LoRAGenome(genes_p2)
 
-        # Crossover at cut point 2 (index 2)
-        crossover = RandomNPointCrossover(num_cut_points=1)
+        # Wholesale layer crossover at cut point 2 (after layer 2)
+        crossover = RandomNPointCrossover(num_cut_points=1, max_depth=1)
         # Mock random sample to return [2]
         import unittest.mock as mock
         with mock.patch("random.sample", return_value=[2]):
@@ -110,6 +110,63 @@ class TestLoRAEvolution(unittest.TestCase):
         self.assertEqual(child_b[1].lora_up.item(), 20.0)
         self.assertEqual(child_b[2].lora_up.item(), 3.0)
         self.assertEqual(child_b[3].lora_up.item(), 4.0)
+
+    def test_perturbation_gene_hierarchical_protocol(self) -> None:
+        """Verify PerturbationGene works seamlessly with flatten_hierarchy and unflatten_hierarchy."""
+        from neutral_selection.representation.hierarchy import flatten_hierarchy, unflatten_hierarchy
+
+        gene = PerturbationGene(
+            "layer_proto",
+            torch.tensor([[1.0, 2.0], [3.0, 4.0]]),
+            torch.tensor([[5.0, 6.0], [7.0, 8.0]]),
+            True
+        )
+
+        leaves, treedef = flatten_hierarchy(gene)
+        self.assertEqual(leaves, [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0])
+        self.assertEqual(treedef.total_leaves, 8)
+
+        # Reconstruct with mutated leaves
+        mutated_leaves = [10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0]
+        reconstructed = unflatten_hierarchy(mutated_leaves, treedef)
+
+        self.assertIsInstance(reconstructed, PerturbationGene)
+        self.assertEqual(reconstructed.address, "layer_proto")
+        self.assertTrue(reconstructed.active)
+        self.assertTrue(torch.equal(reconstructed.lora_down, torch.tensor([[10.0, 20.0], [30.0, 40.0]])))
+        self.assertTrue(torch.equal(reconstructed.lora_up, torch.tensor([[50.0, 60.0], [70.0, 80.0]])))
+
+    def test_hierarchical_lora_crossover(self) -> None:
+        """Verify default HierarchicalCrossover splices LoRAGenome down into tensor features."""
+        from neutral_selection.variation.recombination import HierarchicalCrossover
+
+        # Layer 1: down (1, 2), up (2, 1) -> 4 elements
+        # Layer 2: down (1, 2), up (2, 1) -> 4 elements
+        # Total flat strand: 8 elements
+        p1 = LoRAGenome([
+            PerturbationGene("l1", torch.full((1, 2), 1.0), torch.full((2, 1), 1.0), True),
+            PerturbationGene("l2", torch.full((1, 2), 2.0), torch.full((2, 1), 2.0), True),
+        ])
+        p2 = LoRAGenome([
+            PerturbationGene("l1", torch.full((1, 2), 10.0), torch.full((2, 1), 10.0), False),
+            PerturbationGene("l2", torch.full((1, 2), 20.0), torch.full((2, 1), 20.0), False),
+        ])
+
+        # Cut at linear index 2 (inside Layer 1's down tensor!)
+        crossover = HierarchicalCrossover(cut_points=[2])
+        child_a, child_b = crossover(p1, p2)
+
+        self.assertIsInstance(child_a, LoRAGenome)
+        self.assertIsInstance(child_b, LoRAGenome)
+        self.assertEqual(len(child_a), 2)
+        self.assertEqual(len(child_b), 2)
+
+        # Child A: l1.down has [1.0, 1.0] from P1[:2], and l1.up has [10.0, 10.0] from P2[2:4]
+        self.assertTrue(torch.equal(child_a[0].lora_down, torch.tensor([[1.0, 1.0]])))
+        self.assertTrue(torch.equal(child_a[0].lora_up, torch.tensor([[10.0], [10.0]])))
+        # Child A: l2 is 100% from P2
+        self.assertTrue(torch.equal(child_a[1].lora_down, torch.full((1, 2), 20.0)))
+        self.assertTrue(torch.equal(child_a[1].lora_up, torch.full((2, 1), 20.0)))
 
     def test_mutation(self) -> None:
         """Verify gene mutation perturbs weights and active status."""

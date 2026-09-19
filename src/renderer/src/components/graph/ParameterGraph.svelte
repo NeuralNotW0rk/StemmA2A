@@ -584,7 +584,40 @@
       }
     }
 
-    const PINNED_OPERATIONS = new Set(['generate', 'invert'])
+    const PINNED_OPERATIONS = new Set(['generate', 'invert', 'recombine'])
+
+    const getSelectedIndividuals = (clickedEle?: cytoscape.NodeSingular): any[] => {
+      const selectedEles = cy ? cy.$(':selected') : null
+      const candidates: any[] = []
+      if (selectedEles && selectedEles.length > 0 && (!clickedEle || selectedEles.contains(clickedEle))) {
+        selectedEles.forEach((e) => {
+          const d = e.data()
+          if (d.type === 'individual') {
+            candidates.push(d)
+          } else if (d.type === 'group' && Array.isArray(d.member_ids)) {
+            d.member_ids.forEach((mid: string) => {
+              const m = cy?.getElementById(mid)
+              if (m && m.length > 0 && m.data('type') === 'individual') {
+                candidates.push(m.data())
+              }
+            })
+          }
+        })
+      } else if (clickedEle) {
+        const d = clickedEle.data()
+        if (d.type === 'individual') {
+          candidates.push(d)
+        } else if (d.type === 'group' && Array.isArray(d.member_ids)) {
+          d.member_ids.forEach((mid: string) => {
+            const m = cy?.getElementById(mid)
+            if (m && m.length > 0 && m.data('type') === 'individual') {
+              candidates.push(m.data())
+            }
+          })
+        }
+      }
+      return Array.from(new Map(candidates.map((item) => [item.id, item])).values())
+    }
 
     const getPinnedOperations = (ele: cytoscape.NodeSingular): Command[] => {
       if (!operations) return []
@@ -601,7 +634,16 @@
           return {
             content: toTitleCase(display.name),
             select: () => {
-              onselectOperation?.(op, ele.data())
+              if (op.name === 'recombine') {
+                const individuals = getSelectedIndividuals(ele)
+                const initiatorData = {
+                  ...ele.data(),
+                  selectedNodes: individuals.length > 0 ? individuals : [ele.data()]
+                }
+                onselectOperation?.(op, initiatorData)
+              } else {
+                onselectOperation?.(op, ele.data())
+              }
             }
           }
         })
@@ -685,6 +727,11 @@
       {
         content: 'Score',
         select: () => openScorePopper(ele)
+      },
+      ...getPinnedOperations(ele),
+      {
+        content: 'Operations...',
+        select: () => openOperationsMenu(ele)
       },
       ...nodeCommands(ele)
     ]
@@ -776,6 +823,7 @@
     ]
 
     const groupNodeCommands = (ele: cytoscape.NodeSingular): Command[] => [
+      ...getPinnedOperations(ele),
       {
         content: 'Update Group',
         select: () => onstartGrouping?.(ele.data())

@@ -61,7 +61,7 @@ from diffracture.topology.grating import Grating as DiffractureGrating
 from param_graph.elements.artifacts.individual_element import Individual
 from param_graph.elements.artifacts.bundle_element import Bundle
 from param_graph.elements.collections.group_element import Group
-from evolution.registry import get_genome_class, get_expression_function
+
 from evolution.reproduction import (
     breed_offspring,
     build_selection_strategy,
@@ -1024,10 +1024,11 @@ async def _initialize_evolution_task(
         local_jobs[parent_job_id]["traceback"] = traceback.format_exc()
 
 
+@app.route("/recombine_evolution", methods=["POST"])
 @app.route("/reproduce_evolution", methods=["POST"])
-async def reproduce_evolution():
+async def recombine_evolution():
     """
-    Starts an evolutionary reproduction (breeding) run.
+    Starts an evolutionary recombination (breeding) run.
     Selects, crosses over, and mutates parent individuals to produce a new generation.
     """
     if param_graph is None:
@@ -1035,18 +1036,40 @@ async def reproduce_evolution():
 
     try:
         data = request.get_json() or {}
-        parent_ids = data.get("parent_ids")
+        parent_ids = data.get("parent_ids") or data.get("parents")
         parent_bundle_id = data.get("parent_bundle_id")
+        parent_group_id = data.get("parent_group_id")
         offspring_size = data.get("offspring_size")
-        selection_cfg = data.get("selection") or {"type": "tournament", "tournament_size": 2}
-        crossover_cfg = data.get("crossover") or {"type": "random_n_point", "num_cut_points": 1}
-        mutation_cfg = data.get("mutation") or {}
-        crossover_prob = float(data.get("crossover_prob", crossover_cfg.get("prob", 0.8)))
-        elitism = int(data.get("elitism", 0))
+        selection_input = data.get("selection") or data.get("selection_type") or "tournament"
+        if isinstance(selection_input, str):
+            selection_cfg = {"type": selection_input, "tournament_size": 2}
+        else:
+            selection_cfg = selection_input
+
+        crossover_input = data.get("crossover") or data.get("crossover_type") or "hierarchical"
+        if isinstance(crossover_input, str):
+            crossover_cfg = {"type": crossover_input, "num_cut_points": 1}
+        else:
+            crossover_cfg = crossover_input
+
+        mutation_rate = float(data.get("mutation_rate", 0.1))
+        mutation_cfg = data.get("mutation") or {"mutation_rate": mutation_rate}
+        crossover_prob = 1.0
+        elitism = 0
         generation_context = data.get("generation_context") or {}
 
+        # Resolve parent IDs from group if only group passed
+        if not parent_ids and parent_group_id:
+            with graph_lock:
+                grp = param_graph.get_element(parent_group_id)
+                if grp and hasattr(grp, "member_ids") and grp.member_ids:
+                    parent_ids = [
+                        mid for mid in grp.member_ids
+                        if isinstance(param_graph.get_element(mid), Individual)
+                    ]
+
         if not parent_ids and not parent_bundle_id:
-            return jsonify({"error": "Either parent_ids or parent_bundle_id must be provided."}), 400
+            return jsonify({"error": "Either parent_ids, parents, or parent_group_id must be provided."}), 400
 
         # Validate existence of parents or parent bundle early
         with graph_lock:
@@ -1065,7 +1088,7 @@ async def reproduce_evolution():
                     return jsonify({"error": f"Parent bundle '{parent_bundle_id}' has no members."}), 400
 
         # Generate unique local job ID
-        parent_job_id = f"evolution_reproduce_{uuid.uuid4().hex[:12]}"
+        parent_job_id = f"evolution_recombine_{uuid.uuid4().hex[:12]}"
         local_jobs[parent_job_id] = {
             "status": "pending",
             "progress": None,
@@ -1073,11 +1096,11 @@ async def reproduce_evolution():
             "error": None
         }
 
-        # Spawn background evolution reproduction task via background thread
+        # Spawn background evolution task via background thread
         import asyncio
         thread = threading.Thread(
             target=lambda: asyncio.run(
-                _reproduce_evolution_task(
+                _recombine_evolution_task(
                     parent_job_id=parent_job_id,
                     parent_ids=parent_ids,
                     parent_bundle_id=parent_bundle_id,
@@ -1095,17 +1118,20 @@ async def reproduce_evolution():
 
         return jsonify({
             "success": True,
-            "message": "Evolutionary reproduction started",
+            "message": "Evolutionary recombination started",
             "job_id": parent_job_id
         }), 202
 
     except Exception as e:
-        print(f"Failed to start reproduction: {e}")
+        print(f"Failed to start recombination: {e}")
         traceback.print_exc()
         return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
 
-async def _reproduce_evolution_task(
+reproduce_evolution = recombine_evolution
+
+
+async def _recombine_evolution_task(
     parent_job_id: str,
     parent_ids: list[str] | None,
     parent_bundle_id: str | None,
@@ -1198,21 +1224,25 @@ async def _reproduce_evolution_task(
             parent_ns_individuals: list[NSIndividual] = []
             parent_id_list: list[str] = []
             for p_node in parent_nodes:
-                repr_name = p_node.context.get("representation", "lora")
-                genome_cls = get_genome_class(repr_name)
-                genome = genome_cls.load(p_node.file.path)
+                genome = LoRAGenome.load(p_node.file.path)
                 ns_ind = NSIndividual(genotype=genome)
                 ns_ind.fitness = p_node.fitness
                 parent_ns_individuals.append(ns_ind)
                 parent_id_list.append(p_node.id)
 
             # 3. Build reproduction strategies
-            selection_strat = build_selection_strategy(selection_cfg)
-            crossover_strat = build_crossover_strategy(crossover_cfg)
+            if isinstance(selection_cfg, dict) and selection_cfg.get("type") in ("uniform", "random"):
+                from neutral_selection.variation.selection import RandomSelection
+                selection_strat = RandomSelection()
+            else:
+                selection_strat = build_selection_strategy(selection_cfg)
+
+            crossover_type_name = crossover_cfg.get("type", "hierarchical") if isinstance(crossover_cfg, dict) else str(crossover_cfg)
+            crossover_strat = get_lora_crossover_strategy(strategy_type=crossover_type_name)
 
             lora_noise = float(mutation_cfg.get("lora_noise", merged_context.get("lora_noise", 0.05)))
             active_flip_prob = float(mutation_cfg.get("active_flip_prob", merged_context.get("active_flip_prob", 0.05)))
-            mutation_rate = float(mutation_cfg.get("mutation_rate", 1.0))
+            mutation_rate = float(mutation_cfg.get("mutation_rate", 0.1))
             mutation_strat = get_lora_mutation_strategy(
                 lora_noise=lora_noise,
                 active_flip_prob=active_flip_prob,
@@ -1226,33 +1256,12 @@ async def _reproduce_evolution_task(
                 selection_strategy=selection_strat,
                 crossover_strategy=crossover_strat,
                 mutation_strategy=mutation_strat,
-                crossover_prob=crossover_prob,
-                elitism=elitism,
+                crossover_prob=1.0,
+                elitism=0,
                 parent_ids=parent_id_list,
             )
 
-            # 5. Create Generation Bundle & Group Nodes
-            gen_bundle_id = f"bundle_{uid_generator.from_string(str(uuid.uuid4()))}"
-            gen_bundle = Bundle(
-                id=gen_bundle_id,
-                name=f"Generation {next_generation} Bundle",
-                member_ids=[],
-                member_type='individual',
-                context={
-                    "generation": next_generation,
-                    "model_id": model_id,
-                    "baseline_grating_id": baseline_grating_id,
-                    "parent_ids": parent_id_list,
-                    "parent_bundle_id": parent_bundle_id,
-                    "selection_cfg": selection_cfg,
-                    "crossover_cfg": crossover_cfg,
-                    "mutation_cfg": mutation_cfg,
-                    "crossover_prob": crossover_prob,
-                    "elitism": elitism,
-                    "generation_context": merged_context
-                }
-            )
-
+            # 5. Create Generation Group Node (Visual Container)
             gen_group_id = f"group_{uid_generator.from_string(str(uuid.uuid4()))}"
             gen_group = Group(
                 id=gen_group_id,
@@ -1260,19 +1269,8 @@ async def _reproduce_evolution_task(
                 member_type='individual'
             )
 
-            param_graph.add_element(gen_bundle)
             param_graph.add_element(gen_group)
-            param_graph.update_element(gen_group.id, {"alias": f"Generation {next_generation}"})
-
-            # Link parent bundle to next generation bundle
-            if parent_bundle_id:
-                p_bundle = param_graph.get_element(parent_bundle_id)
-                if p_bundle:
-                    param_graph.link(p_bundle, gen_bundle, relation='next_generation')
-
-            if source_audio_element:
-                param_graph.link(source_audio_element, gen_bundle, relation='precursor')
-
+            param_graph.update_element(gen_group.id, {"alias": f"Recombination (Gen {next_generation})"})
             param_graph.save()
 
         job_ids = []
@@ -1299,6 +1297,19 @@ async def _reproduce_evolution_task(
             child_context = copy.deepcopy(merged_context)
             child_context["baseline_elements"] = baseline_elements
             child_context["baseline_file_path"] = str(baseline_file_path) if baseline_file_path else None
+            child_context["recombine_operation"] = {
+                "crossover_type": crossover_cfg.get("type", "hierarchical") if isinstance(crossover_cfg, dict) else str(crossover_cfg),
+                "selection_type": selection_cfg.get("type", "tournament") if isinstance(selection_cfg, dict) else str(selection_cfg),
+                "mutation_rate": mutation_rate,
+                "selection_cfg": selection_cfg,
+                "crossover_cfg": crossover_cfg,
+                "mutation_cfg": mutation_cfg,
+                "offspring_size": target_offspring_count,
+                "parent_ids": parent_id_list,
+                "model_id": model_id,
+                "baseline_grating_id": baseline_grating_id,
+                "generation": next_generation
+            }
             child_context["lineage"] = {
                 "parent_ids": record.lineage.parent_ids,
                 "crossover_applied": record.lineage.crossover_applied,
@@ -1321,16 +1332,13 @@ async def _reproduce_evolution_task(
                 param_graph.add_element(child_node)
                 param_graph.update_element(child_node.id, {"parent": gen_group_id})
                 param_graph.link(model_element, child_node, relation='binds_to')
-                param_graph.link(gen_bundle, child_node, relation='member')
 
                 for pid in record.lineage.parent_ids:
                     p_node_elem = param_graph.get_element(pid)
                     if p_node_elem:
                         param_graph.link(p_node_elem, child_node, relation='parent')
 
-                gen_bundle.member_ids.append(child_ind_id)
                 gen_group.member_ids.append(child_ind_id)
-                param_graph.update_element(gen_bundle.id, {"member_ids": gen_bundle.member_ids})
                 param_graph.update_element(gen_group.id, {"member_ids": gen_group.member_ids})
                 param_graph.save()
 
@@ -1367,16 +1375,15 @@ async def _reproduce_evolution_task(
         local_jobs[parent_job_id]["progress"] = {
             "value": target_offspring_count,
             "total": target_offspring_count,
-            "description": "Reproduction complete."
+            "description": "Recombination complete."
         }
         local_jobs[parent_job_id]["result"] = {
             "job_ids": job_ids,
             "individual_ids": individual_ids,
-            "bundle_id": gen_bundle_id,
             "group_id": gen_group_id,
             "generation": next_generation
         }
-        print(f"[_reproduce_evolution_task] Evolution reproduction completed successfully for job {parent_job_id}")
+        print(f"[_recombine_evolution_task] Evolution recombination completed successfully for job {parent_job_id}")
 
     except Exception as e:
         print(f"Failed in async evolution reproduction: {e}")
@@ -1385,6 +1392,9 @@ async def _reproduce_evolution_task(
         local_jobs[parent_job_id]["progress"] = None
         local_jobs[parent_job_id]["error"] = str(e)
         local_jobs[parent_job_id]["traceback"] = traceback.format_exc()
+
+
+_reproduce_evolution_task = _recombine_evolution_task
 
 
 @app.route("/express_individual", methods=["POST"])
@@ -1673,8 +1683,8 @@ async def execute_operation():
         # 2. Evolutionary Operations
         if operation == "mutate":
             return await _dispatch_mutate_operation(payload)
-        elif operation == "reproduce":
-            return await _dispatch_reproduce_operation(payload)
+        elif operation in ("recombine", "reproduce"):
+            return await _dispatch_recombine_operation(payload)
 
         # 3. Generative Engine Operations
         return await _dispatch_async_operation(payload)
@@ -1976,10 +1986,10 @@ async def _dispatch_mutate_operation(data):
         return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
 
-async def _dispatch_reproduce_operation(data):
+async def _dispatch_recombine_operation(data):
     """
-    Handles the 'reproduce' evolutionary operation dispatched via /execute_operation.
-    Breeds a new generation of individuals from parent bundle/group.
+    Handles the 'recombine' evolutionary operation dispatched via /execute_operation.
+    Breeds a new generation of individuals from parent individuals or group.
     """
     if param_graph is None:
         return jsonify({"error": "No project loaded"}), 400
@@ -2000,38 +2010,69 @@ async def _dispatch_reproduce_operation(data):
             or params.get("parent_group_id")
             or (initiator_id if initiator_type == "group" else None)
         )
-        parent_ids = data.get("parent_ids") or params.get("parent_ids")
+        parent_ids = (
+            data.get("parent_ids")
+            or params.get("parent_ids")
+            or data.get("parents")
+            or params.get("parents")
+        )
 
-        # Resolve bundle from group members if group passed
-        if not parent_bundle_id and parent_group_id:
+        # Resolve parent IDs from group if only group passed
+        if not parent_ids and parent_group_id:
             with graph_lock:
                 grp = param_graph.get_element(parent_group_id)
                 if grp and hasattr(grp, "member_ids") and grp.member_ids:
-                    first_member = param_graph.get_element(grp.member_ids[0])
-                    if first_member:
-                        incomers = param_graph.get_incomers(first_member.id)
-                        for inc in incomers:
-                            if isinstance(inc, Bundle):
-                                parent_bundle_id = inc.id
-                                break
+                    parent_ids = [
+                        mid for mid in grp.member_ids
+                        if isinstance(param_graph.get_element(mid), Individual)
+                    ]
+
+        # Resolve parent ID from single individual initiator
+        if not parent_ids and initiator_id and initiator_type == "individual":
+            parent_ids = [initiator_id]
 
         if not parent_ids and not parent_bundle_id:
-            return jsonify({"error": "Either parent_ids, parent_bundle_id, or parent_group_id must be provided."}), 400
+            return jsonify({"error": "Either parent_ids, parents, or parent_group_id must be provided."}), 400
 
         offspring_size = data.get("offspring_size") or params.get("offspring_size")
         if offspring_size is not None:
             offspring_size = int(offspring_size)
 
-        crossover_rate = float(data.get("crossover_rate") or params.get("crossover_rate") or 0.8)
-        mutation_rate = float(data.get("mutation_rate") or params.get("mutation_rate") or 0.1)
-        elitism = int(data.get("elitism") or params.get("elitism") or 0)
+        selection_input = (
+            data.get("selection")
+            or params.get("selection")
+            or data.get("selection_type")
+            or params.get("selection_type")
+            or "tournament"
+        )
+        if isinstance(selection_input, str):
+            selection_cfg = {"type": selection_input, "tournament_size": 2}
+        else:
+            selection_cfg = selection_input
 
-        selection_cfg = data.get("selection") or params.get("selection") or {"type": "tournament", "tournament_size": 2}
-        crossover_cfg = data.get("crossover") or params.get("crossover") or {"type": "random_n_point", "num_cut_points": 1, "prob": crossover_rate}
+        crossover_input = (
+            data.get("crossover")
+            or params.get("crossover")
+            or data.get("crossover_type")
+            or params.get("crossover_type")
+            or "hierarchical"
+        )
+        if isinstance(crossover_input, str):
+            crossover_cfg = {"type": crossover_input, "num_cut_points": 1}
+        else:
+            crossover_cfg = crossover_input
+
+        mutation_rate = float(
+            data.get("mutation_rate")
+            or params.get("mutation_rate")
+            or (data.get("mutation") or {}).get("mutation_rate")
+            or (params.get("mutation") or {}).get("mutation_rate")
+            or 0.1
+        )
         mutation_cfg = data.get("mutation") or params.get("mutation") or {"mutation_rate": mutation_rate}
         generation_context = data.get("generation_context") or params.get("generation_context") or {}
 
-        parent_job_id = data.get("job_id") or f"evolution_reproduce_{uuid.uuid4().hex[:12]}"
+        parent_job_id = data.get("job_id") or f"evolution_recombine_{uuid.uuid4().hex[:12]}"
         local_jobs[parent_job_id] = {
             "status": "pending",
             "progress": None,
@@ -2041,7 +2082,7 @@ async def _dispatch_reproduce_operation(data):
 
         thread = threading.Thread(
             target=lambda: asyncio.run(
-                _reproduce_evolution_task(
+                _recombine_evolution_task(
                     parent_job_id=parent_job_id,
                     parent_ids=parent_ids,
                     parent_bundle_id=parent_bundle_id,
@@ -2049,8 +2090,8 @@ async def _dispatch_reproduce_operation(data):
                     selection_cfg=selection_cfg,
                     crossover_cfg=crossover_cfg,
                     mutation_cfg=mutation_cfg,
-                    crossover_prob=crossover_rate,
-                    elitism=elitism,
+                    crossover_prob=1.0,
+                    elitism=0,
                     generation_context=generation_context
                 )
             )
@@ -2061,12 +2102,15 @@ async def _dispatch_reproduce_operation(data):
             "success": True,
             "job_id": parent_job_id,
             "status": "pending",
-            "message": "Evolution reproduction job initiated"
+            "message": "Evolution recombination job initiated"
         }), 202
 
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
+_dispatch_reproduce_operation = _dispatch_recombine_operation
 
 
 async def _dispatch_async_operation(data):
@@ -2078,8 +2122,8 @@ async def _dispatch_async_operation(data):
         operation = data.get("operation")
         if operation == "mutate":
             return await _dispatch_mutate_operation(data)
-        elif operation == "reproduce":
-            return await _dispatch_reproduce_operation(data)
+        elif operation in ("recombine", "reproduce"):
+            return await _dispatch_recombine_operation(data)
 
         model_id = data.get("model_id")
         job_id = data.get("job_id")
@@ -2627,8 +2671,8 @@ def update_group_labels(group_id: str):
             else:
                 diff_items.append(f"{cleaned}: {val}")
             
-        diff_label = "\n".join(diff_items) if diff_items else "Base"
-        if len(diff_label) > 40:
+        diff_label = "\n".join(diff_items) if diff_items else None
+        if diff_label and len(diff_label) > 40:
             diff_label = diff_label[:37] + "..."
             
         param_graph.update_element(member_id, {"alias": diff_label})

@@ -99,17 +99,15 @@
           <div class="member-selector">
             <NodeSelector {filter} bind:node={items[index].node} id={`${idPrefix}-${item.id}`} />
           </div>
-          {#if index >= minItems}
-            <button
-              type="button"
-              class="remove-button"
-              onclick={() => handleRemove(item.id)}
-              title="Remove item"
-              aria-label="Remove item"
-            >
-              ✕
-            </button>
-          {/if}
+          <button
+            type="button"
+            class="remove-button"
+            onclick={() => handleRemove(item.id)}
+            title="Remove item"
+            aria-label="Remove item"
+          >
+            ✕
+          </button>
         </div>
         {#if showStrengths && items[index].node}
           <div class="strength-control">

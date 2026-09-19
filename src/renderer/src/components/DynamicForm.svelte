@@ -1,6 +1,8 @@
 <script lang="ts">
   import type { FormConfig, FormField, ModelData, AudioData } from '../utils/forms'
+  import type { NodeListItem } from '../utils/types'
   import NodeSelector from './NodeSelector.svelte'
+  import NodeSelectorList from './NodeSelectorList.svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import { untrack } from 'svelte'
 
@@ -153,12 +155,18 @@
   })
 
   $effect(() => {
-    isFormValid = visibleFields.every(
-      (f) =>
+    isFormValid = visibleFields.every((f) => {
+      if (f.type === 'node-list') {
+        const items = formData[f.name] as any[]
+        const minCount = f.minItems ?? (f.validation?.required ? 1 : 0)
+        return Array.isArray(items) && items.length >= minCount
+      }
+      return (
         !f.validation?.required ||
         (formData[f.name] != null &&
           (typeof formData[f.name] !== 'string' || String(formData[f.name]).trim() !== ''))
-    )
+      )
+    })
   })
 
   export function getPayload(): Record<string, unknown> {
@@ -170,6 +178,14 @@
       if (value !== undefined && value !== null) {
         if (field.type === 'node' && typeof value === 'object' && value && 'id' in value) {
           payload[fieldName] = value.id
+        } else if (field.type === 'node-list' && Array.isArray(value)) {
+          payload[fieldName] = value
+            .map((item: any) =>
+              typeof item.node === 'object' && item.node && 'id' in item.node
+                ? item.node.id
+                : item.node
+            )
+            .filter(Boolean)
         } else {
           payload[fieldName] = value
         }
@@ -515,6 +531,15 @@
             }
           }}
           id={field.name}
+        />
+      {:else if field.type === 'node-list'}
+        <NodeSelectorList
+          title={field.label}
+          addButtonText={`Add ${field.itemLabel || 'Item'}`}
+          filter={field.filter}
+          bind:items={formData[field.name] as NodeListItem[]}
+          idPrefix={field.name}
+          minItems={field.minItems || 0}
         />
       {:else}
         <label for={field.name}>{field.label}</label>

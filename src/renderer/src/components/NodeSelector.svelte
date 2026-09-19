@@ -365,7 +365,9 @@
           {id}
           type="text"
           readonly
-          value={resolvedNode ? resolvedNode.alias || resolvedNode.name : 'None selected'}
+          value={resolvedNode
+            ? resolvedNode.name || resolvedNode.alias || resolvedNode.id
+            : 'None selected'}
           onclick={focusNode}
           class:has-node={!!resolvedNode}
           placeholder="Select a node..."
