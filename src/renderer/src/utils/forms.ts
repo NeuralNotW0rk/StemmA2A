@@ -165,17 +165,27 @@ export function initializeFormData(
       if (initiatorNode) {
         if (Array.isArray(initiatorNode.selectedNodes) && initiatorNode.selectedNodes.length > 0) {
           initiatorNode.selectedNodes.forEach((n: any, idx: number) => {
-            if (!field.filter || !field.filter.type || n.type === field.filter.type) {
-              listItems.push({ id: idx, node: n })
+            if (n && !n.source && !n.target) {
+              if (!field.filter || !field.filter.type || n.type === field.filter.type) {
+                listItems.push({ id: idx, node: n })
+              }
+            }
+          })
+        } else if (initiatorNode.type === 'group' && Array.isArray(initiatorNode.member_ids) && initiatorNode.member_ids.length > 0) {
+          initiatorNode.member_ids.forEach((mId: string, idx: number) => {
+            if (typeof mId === 'string' && !mId.includes('->')) {
+              listItems.push({ id: idx, node: mId })
             }
           })
         } else if (initiatorNode.type === 'group' && Array.isArray(initiatorNode.members) && initiatorNode.members.length > 0) {
           initiatorNode.members.forEach((n: any, idx: number) => {
-            if (!field.filter || !field.filter.type || n.type === field.filter.type) {
-              listItems.push({ id: idx, node: n })
+            if (n && !n.source && !n.target) {
+              if (!field.filter || !field.filter.type || n.type === field.filter.type) {
+                listItems.push({ id: idx, node: n })
+              }
             }
           })
-        } else if (!field.filter || !field.filter.type || initiatorNode.type === field.filter.type) {
+        } else if (!initiatorNode.source && !initiatorNode.target && (!field.filter || !field.filter.type || initiatorNode.type === field.filter.type)) {
           listItems.push({ id: 0, node: initiatorNode })
         }
       }

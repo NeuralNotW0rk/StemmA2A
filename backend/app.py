@@ -451,21 +451,25 @@ async def get_shared_models():
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
-@app.route("/register_model", methods=["POST"])
-async def import_model():
-    """Register a model by providing absolute paths to its files."""
-    if param_graph is None:
-        return jsonify({"error": "No project loaded"}), 400
-    
+async def _import_model_task(job_id: str, data: dict) -> None:
     try:
-        data = request.get_json()
+        local_jobs[job_id]["status"] = "running"
+        local_jobs[job_id]["progress"] = {
+            "value": 10,
+            "total": 100,
+            "description": "Validating model configuration..."
+        }
 
-        # Check if we are registering a pre-constructed model element (e.g., shared model)
+        # Check if registering pre-constructed model element (e.g. shared model)
         if "model_element" in data:
             model_dict = data["model_element"]
             model_artifact = resolve_element(model_dict)
-            
-            # Populate layers if missing
+
+            local_jobs[job_id]["progress"] = {
+                "value": 40,
+                "total": 100,
+                "description": "Extracting model layers..."
+            }
             if not getattr(model_artifact, 'layers', None):
                 try:
                     engine = engine_provider.get_engine()
@@ -474,80 +478,143 @@ async def import_model():
                 except Exception as layer_err:
                     print(f"Warning: Failed to extract layers for shared model during registration: {layer_err}")
 
+            local_jobs[job_id]["progress"] = {
+                "value": 80,
+                "total": 100,
+                "description": "Registering model in graph..."
+            }
             with graph_lock:
                 param_graph.add_element(model_artifact)
                 param_graph.save()
-            return jsonify({
+
+            local_jobs[job_id]["status"] = "completed"
+            local_jobs[job_id]["progress"] = {
+                "value": 100,
+                "total": 100,
+                "description": "Shared model registered successfully."
+            }
+            local_jobs[job_id]["result"] = {
                 "message": "Shared model registered successfully",
-                "success": True
-            })
+                "model": model_artifact.to_dict(),
+                "node_id": model_artifact.id,
+                "id": model_artifact.id
+            }
+            return
 
-        adapter_name = data.pop("adapter")
-
-
-        config_path = data.get("config_path")
-        checkpoint_path = data.get("checkpoint_path")
+        adapter_name = data.pop("adapter", None) or data.pop("model_type", None)
+        if not adapter_name:
+            raise ValueError("adapter (or model_type) is required")
+        config_path = data.get("config_path", "")
+        checkpoint_path = data.get("checkpoint_path", "")
 
         if adapter_name == "stylegan2":
-            if not checkpoint_path:
-                return jsonify({"error": "checkpoint_path is required"}), 400
             config_path = config_path or ""
         else:
             if not config_path or not checkpoint_path:
-                return jsonify({"error": "config_path and checkpoint_path are required"}), 400
+                raise ValueError("config_path and checkpoint_path are required")
 
-        # Paths are now expected to be absolute and valid on the server's filesystem.
-        if config_path:
-            data["config_path"] = str(Path(config_path))
-        else:
-            data["config_path"] = ""
-        data["checkpoint_path"] = str(Path(checkpoint_path))
+        data["config_path"] = str(Path(config_path)) if config_path else ""
+        data["checkpoint_path"] = str(Path(checkpoint_path)) if checkpoint_path else ""
 
+        local_jobs[job_id]["progress"] = {
+            "value": 30,
+            "total": 100,
+            "description": "Initializing model weights and adapter..."
+        }
         engine = engine_provider.get_engine()
         model_artifact = await engine.register_model(adapter_name, **data)
 
-        # Populate layers list on model registration
+        local_jobs[job_id]["progress"] = {
+            "value": 60,
+            "total": 100,
+            "description": "Extracting parameter layer topology..."
+        }
         try:
             layers = await engine.get_model_layers(model_artifact)
             model_artifact.layers = layers
         except Exception as layer_err:
             print(f"Warning: Failed to extract layers during model registration: {layer_err}")
 
+        local_jobs[job_id]["progress"] = {
+            "value": 85,
+            "total": 100,
+            "description": "Saving model to parameter graph..."
+        }
         with graph_lock:
             param_graph.add_element(model_artifact)
             param_graph.save()
-        
-        return jsonify({
-            "message": "Model registered successfully",
-            "success": True
-        })
-        
-    except Exception as e:
-        print(f"Failed to import model: {e}")
-        traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
 
-@app.route("/export_shared_model", methods=["POST"])
-async def export_shared_model():
-    """
-    Exports a registered model to a shared_models_dummy.json file
-    in the active project's root folder.
-    """
-    if param_graph is None:
+        local_jobs[job_id]["status"] = "completed"
+        local_jobs[job_id]["progress"] = {
+            "value": 100,
+            "total": 100,
+            "description": "Model registered successfully."
+        }
+        local_jobs[job_id]["result"] = {
+            "message": "Model registered successfully",
+            "model": model_artifact.to_dict(),
+            "node_id": model_artifact.id,
+            "id": model_artifact.id
+        }
+
+    except Exception as e:
+        print(f"Failed in async model registration: {e}")
+        traceback.print_exc()
+        local_jobs[job_id]["status"] = "failed"
+        local_jobs[job_id]["progress"] = None
+        local_jobs[job_id]["error"] = str(e)
+        local_jobs[job_id]["traceback"] = traceback.format_exc()
+
+
+@app.route("/register_model", methods=["POST"])
+async def import_model():
+    """Register a model asynchronously in a local background task."""
+    if param_graph is None or engine_provider is None:
         return jsonify({"error": "No project loaded"}), 400
 
     try:
-        data = request.get_json()
-        model_id = data.get("model_id")
-        if not model_id:
-            return jsonify({"error": "model_id is required"}), 400
+        data = request.get_json() or {}
+        job_id = f"import_model_{uuid.uuid4().hex[:12]}"
+        local_jobs[job_id] = {
+            "status": "pending",
+            "progress": {"value": 0, "total": 100, "description": "Starting model import..."},
+            "result": None,
+            "error": None,
+            "traceback": None,
+            "name": "Import Model"
+        }
+
+        threading.Thread(
+            target=lambda: asyncio.run(_import_model_task(job_id, data)),
+            daemon=True
+        ).start()
+
+        return jsonify({
+            "success": True,
+            "job_id": job_id,
+            "message": "Model import job started"
+        }), 202
+
+    except Exception as e:
+        print(f"Failed to initiate model import: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
+async def _export_shared_model_task(job_id: str, model_id: str) -> None:
+    try:
+        local_jobs[job_id]["status"] = "running"
+        local_jobs[job_id]["progress"] = {
+            "value": 10,
+            "total": 100,
+            "description": "Locating model in parameter graph..."
+        }
 
         with graph_lock:
             model = param_graph.get_element(model_id)
             if not model:
-                return jsonify({"error": f"Model '{model_id}' not found in parameter graph"}), 404
+                raise ValueError(f"Model '{model_id}' not found in parameter graph")
 
-            # Prepare the entry
             entry = {
                 "name": model.name,
                 "adapter": model.adapter,
@@ -558,14 +625,18 @@ async def export_shared_model():
                 "config": model.config
             }
 
-            # Optional encoder details for StableAudioModel
             encoder = getattr(model, "encoder", None)
             if encoder:
                 entry["encoder_uid"] = encoder.uid
                 entry["encoder_path"] = encoder.path
                 entry["encoder_size"] = encoder.size
 
-            # Load/Update shared_models_dummy.json in the project root
+            local_jobs[job_id]["progress"] = {
+                "value": 50,
+                "total": 100,
+                "description": "Updating shared models catalog..."
+            }
+
             dummy_config_path = Path(param_graph.root) / "shared_models_dummy.json"
             shared_models_list = []
             if dummy_config_path.exists():
@@ -578,7 +649,6 @@ async def export_shared_model():
                     print(f"Warning: Failed to read existing dummy config: {e}. Resetting.")
                     shared_models_list = []
 
-            # Check if this model checkpoint_uid already exists in the dummy list, if so replace it
             found = False
             for idx, existing in enumerate(shared_models_list):
                 existing_uid = existing.get("checkpoint_uid") or existing.get("checkpoint", {}).get("uid")
@@ -593,15 +663,65 @@ async def export_shared_model():
             with open(dummy_config_path, "w") as f:
                 json.dump(shared_models_list, f, indent=2)
 
-        return jsonify({
+        local_jobs[job_id]["status"] = "completed"
+        local_jobs[job_id]["progress"] = {
+            "value": 100,
+            "total": 100,
+            "description": "Shared model exported successfully."
+        }
+        local_jobs[job_id]["result"] = {
             "message": f"Successfully exported shared model entry to {dummy_config_path.name}",
-            "success": True
-        })
+            "config_path": str(dummy_config_path),
+            "node_id": model_id
+        }
 
     except Exception as e:
         print(f"Failed to export shared model: {e}")
         traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        local_jobs[job_id]["status"] = "failed"
+        local_jobs[job_id]["progress"] = None
+        local_jobs[job_id]["error"] = str(e)
+        local_jobs[job_id]["traceback"] = traceback.format_exc()
+
+
+@app.route("/export_shared_model", methods=["POST"])
+async def export_shared_model():
+    """Exports a registered model to shared_models_dummy.json as an async local job."""
+    if param_graph is None:
+        return jsonify({"error": "No project loaded"}), 400
+
+    try:
+        data = request.get_json() or {}
+        model_id = data.get("model_id")
+        if not model_id:
+            return jsonify({"error": "model_id is required"}), 400
+
+        job_id = f"export_model_{uuid.uuid4().hex[:12]}"
+        local_jobs[job_id] = {
+            "status": "pending",
+            "progress": {"value": 0, "total": 100, "description": "Starting shared model export..."},
+            "result": None,
+            "error": None,
+            "traceback": None,
+            "name": "Export Shared Model"
+        }
+
+        threading.Thread(
+            target=lambda: asyncio.run(_export_shared_model_task(job_id, model_id)),
+            daemon=True
+        ).start()
+
+        return jsonify({
+            "success": True,
+            "job_id": job_id,
+            "message": "Shared model export job started"
+        }), 202
+
+    except Exception as e:
+        print(f"Failed to start shared model export: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
 
 @app.route("/register_grating", methods=["POST"])
 def register_grating():
@@ -663,6 +783,7 @@ def register_grating():
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
+
 @app.route("/model/<model_id>/layers", methods=["GET"])
 async def get_model_layers(model_id):
     """Inspects a model node and returns a list of its candidate layers for bending."""
@@ -699,324 +820,547 @@ async def get_model_layers(model_id):
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
-@app.route("/create_grating", methods=["POST"])
-async def create_grating():
-    """Dynamically creates a new Bending Grating and registers it in the project graph."""
-    if param_graph is None or engine_provider is None:
-        return jsonify({"error": "No project loaded"}), 400
-        
+
+async def _create_grating_task(job_id: str, data: dict) -> None:
     try:
-        data = request.get_json()
+        local_jobs[job_id]["status"] = "running"
+        local_jobs[job_id]["progress"] = {
+            "value": 15,
+            "total": 100,
+            "description": "Validating model and layer configuration..."
+        }
+
         model_id = data.get("model_id")
         grating_name = data.get("name", "New Grating")
         elements_input = data.get("elements", [])
-        
+
         if not model_id or not elements_input:
-            return jsonify({"error": "model_id and elements list are required"}), 400
-            
+            raise ValueError("model_id and elements list are required")
+
         model_element = param_graph.get_element(model_id)
         if not isinstance(model_element, Model):
-            return jsonify({"error": f"Node '{model_id}' is not a valid model."}), 400
-            
+            raise ValueError(f"Node '{model_id}' is not a valid model.")
+
+        local_jobs[job_id]["progress"] = {
+            "value": 45,
+            "total": 100,
+            "description": "Constructing grating topology..."
+        }
         engine = engine_provider.get_engine()
         grating_artifact = await engine.create_grating(model_element, grating_name, elements_input)
         grating_artifact.context = data.get("context", {})
-        
+
+        local_jobs[job_id]["progress"] = {
+            "value": 85,
+            "total": 100,
+            "description": "Saving grating artifact to parameter graph..."
+        }
         with graph_lock:
             param_graph.add_element(grating_artifact)
             param_graph.link(model_element, grating_artifact, relation='binds_to')
             param_graph.save()
-            
+
+        local_jobs[job_id]["status"] = "completed"
+        local_jobs[job_id]["progress"] = {
+            "value": 100,
+            "total": 100,
+            "description": "Grating created successfully."
+        }
+        local_jobs[job_id]["result"] = {
+            "message": "Grating created successfully",
+            "grating": grating_artifact.to_dict(),
+            "node_id": grating_artifact.id,
+            "id": grating_artifact.id
+        }
+
+    except Exception as e:
+        print(f"Failed in async grating creation: {e}")
+        traceback.print_exc()
+        local_jobs[job_id]["status"] = "failed"
+        local_jobs[job_id]["progress"] = None
+        local_jobs[job_id]["error"] = str(e)
+        local_jobs[job_id]["traceback"] = traceback.format_exc()
+
+
+@app.route("/create_grating", methods=["POST"])
+async def create_grating():
+    """Dynamically creates a new Bending Grating as an async local background job."""
+    if param_graph is None or engine_provider is None:
+        return jsonify({"error": "No project loaded"}), 400
+
+    try:
+        data = request.get_json() or {}
+        job_id = f"create_grating_{uuid.uuid4().hex[:12]}"
+        local_jobs[job_id] = {
+            "status": "pending",
+            "progress": {"value": 0, "total": 100, "description": "Starting grating creation..."},
+            "result": None,
+            "error": None,
+            "traceback": None,
+            "name": "Create Grating"
+        }
+
+        threading.Thread(
+            target=lambda: asyncio.run(_create_grating_task(job_id, data)),
+            daemon=True
+        ).start()
+
         return jsonify({
             "success": True,
-            "message": "Grating created successfully",
-            "grating": grating_artifact.to_dict()
-        }), 200
-        
-    except Exception as e:
-        print(f"Failed to create grating: {e}")
-        traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+            "job_id": job_id,
+            "message": "Grating creation job started"
+        }), 202
 
-@app.route("/start_evolution", methods=["POST"])
-async def start_evolution():
+    except Exception as e:
+        print(f"Failed to start grating creation: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+@app.route("/wrap_individual", methods=["POST"])
+async def wrap_individual():
     """
-    Starts an evolution run. Generates mutated individual genomes from a baseline grating
-    and queues on-the-fly generation tasks for the initial population.
-    Creates a Population Bundle and a Population Group containing the population members,
-    linked directly from the precursor audio node.
+    Wraps a precursor artifact (such as an Audio node) into a baseline Individual node
+    with generation 0 and zero/baseline LoRA weights, linking it to its base model and precursor.
     """
     if param_graph is None or engine_provider is None:
         return jsonify({"error": "No project loaded"}), 400
 
     try:
         data = request.get_json() or {}
-        model_id = data.get("model_id")
-        baseline_grating_id = data.get("baseline_grating_id")
-        precursor_audio_id = data.get("precursor_audio_id")
-        population_size = int(data.get("population_size", 10))
-        lora_noise = float(data.get("lora_noise", data.get("lora_down_noise", data.get("direction_noise", 0.05))))
-        active_flip_prob = float(data.get("active_flip_prob", 0.05))
-        generation_context = data.get("generation_context", {})
-        elements_input = data.get("elements")
-
-        if not model_id or not precursor_audio_id:
-            return jsonify({"error": "model_id and precursor_audio_id are required"}), 400
-
-        if not baseline_grating_id and not elements_input:
-            return jsonify({"error": "Either baseline_grating_id or elements configuration is required"}), 400
-
-        # Validate existence of model and precursor audio early
-        model_element = param_graph.get_element(model_id)
-        if not isinstance(model_element, Model):
-            return jsonify({"error": f"Node '{model_id}' is not a valid model."}), 400
-
-        precursor_audio = param_graph.get_element(precursor_audio_id)
-        if not precursor_audio:
-            return jsonify({"error": f"Precursor audio node '{precursor_audio_id}' not found."}), 400
-
-        # Generate unique local job ID
-        parent_job_id = f"evolution_init_{uuid.uuid4().hex[:12]}"
-        local_jobs[parent_job_id] = {
-            "status": "pending",
-            "progress": None,
-            "result": None,
-            "error": None
-        }
-
-        # Spawn background evolution initialization task via background thread
-        import asyncio
-        thread = threading.Thread(
-            target=lambda: asyncio.run(
-                _initialize_evolution_task(
-                    parent_job_id=parent_job_id,
-                    model_id=model_id,
-                    baseline_grating_id=baseline_grating_id,
-                    precursor_audio_id=precursor_audio_id,
-                    population_size=population_size,
-                    lora_noise=lora_noise,
-                    active_flip_prob=active_flip_prob,
-                    generation_context=generation_context,
-                    elements_input=elements_input
-                )
-            )
-        )
-        thread.start()
-
-        return jsonify({
-            "success": True,
-            "job_id": parent_job_id
-        }), 202
-
+        return await _dispatch_wrap_individual_operation(data)
     except Exception as e:
-        print(f"Failed to start evolution: {e}")
+        print(f"Failed to wrap individual: {e}")
         traceback.print_exc()
         return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
 
-async def _initialize_evolution_task(
-    parent_job_id: str,
-    model_id: str,
-    baseline_grating_id: str,
-    precursor_audio_id: str,
-    population_size: int,
-    lora_noise: float,
-    active_flip_prob: float,
-    generation_context: dict,
-    elements_input: list
-) -> None:
-    try:
-        print(f"[_initialize_evolution_task] Started background evolution task for job {parent_job_id}")
-        local_jobs[parent_job_id]["status"] = "running"
-        local_jobs[parent_job_id]["progress"] = {
-            "value": 0,
-            "total": population_size,
-            "description": "Starting population initialization..."
-        }
+async def _dispatch_wrap_individual_operation(data: dict):
+    """
+    Synchronously creates a baseline Individual node from a precursor artifact.
+    """
+    if param_graph is None or engine_provider is None:
+        return jsonify({"error": "No project loaded"}), 400
+
+    params = data.get("params", {}) or {}
+    
+    # 1. Resolve precursor node ID
+    initiator = data.get("initiator") or params.get("initiator") or {}
+    initiator_id = initiator.get("id") if isinstance(initiator, dict) else (str(initiator).strip() if initiator else None)
+
+    precursor_val = (
+        data.get("precursor_id")
+        or data.get("precursor")
+        or data.get("precursor_audio_id")
+        or data.get("source_node")
+        or data.get("source_node_id")
+        or data.get("source_audio")
+        or data.get("source_audio_id")
+        or data.get("source_id")
+        or data.get("artifact_id")
+        or data.get("node_id")
+        or params.get("precursor_id")
+        or params.get("precursor")
+        or params.get("precursor_audio_id")
+        or params.get("source_node")
+        or params.get("source_node_id")
+        or params.get("source_audio")
+        or params.get("source_audio_id")
+        or params.get("source_id")
+        or params.get("artifact_id")
+        or initiator_id
+    )
+    if isinstance(precursor_val, dict):
+        precursor_node_id = precursor_val.get("id")
+    else:
+        precursor_node_id = str(precursor_val).strip() if precursor_val else None
+
+    if not precursor_node_id:
+        return jsonify({"error": "Precursor artifact is required to wrap an Individual."}), 400
+
+    with graph_lock:
+        precursor_node = param_graph.get_element(precursor_node_id)
+        if not precursor_node:
+            return jsonify({"error": f"Precursor artifact '{precursor_node_id}' not found."}), 400
+
+        # 2. Resolve model_id: from data, precursor context, or incoming edges
+        model_val = data.get("model_id") or data.get("model") or params.get("model") or params.get("model_id")
+        if isinstance(model_val, dict):
+            model_id = model_val.get("id")
+        else:
+            model_id = str(model_val).strip() if model_val else None
+
+        if not model_id:
+            ctx = getattr(precursor_node, "context", {}) or {}
+            model_id = ctx.get("model_id")
+
+        if not model_id and hasattr(precursor_node, "base_model_id"):
+            model_id = precursor_node.base_model_id
+
+        if not model_id:
+            incomers = param_graph.get_incomers(precursor_node.id)
+            for inc in incomers:
+                if isinstance(inc, Model):
+                    model_id = inc.id
+                    break
+
+        if not model_id:
+            node_name = getattr(precursor_node, "name", precursor_node_id)
+            return jsonify({
+                "error": f"Precursor node '{node_name}' has no associated generative model and cannot be wrapped as an Individual."
+            }), 400
 
         model_element = param_graph.get_element(model_id)
-        precursor_audio = param_graph.get_element(precursor_audio_id)
+        if not isinstance(model_element, Model):
+            return jsonify({"error": f"Associated model '{model_id}' was not found in the project graph."}), 400
 
-        engine = engine_provider.get_engine()
-        operation = generation_context.get("operation", "generate")
+        # 3. Resolve baseline grating / linear layer elements
+        baseline_grating_id = data.get("baseline_grating_id") or params.get("baseline_grating_id")
+        elements_input = data.get("elements") or params.get("elements")
+        lora_rank = int(data.get("lora_rank") or params.get("lora_rank") or 1)
+        lora_alpha = float(data.get("lora_alpha") or params.get("lora_alpha") or 1.0)
 
-        # Load baseline Diffracture Grating
-        if baseline_grating_id:
+    # If grating node exists
+    if baseline_grating_id:
+        with graph_lock:
             baseline_grating = param_graph.get_element(baseline_grating_id)
             if not isinstance(baseline_grating, Grating):
-                raise ValueError(f"Node '{baseline_grating_id}' is not a valid grating.")
+                return jsonify({"error": f"Node '{baseline_grating_id}' is not a valid grating."}), 400
             base_grating_path = baseline_grating.file.path
             baseline_elements = baseline_grating.elements
             baseline_name = baseline_grating.name
-        else:
-            # Create baseline grating artifact (in-memory / local file only)
-            grating_name = f"baseline_{uuid.uuid4().hex[:8]}"
-            baseline_grating = await engine.create_grating(model_element, grating_name, elements_input)
-            base_grating_path = baseline_grating.file.path
-            baseline_elements = baseline_grating.elements
-            baseline_name = precursor_audio.name or precursor_audio.alias or "Artifact"
-
-        print(f"[_initialize_evolution_task] Loaded baseline grating at {base_grating_path}")
+            diff_base_grating = DiffractureGrating.load(base_grating_path)
+    elif isinstance(precursor_node, Grating):
+        base_grating_path = precursor_node.file.path
+        baseline_elements = precursor_node.elements
+        baseline_name = precursor_node.name
         diff_base_grating = DiffractureGrating.load(base_grating_path)
-        from evolution.lora.lora_genome import LoRAGenome
+        baseline_grating_id = precursor_node.id
+    else:
+        # If not provided, inspect model linear layers
+        if not elements_input:
+            engine = engine_provider.get_engine()
+            layers = await engine.get_model_layers(model_element)
+            linear_layers = [l for l in layers if "Linear" in l.get("type", "")]
+            if not linear_layers:
+                return jsonify({"error": f"No compatible Linear layers found on model '{model_id}' for LoRA genome."}), 400
 
-        # Resolve other linked source nodes if present (like source_audio)
-        source_audio_id = generation_context.get("source_audio_id") or generation_context.get("source_audio")
-        node_engine_args = {}
-        linked_elements = []
-        if source_audio_id:
-            source_audio_element = param_graph.get_element(source_audio_id)
-            node_engine_args["source_audio_element"] = source_audio_element
-            linked_elements.append(source_audio_element)
+            elements_input = [
+                {
+                    "address": l["address"],
+                    "kernel_type": "lora",
+                    "params": {
+                        "rank": lora_rank,
+                        "alpha": lora_alpha,
+                        "in_features": l.get("in_features", 0) or 0,
+                        "out_features": l.get("out_features", 0) or 0,
+                        "kernel_size": None
+                    },
+                    "indices": [],
+                    "perform_clustering": False,
+                    "num_clusters": None,
+                    "cluster": None
+                }
+                for l in linear_layers
+            ]
 
-        # Prepare parameters for the engine
-        dumped_params = {}
-        for k, v in generation_context.items():
-            if isinstance(v, (str, int, float, bool)) and k not in ["model_id", "operation", "gratings", "source_audio_id", "source_audio", "job_id"]:
-                dumped_params[k] = v
+        engine = engine_provider.get_engine()
+        grating_name = f"baseline_{uuid.uuid4().hex[:8]}"
+        baseline_grating = await engine.create_grating(model_element, grating_name, elements_input)
+        base_grating_path = baseline_grating.file.path
+        baseline_elements = baseline_grating.elements
+        baseline_name = precursor_node.name or precursor_node.alias or "Artifact"
+        diff_base_grating = DiffractureGrating.load(base_grating_path)
 
-        # 1. Create the Population Bundle Node
-        population_bundle_id = f"bundle_{uid_generator.from_string(str(uuid.uuid4()))}"
-        population_bundle = Bundle(
-            id=population_bundle_id,
-            name=f"Population Bundle - {baseline_name}",
-            member_ids=[],
-            member_type='individual',
-            context={
-                "model_id": model_id,
-                "baseline_grating_id": baseline_grating_id,
-                "population_size": population_size,
-                "lora_noise": lora_noise,
-                "active_flip_prob": active_flip_prob,
-                "generation_context": generation_context
-            }
-        )
+    # Build baseline genome from base grating
+    from evolution.lora.lora_genome import LoRAGenome
+    baseline_genome = LoRAGenome.from_grating(diff_base_grating)
 
-        # 2. Create the Population Group Node (Visual compound parent container)
-        population_group_id = f"group_{uid_generator.from_string(str(uuid.uuid4()))}"
-        population_group = Group(
-            id=population_group_id,
-            member_ids=[],
-            member_type='individual'
-        )
+    # Compute deterministic UID from baseline genome
+    genome_state_dict = baseline_genome.get_state_dict()
+    genome_uid = uid_generator.from_state_dict(genome_state_dict)
+    individual_id = f"individual_{genome_uid}"
+
+    output_dir = param_graph.root / "generate"
+    os.makedirs(output_dir, exist_ok=True)
+    genome_path = output_dir / f"{individual_id}.safetensors"
+    baseline_genome.save(str(genome_path))
+
+    # Prepare context
+    ind_context = copy.deepcopy(getattr(precursor_node, "context", {}) or {})
+    ind_context["model_id"] = model_id
+    ind_context["baseline_elements"] = baseline_elements
+    ind_context["baseline_file_path"] = str(base_grating_path)
+    ind_context["precursor_artifact_id"] = precursor_node_id
+
+    slug = generate_slug(2)
+    custom_name = data.get("name") or params.get("name") or f"{baseline_name} - Baseline ({slug})"
+
+    individual_node = Individual(
+        id=individual_id,
+        name=custom_name,
+        file=Asset(path=str(genome_path), uid=individual_id, extension=".safetensors"),
+        base_model_id=model_id,
+        baseline_grating_id=baseline_grating_id,
+        generation=0,
+        context=ind_context
+    )
+
+    with graph_lock:
+        param_graph.add_element(individual_node)
+        param_graph.link(model_element, individual_node, relation='binds_to')
+        param_graph.link(precursor_node, individual_node, relation='precursor')
+        
+        # If the precursor is an audio artifact, set its parent to the individual so it serves as exemplar
+        if isinstance(precursor_node, Audio):
+            param_graph.update_element(precursor_node.id, {"parent": individual_id})
+
+        param_graph.save()
+
+    return jsonify({
+        "success": True,
+        "message": f"Artifact '{precursor_node_id}' wrapped as Individual '{individual_id}'",
+        "individual": individual_node.to_dict(),
+        "node_id": individual_id
+    }), 200
+
+
+@app.route("/mutate_evolution", methods=["POST"])
+@app.route("/start_evolution", methods=["POST"])
+async def mutate_evolution():
+    """
+    Mutates parent individuals to produce variant offspring.
+    Queues on-the-fly generation tasks for the mutant offspring.
+    """
+    if param_graph is None or engine_provider is None:
+        return jsonify({"error": "No project loaded"}), 400
+
+    try:
+        data = request.get_json() or {}
+        return await _dispatch_mutate_operation(data)
+    except Exception as e:
+        print(f"Failed to start mutation: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
+start_evolution = mutate_evolution
+
+
+async def _mutate_evolution_task(
+    parent_job_id: str,
+    parent_ids: list[str],
+    offspring_size: int,
+    lora_noise: float,
+    active_flip_prob: float,
+    mutation_rate: float,
+    generation_context: dict,
+) -> None:
+    try:
+        local_jobs[parent_job_id]["status"] = "running"
+        local_jobs[parent_job_id]["progress"] = {
+            "value": 0,
+            "total": offspring_size,
+            "description": "Starting mutation..."
+        }
+
+        engine = engine_provider.get_engine()
+        from evolution.lora.lora_genome import LoRAGenome, get_lora_mutation_strategy
+        from neutral_selection.variation.mutation import mutate
 
         with graph_lock:
-            param_graph.add_element(population_bundle)
-            param_graph.add_element(population_group)
-            param_graph.update_element(population_group.id, {"alias": f"Population - {baseline_name}"})
-            # Link precursor audio node to population bundle directly
-            param_graph.link(precursor_audio, population_bundle, relation='precursor')
+            parent_nodes: list[Individual] = []
+            for pid in parent_ids:
+                if param_graph.G.has_node(pid):
+                    node = param_graph.get_element(pid)
+                    if isinstance(node, Individual) and node not in parent_nodes:
+                        parent_nodes.append(node)
+
+            if not parent_nodes:
+                raise ValueError("No valid parent individuals found in graph.")
+
+            first_parent = parent_nodes[0]
+            model_id = first_parent.base_model_id
+            baseline_grating_id = first_parent.baseline_grating_id
+            baseline_elements = first_parent.context.get("baseline_elements")
+            baseline_file_path = first_parent.context.get("baseline_file_path")
+
+            model_element = param_graph.get_element(model_id)
+            if not model_element:
+                raise ValueError(f"Base model '{model_id}' not found in parameter graph.")
+
+            # Load baseline Diffracture Grating if needed
+            base_grating = None
+            if baseline_grating_id:
+                base_grating = param_graph.get_element(baseline_grating_id)
+            elif baseline_file_path:
+                base_grating = Grating(
+                    id=f"grating_{uuid.uuid4().hex[:8]}",
+                    name="Baseline Grating",
+                    context={},
+                    file=Asset(path=str(baseline_file_path), uid=f"grating_{uuid.uuid4().hex[:8]}", extension=".safetensors"),
+                    base_model_id=model_id,
+                    elements=baseline_elements or []
+                )
+
+            max_gen = max(getattr(p, "generation", 0) for p in parent_nodes)
+            next_generation = max_gen + 1
+
+            merged_context = copy.deepcopy(first_parent.context or {})
+            if generation_context:
+                merged_context.update(generation_context)
+
+            operation = merged_context.get("operation", "generate")
+
+            # Resolve source audio if applicable
+            source_audio_id = (
+                merged_context.get("source_audio_id")
+                or merged_context.get("source_audio")
+                or merged_context.get("precursor_audio_id")
+            )
+            node_engine_args = {}
+            if source_audio_id:
+                source_audio_element = param_graph.get_element(source_audio_id)
+                if source_audio_element:
+                    node_engine_args["source_audio_element"] = source_audio_element
+
+            dumped_params = {}
+            for k, v in merged_context.items():
+                if isinstance(v, (str, int, float, bool)) and k not in [
+                    "model_id", "operation", "gratings", "source_audio_id", "source_audio", "job_id",
+                    "baseline_elements", "baseline_file_path", "lineage"
+                ]:
+                    dumped_params[k] = v
+
+            # 1. Create the Visual Compound Parent Group
+            group_id = f"group_{uid_generator.from_string(str(uuid.uuid4()))}"
+            group_alias = f"Mutation (Gen {next_generation})"
+            if len(parent_nodes) == 1:
+                group_alias = f"Mutants - {parent_nodes[0].name}"
+            mutation_group = Group(
+                id=group_id,
+                member_ids=[],
+                member_type='individual'
+            )
+            param_graph.add_element(mutation_group)
+            param_graph.update_element(mutation_group.id, {"alias": group_alias})
             param_graph.save()
+
+        mutation_strategy = get_lora_mutation_strategy(
+            lora_noise=lora_noise,
+            active_flip_prob=active_flip_prob,
+            mutation_rate=mutation_rate
+        )
 
         job_ids = []
         individual_ids = []
 
-        # Create population N individuals
-        population = LoRAGenome.create_initial_population(
-            base_grating=diff_base_grating,
-            population_size=population_size,
-            lora_noise=lora_noise,
-            active_flip_prob=active_flip_prob
-        )
-        print(f"[_initialize_evolution_task] Created initial population of size {population_size}")
-
-        for i, child_genome in enumerate(population):
-            # Update progress status
+        for i in range(offspring_size):
             local_jobs[parent_job_id]["progress"] = {
                 "value": i,
-                "total": population_size,
-                "description": f"Initializing individual {i+1} of {population_size}..."
+                "total": offspring_size,
+                "description": f"Mutating individual {i+1} of {offspring_size}..."
             }
 
-            # Generate deterministic content-addressable ID for individual from its genome contents
+            # Select parent (round-robin across supplied parent individuals)
+            selected_parent = parent_nodes[i % len(parent_nodes)]
+            parent_genome = LoRAGenome.load(selected_parent.file.path)
+
+            child_genome = copy.deepcopy(parent_genome)
+            child_genome = mutate(child_genome, mutation_strategy)
+            if not isinstance(child_genome, LoRAGenome):
+                child_genome = LoRAGenome(list(child_genome))
+
             genome_state_dict = child_genome.get_state_dict()
             genome_uid = uid_generator.from_state_dict(genome_state_dict)
-            individual_id = f"individual_{genome_uid}"
-            print(f"[_initialize_evolution_task] Processing individual {i+1}/{population_size} (ID: {individual_id})")
-            
+            child_ind_id = f"individual_{genome_uid}"
+
             output_dir = param_graph.root / "generate"
             os.makedirs(output_dir, exist_ok=True)
-            genome_path = output_dir / f"{individual_id}.safetensors"
+            genome_path = output_dir / f"{child_ind_id}.safetensors"
             child_genome.save(str(genome_path))
 
-            # Prepare contextual elements to be self-contained in a genome-centric manner
-            ind_context = copy.deepcopy(generation_context)
-            ind_context["baseline_elements"] = baseline_elements
-            ind_context["baseline_file_path"] = str(base_grating_path)
+            child_context = copy.deepcopy(merged_context)
+            child_context["baseline_elements"] = baseline_elements
+            child_context["baseline_file_path"] = str(baseline_file_path) if baseline_file_path else None
+            child_context["mutation_operation"] = {
+                "lora_noise": lora_noise,
+                "active_flip_prob": active_flip_prob,
+                "mutation_rate": mutation_rate,
+                "parent_id": selected_parent.id,
+                "generation": next_generation
+            }
+            child_context["lineage"] = {
+                "parent_ids": [selected_parent.id],
+                "crossover_applied": False,
+                "mutated": True
+            }
 
-            # Add Individual node to the parameter graph, nested under the population group
             slug = generate_slug(2)
-            individual_node = Individual(
-                id=individual_id,
-                name=f"{baseline_name} - Ind {i+1} ({slug})",
-                file=Asset(path=str(genome_path), uid=individual_id, extension=".safetensors"),
+            child_node = Individual(
+                id=child_ind_id,
+                name=f"Gen {next_generation} - Mut {i+1} ({slug})",
+                file=Asset(path=str(genome_path), uid=child_ind_id, extension=".safetensors"),
                 base_model_id=model_id,
                 baseline_grating_id=baseline_grating_id,
-                generation=0,
-                context=ind_context
+                generation=next_generation,
+                context=child_context
             )
 
             with graph_lock:
-                param_graph.add_element(individual_node)
-                param_graph.update_element(individual_node.id, {"parent": population_group_id})
-                param_graph.link(model_element, individual_node, relation='binds_to')
-                param_graph.link(population_bundle, individual_node, relation='member')
-                
-                # Update bundle and group members
-                population_bundle.member_ids.append(individual_id)
-                population_group.member_ids.append(individual_id)
-                param_graph.update_element(population_bundle.id, {"member_ids": population_bundle.member_ids})
-                param_graph.update_element(population_group.id, {"member_ids": population_group.member_ids})
-                
+                param_graph.add_element(child_node)
+                param_graph.update_element(child_node.id, {"parent": group_id})
+                param_graph.link(model_element, child_node, relation='binds_to')
+                param_graph.link(selected_parent, child_node, relation='parent')
+
+                mutation_group.member_ids.append(child_ind_id)
+                param_graph.update_element(mutation_group.id, {"member_ids": mutation_group.member_ids})
                 param_graph.save()
 
-            individual_ids.append(individual_id)
+            individual_ids.append(child_ind_id)
 
-            # Queue async job
+            # Queue async execution job
             job_id = str(uuid.uuid4())
             engine_args = {
                 "model_element": model_element,
-                "individual_elements": [individual_node],
-                "baseline_grating": baseline_grating,
+                "individual_elements": [child_node],
+                "baseline_grating": base_grating,
                 **node_engine_args
             }
 
             returned_job_id = await engine.execute(operation, job_id=job_id, **engine_args, **dumped_params)
             if returned_job_id != job_id:
                 job_id = returned_job_id
-            print(f"[_initialize_evolution_task] Submitted execution job for individual {i+1} (Job ID: {job_id})")
 
             job_ids.append(job_id)
 
-            # Prepare job context for final registration
             v_params = {**dumped_params}
             v_params["model_id"] = model_id
             v_params["operation"] = operation
-            v_params["individuals"] = [{"id": individual_id, "strength": 1.0}]
+            v_params["individuals"] = [{"id": child_ind_id, "strength": 1.0}]
 
             active_jobs[job_id] = {
-                "parent_id": individual_id,
-                "linked_elements": linked_elements,
+                "parent_id": child_ind_id,
+                "linked_elements": [],
                 "validated_params": v_params,
                 "operation": operation
             }
 
         local_jobs[parent_job_id]["status"] = "completed"
         local_jobs[parent_job_id]["progress"] = {
-            "value": population_size,
-            "total": population_size,
-            "description": "Initialization complete."
+            "value": offspring_size,
+            "total": offspring_size,
+            "description": "Mutation complete."
         }
         local_jobs[parent_job_id]["result"] = {
             "job_ids": job_ids,
             "individual_ids": individual_ids,
-            "bundle_id": population_bundle_id,
-            "group_id": population_group_id
+            "group_id": group_id,
+            "generation": next_generation
         }
-        print(f"[_initialize_evolution_task] Evolution initialization completed successfully for job {parent_job_id}")
+        print(f"[_mutate_evolution_task] Mutation completed successfully for job {parent_job_id}")
 
     except Exception as e:
-        print(f"Failed in async evolution initialization: {e}")
+        print(f"Failed in async evolution mutation: {e}")
         traceback.print_exc()
         local_jobs[parent_job_id]["status"] = "failed"
         local_jobs[parent_job_id]["progress"] = None
@@ -1024,8 +1368,52 @@ async def _initialize_evolution_task(
         local_jobs[parent_job_id]["traceback"] = traceback.format_exc()
 
 
+_initialize_evolution_task = _mutate_evolution_task
+
+
+def _extract_individual_parent_ids(parent_input) -> list[str]:
+    """
+    Extracts valid Individual node IDs from parent inputs, automatically
+    discarding any edge IDs (e.g. containing '->'), edge dicts, or non-individual elements.
+    """
+    if not parent_input:
+        return []
+    if isinstance(parent_input, (str, dict)):
+        items = [parent_input]
+    elif isinstance(parent_input, list):
+        items = parent_input
+    else:
+        return []
+
+    resolved_ids: list[str] = []
+    for item in items:
+        if isinstance(item, dict):
+            node_obj = item.get("node") if "node" in item else item
+            if isinstance(node_obj, dict):
+                if node_obj.get("source") and node_obj.get("target"):
+                    continue
+                pid = node_obj.get("id")
+            elif isinstance(node_obj, str):
+                pid = node_obj
+            else:
+                continue
+        elif isinstance(item, str):
+            pid = item
+        else:
+            continue
+
+        if not pid or not isinstance(pid, str) or "->" in pid:
+            continue
+
+        with graph_lock:
+            if param_graph and param_graph.G.has_node(pid):
+                elem = param_graph.get_element(pid)
+                if isinstance(elem, Individual) and pid not in resolved_ids:
+                    resolved_ids.append(pid)
+    return resolved_ids
+
+
 @app.route("/recombine_evolution", methods=["POST"])
-@app.route("/reproduce_evolution", methods=["POST"])
 async def recombine_evolution():
     """
     Starts an evolutionary recombination (breeding) run.
@@ -1036,7 +1424,8 @@ async def recombine_evolution():
 
     try:
         data = request.get_json() or {}
-        parent_ids = data.get("parent_ids") or data.get("parents")
+        raw_parents = data.get("parent_ids") or data.get("parents")
+        parent_ids = _extract_individual_parent_ids(raw_parents)
         parent_bundle_id = data.get("parent_bundle_id")
         parent_group_id = data.get("parent_group_id")
         offspring_size = data.get("offspring_size")
@@ -1054,8 +1443,8 @@ async def recombine_evolution():
 
         mutation_rate = float(data.get("mutation_rate", 0.1))
         mutation_cfg = data.get("mutation") or {"mutation_rate": mutation_rate}
-        crossover_prob = 1.0
-        elitism = 0
+        crossover_prob = float(data.get("crossover_prob", 1.0))
+        elitism = int(data.get("elitism", 0))
         generation_context = data.get("generation_context") or {}
 
         # Resolve parent IDs from group if only group passed
@@ -1063,24 +1452,14 @@ async def recombine_evolution():
             with graph_lock:
                 grp = param_graph.get_element(parent_group_id)
                 if grp and hasattr(grp, "member_ids") and grp.member_ids:
-                    parent_ids = [
-                        mid for mid in grp.member_ids
-                        if isinstance(param_graph.get_element(mid), Individual)
-                    ]
+                    parent_ids = _extract_individual_parent_ids(grp.member_ids)
 
         if not parent_ids and not parent_bundle_id:
-            return jsonify({"error": "Either parent_ids, parents, or parent_group_id must be provided."}), 400
+            return jsonify({"error": "Either parent_ids, parents, or parent_group_id must contain valid individual nodes."}), 400
 
-        # Validate existence of parents or parent bundle early
+        # Validate existence of parent bundle early if bundle passed
         with graph_lock:
-            if parent_ids:
-                if not isinstance(parent_ids, list) or len(parent_ids) == 0:
-                    return jsonify({"error": "parent_ids must be a non-empty list of individual IDs."}), 400
-                for pid in parent_ids:
-                    p_node = param_graph.get_element(pid)
-                    if not isinstance(p_node, Individual):
-                        return jsonify({"error": f"Node '{pid}' is not a valid individual."}), 400
-            elif parent_bundle_id:
+            if parent_bundle_id:
                 bundle_node = param_graph.get_element(parent_bundle_id)
                 if not isinstance(bundle_node, Bundle):
                     return jsonify({"error": f"Node '{parent_bundle_id}' is not a valid bundle."}), 400
@@ -1159,16 +1538,18 @@ async def _recombine_evolution_task(
             parent_nodes: list[Individual] = []
             if parent_ids:
                 for pid in parent_ids:
-                    node = param_graph.get_element(pid)
-                    if isinstance(node, Individual):
-                        parent_nodes.append(node)
+                    if param_graph.G.has_node(pid):
+                        node = param_graph.get_element(pid)
+                        if isinstance(node, Individual) and node not in parent_nodes:
+                            parent_nodes.append(node)
             elif parent_bundle_id:
                 bundle_node = param_graph.get_element(parent_bundle_id)
                 if isinstance(bundle_node, Bundle):
                     for mid in bundle_node.member_ids:
-                        node = param_graph.get_element(mid)
-                        if isinstance(node, Individual):
-                            parent_nodes.append(node)
+                        if param_graph.G.has_node(mid):
+                            node = param_graph.get_element(mid)
+                            if isinstance(node, Individual) and node not in parent_nodes:
+                                parent_nodes.append(node)
 
             if not parent_nodes:
                 raise ValueError("No valid parent individuals could be resolved.")
@@ -1183,6 +1564,15 @@ async def _recombine_evolution_task(
             base_grating = None
             if baseline_grating_id:
                 base_grating = param_graph.get_element(baseline_grating_id)
+            elif baseline_file_path:
+                base_grating = Grating(
+                    id=f"grating_{uuid.uuid4().hex[:8]}",
+                    name="Baseline Grating",
+                    context={},
+                    file=Asset(path=str(baseline_file_path), uid=f"grating_{uuid.uuid4().hex[:8]}", extension=".safetensors"),
+                    base_model_id=model_id,
+                    elements=baseline_elements or []
+                )
 
             model_element = param_graph.get_element(model_id)
             if not model_element:
@@ -1201,15 +1591,35 @@ async def _recombine_evolution_task(
                 merged_context.update(generation_context)
 
             operation = merged_context.get("operation", "generate")
-            source_audio_id = merged_context.get("source_audio_id") or merged_context.get("source_audio")
+            source_audio_id = (
+                merged_context.get("source_audio_id")
+                or merged_context.get("source_audio")
+                or merged_context.get("precursor_audio_id")
+            )
+            if not source_audio_id:
+                for p in parent_nodes:
+                    for u, _, _ in param_graph.G.in_edges(p.id, data=True):
+                        node_u = param_graph.get_element(u)
+                        if isinstance(node_u, Audio):
+                            source_audio_id = u
+                            break
+                    if source_audio_id:
+                        break
+                    for node_id, attrs in param_graph.G.nodes.items():
+                        if attrs.get("parent") == p.id:
+                            node_child = param_graph.get_element(node_id)
+                            if isinstance(node_child, Audio):
+                                source_audio_id = node_id
+                                break
+                    if source_audio_id:
+                        break
+
             node_engine_args = {}
-            linked_elements = []
             source_audio_element = None
             if source_audio_id:
                 source_audio_element = param_graph.get_element(source_audio_id)
                 if source_audio_element:
                     node_engine_args["source_audio_element"] = source_audio_element
-                    linked_elements.append(source_audio_element)
 
             # Dumped parameters for the engine
             dumped_params = {}
@@ -1256,8 +1666,8 @@ async def _recombine_evolution_task(
                 selection_strategy=selection_strat,
                 crossover_strategy=crossover_strat,
                 mutation_strategy=mutation_strat,
-                crossover_prob=1.0,
-                elitism=0,
+                crossover_prob=crossover_prob,
+                elitism=elitism,
                 parent_ids=parent_id_list,
             )
 
@@ -1301,6 +1711,8 @@ async def _recombine_evolution_task(
                 "crossover_type": crossover_cfg.get("type", "hierarchical") if isinstance(crossover_cfg, dict) else str(crossover_cfg),
                 "selection_type": selection_cfg.get("type", "tournament") if isinstance(selection_cfg, dict) else str(selection_cfg),
                 "mutation_rate": mutation_rate,
+                "crossover_prob": crossover_prob,
+                "elitism": elitism,
                 "selection_cfg": selection_cfg,
                 "crossover_cfg": crossover_cfg,
                 "mutation_cfg": mutation_cfg,
@@ -1366,7 +1778,7 @@ async def _recombine_evolution_task(
 
             active_jobs[job_id] = {
                 "parent_id": child_ind_id,
-                "linked_elements": linked_elements,
+                "linked_elements": [],
                 "validated_params": v_params,
                 "operation": operation
             }
@@ -1681,7 +2093,9 @@ async def execute_operation():
             return _dispatch_sync_operation(payload)
 
         # 2. Evolutionary Operations
-        if operation == "mutate":
+        if operation in ("wrap_individual", "create_individual"):
+            return await _dispatch_wrap_individual_operation(payload)
+        elif operation == "mutate":
             return await _dispatch_mutate_operation(payload)
         elif operation in ("recombine", "reproduce"):
             return await _dispatch_recombine_operation(payload)
@@ -1845,82 +2259,92 @@ def _dispatch_sync_operation(data):
 
 async def _dispatch_mutate_operation(data):
     """
-    Handles the 'mutate' async operation dispatched via /execute_operation.
-    Initializes a mutant population from precursor audio and target model.
+    Handles the 'mutate' async operation dispatched via /execute_operation or /mutate_evolution.
+    Mutates parent individual(s) into variant offspring.
     """
     if param_graph is None or engine_provider is None:
         return jsonify({"error": "No project loaded"}), 400
 
     try:
         params = data.get("params", {}) or {}
-        
-        # 1. Resolve precursor_audio_id
         initiator = data.get("initiator") or params.get("initiator") or {}
         initiator_id = initiator.get("id") if isinstance(initiator, dict) else (str(initiator).strip() if initiator else None)
+        initiator_type = initiator.get("type") if isinstance(initiator, dict) else None
 
-        precursor_val = (
-            data.get("precursor_audio_id")
-            or data.get("source_audio_id")
-            or data.get("source_audio")
-            or data.get("init_audio")
-            or data.get("node_id")
-            or params.get("precursor_audio_id")
-            or params.get("source_audio_id")
-            or params.get("source_audio")
-            or params.get("init_audio")
-            or initiator_id
+        raw_parent_input = (
+            data.get("parent_ids")
+            or params.get("parent_ids")
+            or data.get("parents")
+            or params.get("parents")
+            or data.get("individual_id")
+            or params.get("individual_id")
+            or data.get("target_node")
+            or params.get("target_node")
         )
-        if isinstance(precursor_val, dict):
-            precursor_audio_id = precursor_val.get("id")
-        else:
-            precursor_audio_id = str(precursor_val).strip() if precursor_val else None
+        parent_ids = _extract_individual_parent_ids(raw_parent_input)
 
-        if not precursor_audio_id:
-            return jsonify({"error": "Precursor audio is required for mutate operation."}), 400
+        parent_group_id = (
+            data.get("parent_group_id")
+            or params.get("parent_group_id")
+            or (initiator_id if initiator_type == "group" else None)
+        )
 
-        precursor_audio = param_graph.get_element(precursor_audio_id)
-        if not precursor_audio:
-            return jsonify({"error": f"Precursor audio node '{precursor_audio_id}' not found."}), 400
+        if not parent_ids and parent_group_id:
+            with graph_lock:
+                grp = param_graph.get_element(parent_group_id)
+                if grp and hasattr(grp, "member_ids") and grp.member_ids:
+                    parent_ids = _extract_individual_parent_ids(grp.member_ids)
 
-        # 2. Resolve model_id: extract from explicit param, precursor audio context, or graph lineage
-        model_val = data.get("model_id") or data.get("model") or params.get("model") or params.get("model_id")
-        if isinstance(model_val, dict):
-            model_id = model_val.get("id")
-        else:
-            model_id = str(model_val).strip() if model_val else None
+        if not parent_ids and initiator_id and initiator_type == "individual":
+            parent_ids = _extract_individual_parent_ids([initiator_id])
 
-        if not model_id:
-            ctx = getattr(precursor_audio, "context", {}) or {}
-            model_id = ctx.get("model_id")
+        # Backward compatibility fallback: if an audio precursor is sent to mutate, wrap it into an individual first
+        if not parent_ids:
+            precursor_val = (
+                data.get("source_audio")
+                or data.get("source_audio_id")
+                or data.get("precursor_audio_id")
+                or data.get("source_node")
+                or data.get("source_node_id")
+                or (initiator_id if initiator_type == "audio" else None)
+            )
+            if precursor_val:
+                wrap_resp, wrap_code = await _dispatch_wrap_individual_operation(data)
+                if wrap_code == 200:
+                    wrap_json = wrap_resp.get_json()
+                    parent_ids = [wrap_json["node_id"]]
+                else:
+                    return wrap_resp, wrap_code
 
-        if not model_id:
-            # Inspect graph incomers for a Model element
-            incomers = param_graph.get_incomers(precursor_audio.id)
-            for inc in incomers:
-                if isinstance(inc, Model):
-                    model_id = inc.id
-                    break
+        if not parent_ids:
+            return jsonify({"error": "Either parent_ids, parents, or an Individual/Group initiator must contain valid individual nodes."}), 400
 
-        if not model_id:
-            node_name = getattr(precursor_audio, "name", precursor_audio_id)
-            return jsonify({
-                "error": f"Precursor audio '{node_name}' has no associated generative model in its history and cannot be mutated."
-            }), 400
+        offspring_size = int(
+            data.get("offspring_size")
+            or params.get("offspring_size")
+            or data.get("population_size")
+            or params.get("population_size")
+            or 5
+        )
+        lora_noise = float(
+            data.get("lora_noise")
+            or params.get("lora_noise")
+            or data.get("lora_down_noise")
+            or 0.05
+        )
+        active_flip_prob = float(
+            data.get("active_flip_prob")
+            or params.get("active_flip_prob")
+            or 0.05
+        )
+        mutation_rate = float(
+            data.get("mutation_rate")
+            or params.get("mutation_rate")
+            or 1.0
+        )
+        generation_context = data.get("generation_context") or params.get("generation_context") or {}
 
-        model_element = param_graph.get_element(model_id)
-        if not isinstance(model_element, Model):
-            return jsonify({"error": f"Associated model '{model_id}' was not found in the project graph."}), 400
-
-        population_size = int(data.get("population_size") or params.get("population_size") or 10)
-        lora_rank = int(data.get("lora_rank") or params.get("lora_rank") or 1)
-        lora_alpha = float(data.get("lora_alpha") or params.get("lora_alpha") or 1.0)
-        lora_noise = float(data.get("lora_noise") or params.get("lora_noise") or 1.0)
-        active_flip_prob = float(data.get("active_flip_prob") or params.get("active_flip_prob") or 0.5)
-
-        generation_context = copy.deepcopy(getattr(precursor_audio, "context", {}) or {})
-        generation_context["model_id"] = model_id
-
-        parent_job_id = data.get("job_id") or f"evolution_init_{uuid.uuid4().hex[:12]}"
+        parent_job_id = data.get("job_id") or f"evolution_mutate_{uuid.uuid4().hex[:12]}"
         local_jobs[parent_job_id] = {
             "status": "pending",
             "progress": None,
@@ -1928,47 +2352,17 @@ async def _dispatch_mutate_operation(data):
             "error": None
         }
 
-        # Build elements_input from linear layers if not supplied
-        elements_input = data.get("elements") or params.get("elements")
-        if not elements_input:
-            engine = engine_provider.get_engine()
-            layers = await engine.get_model_layers(model_element)
-            linear_layers = [l for l in layers if "Linear" in l.get("type", "")]
-            if not linear_layers:
-                return jsonify({"error": f"No compatible Linear layers found on model '{model_id}' for LoRA mutation."}), 400
-
-            elements_input = [
-                {
-                    "address": l["address"],
-                    "kernel_type": "lora",
-                    "params": {
-                        "rank": lora_rank,
-                        "alpha": lora_alpha,
-                        "in_features": l.get("in_features", 0) or 0,
-                        "out_features": l.get("out_features", 0) or 0,
-                        "kernel_size": None
-                    },
-                    "indices": [],
-                    "perform_clustering": False,
-                    "num_clusters": None,
-                    "cluster": None
-                }
-                for l in linear_layers
-            ]
-
-        # Launch background task
+        # Spawn background task
         thread = threading.Thread(
             target=lambda: asyncio.run(
-                _initialize_evolution_task(
+                _mutate_evolution_task(
                     parent_job_id=parent_job_id,
-                    model_id=model_id,
-                    baseline_grating_id=None,
-                    precursor_audio_id=precursor_audio_id,
-                    population_size=population_size,
+                    parent_ids=parent_ids,
+                    offspring_size=offspring_size,
                     lora_noise=lora_noise,
                     active_flip_prob=active_flip_prob,
-                    generation_context=generation_context,
-                    elements_input=elements_input
+                    mutation_rate=mutation_rate,
+                    generation_context=generation_context
                 )
             )
         )
@@ -1978,7 +2372,7 @@ async def _dispatch_mutate_operation(data):
             "success": True,
             "job_id": parent_job_id,
             "status": "pending",
-            "message": f"Mutation initialized for {precursor_audio_id}"
+            "message": "Mutation job initialized"
         }), 202
 
     except Exception as e:
@@ -2010,29 +2404,27 @@ async def _dispatch_recombine_operation(data):
             or params.get("parent_group_id")
             or (initiator_id if initiator_type == "group" else None)
         )
-        parent_ids = (
+        raw_parent_input = (
             data.get("parent_ids")
             or params.get("parent_ids")
             or data.get("parents")
             or params.get("parents")
         )
+        parent_ids = _extract_individual_parent_ids(raw_parent_input)
 
         # Resolve parent IDs from group if only group passed
         if not parent_ids and parent_group_id:
             with graph_lock:
                 grp = param_graph.get_element(parent_group_id)
                 if grp and hasattr(grp, "member_ids") and grp.member_ids:
-                    parent_ids = [
-                        mid for mid in grp.member_ids
-                        if isinstance(param_graph.get_element(mid), Individual)
-                    ]
+                    parent_ids = _extract_individual_parent_ids(grp.member_ids)
 
         # Resolve parent ID from single individual initiator
         if not parent_ids and initiator_id and initiator_type == "individual":
-            parent_ids = [initiator_id]
+            parent_ids = _extract_individual_parent_ids([initiator_id])
 
         if not parent_ids and not parent_bundle_id:
-            return jsonify({"error": "Either parent_ids, parents, or parent_group_id must be provided."}), 400
+            return jsonify({"error": "Either parent_ids, parents, or parent_group_id must contain valid individual nodes."}), 400
 
         offspring_size = data.get("offspring_size") or params.get("offspring_size")
         if offspring_size is not None:
@@ -2070,6 +2462,16 @@ async def _dispatch_recombine_operation(data):
             or 0.1
         )
         mutation_cfg = data.get("mutation") or params.get("mutation") or {"mutation_rate": mutation_rate}
+        crossover_prob = float(
+            data.get("crossover_prob")
+            or params.get("crossover_prob")
+            or 1.0
+        )
+        elitism = int(
+            data.get("elitism")
+            or params.get("elitism")
+            or 0
+        )
         generation_context = data.get("generation_context") or params.get("generation_context") or {}
 
         parent_job_id = data.get("job_id") or f"evolution_recombine_{uuid.uuid4().hex[:12]}"
@@ -2090,8 +2492,8 @@ async def _dispatch_recombine_operation(data):
                     selection_cfg=selection_cfg,
                     crossover_cfg=crossover_cfg,
                     mutation_cfg=mutation_cfg,
-                    crossover_prob=1.0,
-                    elitism=0,
+                    crossover_prob=crossover_prob,
+                    elitism=elitism,
                     generation_context=generation_context
                 )
             )
@@ -2120,7 +2522,9 @@ async def _dispatch_async_operation(data):
         
     try:
         operation = data.get("operation")
-        if operation == "mutate":
+        if operation in ("wrap_individual", "create_individual"):
+            return await _dispatch_wrap_individual_operation(data)
+        elif operation == "mutate":
             return await _dispatch_mutate_operation(data)
         elif operation in ("recombine", "reproduce"):
             return await _dispatch_recombine_operation(data)
@@ -2320,76 +2724,117 @@ def add_external_source():
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
+async def _rescan_source_task(job_id: str, source_name: str) -> None:
+    try:
+        local_jobs[job_id]["status"] = "running"
+        local_jobs[job_id]["progress"] = {
+            "value": 10,
+            "total": 100,
+            "description": f"Scanning external source '{source_name}'..."
+        }
+
+        path_node_id = None
+        with graph_lock:
+            for node_id, data in param_graph.G.nodes(data=True):
+                if data.get("type") == "local_path" and (data.get("name") == source_name or node_id == source_name):
+                    path_node_id = node_id
+                    break
+            if not path_node_id:
+                for node_id, data in param_graph.G.nodes(data=True):
+                    if data.get("type") == "local_path":
+                        path_node_id = node_id
+                        break
+
+        if not path_node_id:
+            raise ValueError(f"No source path matching '{source_name}' found.")
+
+        await _expand_path_task(job_id, path_node_id)
+
+    except Exception as e:
+        print(f"Failed in async source rescan: {e}")
+        traceback.print_exc()
+        local_jobs[job_id]["status"] = "failed"
+        local_jobs[job_id]["progress"] = None
+        local_jobs[job_id]["error"] = str(e)
+        local_jobs[job_id]["traceback"] = traceback.format_exc()
+
+
 @app.route("/rescan_source", methods=["POST"])
-def rescan_source():
-    """Rescan external source"""
+async def rescan_source():
+    """Rescan external source asynchronously as a local background job."""
     if param_graph is None:
         return jsonify({"error": "No project loaded"}), 400
-    
+
     try:
-        data = request.get_json()
+        data = request.get_json() or {}
         source_name = data.get('source_name')
-        
         if not source_name:
             return jsonify({"error": "source_name is required"}), 400
-        
-        with graph_lock:
-            param_graph.scan_external_source(source_name)
-            param_graph.save()
-        
-        # Trigger an incremental embedding update
-        trigger_embedding_update()
-        
+
+        job_id = f"rescan_source_{uuid.uuid4().hex[:12]}"
+        local_jobs[job_id] = {
+            "status": "pending",
+            "progress": {"value": 0, "total": 100, "description": "Starting source rescan..."},
+            "result": None,
+            "error": None,
+            "traceback": None,
+            "name": "Rescan Source"
+        }
+
+        threading.Thread(
+            target=lambda: asyncio.run(_rescan_source_task(job_id, source_name)),
+            daemon=True
+        ).start()
+
         return jsonify({
-            "message": "Source rescanned successfully",
-            "success": True
-        })
-        
+            "success": True,
+            "job_id": job_id,
+            "message": "Source rescan job started"
+        }), 202
+
     except Exception as e:
-        print(f"Failed to rescan source: {e}")
+        print(f"Failed to start source rescan: {e}")
         traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
-@app.route("/expand_path", methods=["POST"])
-def expand_path():
-    """Reads a PathNode, creates a Directory compound node if needed, and populates it."""
-    if param_graph is None:
-        return jsonify({"error": "No project loaded"}), 400
 
+async def _expand_path_task(job_id: str, path_node_id: str) -> None:
     try:
-        data = request.get_json()
-        path_node_id = data.get("path_node_id")
-        
-        if not path_node_id:
-            return jsonify({"error": "path_node_id is required"}), 400
-            
-        path_element = param_graph.get_element(path_node_id)
+        local_jobs[job_id]["status"] = "running"
+        local_jobs[job_id]["progress"] = {
+            "value": 5,
+            "total": 100,
+            "description": "Locating path element..."
+        }
+
+        path_element = None
+        with graph_lock:
+            path_element = param_graph.get_element(path_node_id)
         if not path_element or not hasattr(path_element, "path"):
-            return jsonify({"error": "Invalid path element"}), 400
-            
+            raise ValueError("Invalid path element")
+
         dir_path = Path(path_element.path)
         if not dir_path.is_dir():
-            return jsonify({"error": f"Path {dir_path} is not a valid directory"}), 400
-            
-        # 1. Check if we already have an expanded Directory for this PathNode
+            raise ValueError(f"Path {dir_path} is not a valid directory")
+
         existing_dir_id = None
+        new_dir_created = False
+        new_dir = None
+        new_edge = None
         with graph_lock:
             for u, v, edge_data in param_graph.G.out_edges(path_node_id, data=True):
                 target_node = param_graph.get_element(v)
                 if getattr(target_node, "type", None) == "directory":
                     existing_dir_id = v
                     break
-            
-            new_dir_created = False
+
             if not existing_dir_id:
                 existing_dir_id = f"{path_node_id}.dir"
                 new_dir = Directory(id=existing_dir_id, name=path_element.name, path=path_element.path)
-                
                 param_graph.add_element(new_dir)
                 new_edge = param_graph.link(path_element, new_dir, relation='expands')
                 new_dir_created = True
 
-        # 2. Gather paths of existing children to prevent duplicates during sync
         existing_paths = set()
         with graph_lock:
             for node_id, data in param_graph.G.nodes(data=True):
@@ -2401,17 +2846,21 @@ def expand_path():
                         existing_paths.add(el.file.path)
 
         audio_exts = {'.wav', '.mp3', '.flac', '.ogg', '.m4a', '.aiff'}
+        entries = [entry for entry in dir_path.iterdir() if not entry.name.startswith('.')]
+        total_entries = len(entries)
         new_elements = []
-        
-        for entry in dir_path.iterdir():
-            if entry.name.startswith('.'):
-                continue
-                
+
+        for idx, entry in enumerate(entries):
+            local_jobs[job_id]["progress"] = {
+                "value": int(10 + (idx / max(total_entries, 1)) * 75),
+                "total": 100,
+                "description": f"Scanning entry {idx + 1} of {total_entries}: {entry.name}"
+            }
+
             entry_str = str(entry)
             if entry_str in existing_paths:
-                continue  # This file/folder is already in the graph
+                continue
 
-            
             if entry.is_dir():
                 element_id = uid_generator.from_string(str(entry.resolve()))
                 new_elements.append(LocalPath(id=element_id, name=entry.name, path=entry_str))
@@ -2424,33 +2873,87 @@ def expand_path():
                     new_elements.append(Audio(id=element_id, name=entry.name, context={}, file=asset, duration=duration))
                 except Exception as e:
                     print(f"Failed to load audio for {entry.name} to generate UID: {e}")
-                
+
+        local_jobs[job_id]["progress"] = {
+            "value": 90,
+            "total": 100,
+            "description": "Saving directory contents to parameter graph..."
+        }
         with graph_lock:
             for el in new_elements:
                 param_graph.add_element(el)
                 param_graph.update_element(el.id, {"parent": existing_dir_id})
             param_graph.save()
-            
-        # Trigger embedding calculation for the newly added audio files
-        trigger_embedding_update(background=False)
-        
-        response_data = {
+
+        # Trigger background incremental embedding updates
+        trigger_embedding_update(background=True)
+
+        result_payload = {
             "message": f"Successfully expanded path {path_element.name}",
             "directory_id": existing_dir_id,
-            "elements": [el.to_dict() for el in new_elements],
-            "success": True
+            "node_id": existing_dir_id,
+            "id": existing_dir_id,
+            "elements": [el.to_dict() for el in new_elements]
         }
-        if new_dir_created:
-            response_data["new_directory"] = new_dir.to_dict()
-            if new_edge:
-                response_data["new_edge"] = new_edge
-            
-        return jsonify(response_data)
+        if new_dir_created and new_dir:
+            result_payload["new_directory"] = new_dir.to_dict()
+        if new_edge:
+            result_payload["new_edge"] = new_edge
+
+        local_jobs[job_id]["status"] = "completed"
+        local_jobs[job_id]["progress"] = {
+            "value": 100,
+            "total": 100,
+            "description": f"Expanded {len(new_elements)} items."
+        }
+        local_jobs[job_id]["result"] = result_payload
 
     except Exception as e:
-        print(f"Failed to expand path: {e}")
+        print(f"Failed in async directory expansion: {e}")
         traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        local_jobs[job_id]["status"] = "failed"
+        local_jobs[job_id]["progress"] = None
+        local_jobs[job_id]["error"] = str(e)
+        local_jobs[job_id]["traceback"] = traceback.format_exc()
+
+
+@app.route("/expand_path", methods=["POST"])
+async def expand_path():
+    """Reads a PathNode, creates a Directory compound node if needed, and populates it asynchronously."""
+    if param_graph is None:
+        return jsonify({"error": "No project loaded"}), 400
+
+    try:
+        data = request.get_json() or {}
+        path_node_id = data.get("path_node_id")
+        if not path_node_id:
+            return jsonify({"error": "path_node_id is required"}), 400
+
+        job_id = f"expand_path_{uuid.uuid4().hex[:12]}"
+        local_jobs[job_id] = {
+            "status": "pending",
+            "progress": {"value": 0, "total": 100, "description": "Starting directory expansion..."},
+            "result": None,
+            "error": None,
+            "traceback": None,
+            "name": "Expand Directory"
+        }
+
+        threading.Thread(
+            target=lambda: asyncio.run(_expand_path_task(job_id, path_node_id)),
+            daemon=True
+        ).start()
+
+        return jsonify({
+            "success": True,
+            "job_id": job_id,
+            "message": "Directory expansion job started"
+        }), 202
+
+    except Exception as e:
+        print(f"Failed to start directory expansion: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
 def resolve_audio_path(audio_id):
     """Gets the audio path, falling back to the project cache if the original file was deleted."""
@@ -2695,7 +3198,7 @@ def trigger_labeling_update():
         param_graph.save()
     print("Labeling update completed successfully.")
 
-def trigger_embedding_update(force_recalculate=False, background=True):
+def trigger_embedding_update(force_recalculate=False, background=True, job_id=None):
     """
     Background task to compute missing embeddings and recalculate similarity edges.
     If force_recalculate is True, it will recompute embeddings for all nodes.
@@ -2705,6 +3208,14 @@ def trigger_embedding_update(force_recalculate=False, background=True):
 
     def update_embeddings_task():
         try:
+            if job_id and job_id in local_jobs:
+                local_jobs[job_id]["status"] = "running"
+                local_jobs[job_id]["progress"] = {
+                    "value": 10,
+                    "total": 100,
+                    "description": "Initializing CLAP/CLIP encoders..."
+                }
+
             # Instantiate encoders lazily per task run
             clap_encoder = None
             clip_encoder = None
@@ -2716,7 +3227,15 @@ def trigger_embedding_update(force_recalculate=False, background=True):
             if has_label_bank:
                 interrogator.load_bank_from_disk(str(bank_path))
             
-            for group_type, embedding_type in SIMILARITY_GROUPS.items():
+            group_keys = list(SIMILARITY_GROUPS.items())
+            for g_idx, (group_type, embedding_type) in enumerate(group_keys):
+                if job_id and job_id in local_jobs:
+                    local_jobs[job_id]["progress"] = {
+                        "value": int(20 + (g_idx / max(len(group_keys), 1)) * 60),
+                        "total": 100,
+                        "description": f"Processing {group_type} embeddings..."
+                    }
+
                 if group_type == "audio":
                     if clap_encoder is None:
                         clap_encoder = CLAPEncoder()
@@ -2762,6 +3281,8 @@ def trigger_embedding_update(force_recalculate=False, background=True):
                         print(f"Could not update {embedding_type} embedding for node {node}. Error: {e}")
 
                 with graph_lock:
+                    if param_graph is None or getattr(param_graph, "G", None) is None:
+                        return
                     # 2. Fast similarity edge rebuild based on cached embeddings
                     edges_to_remove = [
                         (u, v) for u, v, d in param_graph.G.edges(data=True) 
@@ -2866,10 +3387,26 @@ def trigger_embedding_update(force_recalculate=False, background=True):
 
                     param_graph.save()
             print("Embeddings updated and similarity edges created successfully")
+            if job_id and job_id in local_jobs:
+                local_jobs[job_id]["status"] = "completed"
+                local_jobs[job_id]["progress"] = {
+                    "value": 100,
+                    "total": 100,
+                    "description": "Embeddings updated successfully."
+                }
+                local_jobs[job_id]["result"] = {
+                    "message": "Embeddings updated successfully",
+                    "success": True
+                }
 
         except Exception as e:
             print(f"Failed to update embeddings: {e}")
             traceback.print_exc()
+            if job_id and job_id in local_jobs:
+                local_jobs[job_id]["status"] = "failed"
+                local_jobs[job_id]["progress"] = None
+                local_jobs[job_id]["error"] = str(e)
+                local_jobs[job_id]["traceback"] = traceback.format_exc()
             
     if background:
         thread = threading.Thread(target=update_embeddings_task)
@@ -2879,20 +3416,30 @@ def trigger_embedding_update(force_recalculate=False, background=True):
 
 @app.route("/update_embeddings", methods=["POST"])
 def update_embeddings():
-    """Update all embeddings and create similarity edges."""
+    """Update all embeddings and create similarity edges asynchronously."""
     if param_graph is None:
         return jsonify({"error": "No project loaded"}), 400
 
     data = request.get_json(silent=True) or {}
     force = data.get("force", False)
-    
-    # Run synchronously so the frontend's HTTP request waits for completion
-    trigger_embedding_update(force_recalculate=force, background=False)
+
+    job_id = f"update_embeddings_{uuid.uuid4().hex[:12]}"
+    local_jobs[job_id] = {
+        "status": "pending",
+        "progress": {"value": 0, "total": 100, "description": "Starting embeddings update..."},
+        "result": None,
+        "error": None,
+        "traceback": None,
+        "name": "Update Embeddings"
+    }
+
+    trigger_embedding_update(force_recalculate=force, background=True, job_id=job_id)
 
     return jsonify({
-        "message": "Embeddings updated successfully.",
-        "success": True
-    }), 200
+        "success": True,
+        "job_id": job_id,
+        "message": "Embeddings update started"
+    }), 202
 
 @app.route("/update_labels", methods=["POST"])
 def update_labels():
@@ -3082,20 +3629,15 @@ def serve_image(image_id):
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
-@app.route("/export", methods=["POST"])
-def export_audio():
-    """Export audio files"""
-    if param_graph is None:
-        return jsonify({"error": "No project loaded"}), 400
-    
+async def _export_audio_task(job_id: str, names: list[str], export_dir_str: str | None) -> None:
     try:
-        data = request.get_json()
-        names = data.get('names', [])
-        export_dir_str = data.get('export_dir')
-        
-        if not names:
-            return jsonify({"error": "names list is required"}), 400
-        
+        local_jobs[job_id]["status"] = "running"
+        local_jobs[job_id]["progress"] = {
+            "value": 5,
+            "total": 100,
+            "description": "Preparing export directory..."
+        }
+
         is_file_target = False
         if export_dir_str:
             export_path_obj = Path(export_dir_str)
@@ -3106,50 +3648,107 @@ def export_audio():
                 export_dir = export_path_obj
         else:
             export_dir = Path(param_graph.root) / "export"
-        
+
         export_dir.mkdir(parents=True, exist_ok=True)
-        
+
         exported_paths = []
-        for name in names:
-            # Look up element by id or by name
+        total_names = len(names)
+
+        for idx, name in enumerate(names):
+            local_jobs[job_id]["progress"] = {
+                "value": int(10 + (idx / max(total_names, 1)) * 85),
+                "total": 100,
+                "description": f"Exporting file {idx + 1} of {total_names}: {name}"
+            }
+
             element = None
-            if param_graph.G.has_node(name):
-                element = param_graph.get_element(name)
-            else:
-                for node_id, node_data in param_graph.G.nodes(data=True):
-                    if node_data.get('name') == name:
-                        element = param_graph.get_element(node_id)
-                        break
-            
+            with graph_lock:
+                if param_graph.G.has_node(name):
+                    element = param_graph.get_element(name)
+                else:
+                    for node_id, node_data in param_graph.G.nodes(data=True):
+                        if node_data.get('name') == name:
+                            element = param_graph.get_element(node_id)
+                            break
+
             if not element:
-                return jsonify({"error": f"Element '{name}' not found"}), 404
-            
+                raise ValueError(f"Element '{name}' not found")
+
             audio_path = resolve_audio_path(element.id)
             if not audio_path or not audio_path.exists():
-                return jsonify({"error": f"Audio file for element '{name}' not found"}), 404
-            
+                raise ValueError(f"Audio file for element '{name}' not found")
+
             if is_file_target:
                 dest_path = export_path_obj
             else:
-                dest_filename = f"{element.name}{audio_path.suffix}"
+                dest_filename = element.name if element.name.endswith(audio_path.suffix) else f"{element.name}{audio_path.suffix}"
                 dest_path = export_dir / dest_filename
-            
+
             shutil.copy2(audio_path, dest_path)
             exported_paths.append(dest_path)
-        
-        # If we exported a single file, return that file's path. Otherwise return the export directory.
+
         export_path = exported_paths[0] if len(exported_paths) == 1 else export_dir
-        
-        return jsonify({
+
+        local_jobs[job_id]["status"] = "completed"
+        local_jobs[job_id]["progress"] = {
+            "value": 100,
+            "total": 100,
+            "description": "Export completed."
+        }
+        local_jobs[job_id]["result"] = {
             "message": "Export completed",
             "export_path": str(export_path),
-            "success": True
-        })
-        
+            "exported_files": [str(p) for p in exported_paths]
+        }
+
     except Exception as e:
-        print(f"Export failed: {e}")
+        print(f"Failed in async audio export: {e}")
         traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        local_jobs[job_id]["status"] = "failed"
+        local_jobs[job_id]["progress"] = None
+        local_jobs[job_id]["error"] = str(e)
+        local_jobs[job_id]["traceback"] = traceback.format_exc()
+
+
+@app.route("/export", methods=["POST"])
+async def export_audio():
+    """Export audio files asynchronously as a local background job."""
+    if param_graph is None:
+        return jsonify({"error": "No project loaded"}), 400
+
+    try:
+        data = request.get_json() or {}
+        names = data.get('names', [])
+        export_dir_str = data.get('export_dir') or data.get('custom_path')
+
+        if not names:
+            return jsonify({"error": "names list is required"}), 400
+
+        job_id = f"export_{uuid.uuid4().hex[:12]}"
+        local_jobs[job_id] = {
+            "status": "pending",
+            "progress": {"value": 0, "total": 100, "description": "Starting export..."},
+            "result": None,
+            "error": None,
+            "traceback": None,
+            "name": "Export Audio"
+        }
+
+        threading.Thread(
+            target=lambda: asyncio.run(_export_audio_task(job_id, names, export_dir_str)),
+            daemon=True
+        ).start()
+
+        return jsonify({
+            "success": True,
+            "job_id": job_id,
+            "message": "Export job started"
+        }), 202
+
+    except Exception as e:
+        print(f"Failed to start export: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
 # --------------------
 #  Element Updates

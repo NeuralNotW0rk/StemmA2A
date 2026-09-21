@@ -2,6 +2,7 @@
 <script lang="ts">
   import { ELEMENT_INFO_CONFIG } from '../../utils/app-config'
   import type { ElementData } from '../../utils/types'
+  import { addJob, pollJobStatus } from '../../utils/job-management'
 
   interface Props {
     selectedElementData: ElementData | null
@@ -43,8 +44,21 @@
     isExporting = true
     exportMessage = ''
     try {
-      const response = await window.api.exportSharedModel(element.id) as { message: string; success: boolean }
-      exportMessage = response.message
+      const response = (await window.api.exportSharedModel(element.id)) as {
+        message: string
+        success: boolean
+        job_id?: string
+      }
+      if (response.job_id) {
+        addJob('Export Shared Model', { modelId: element.id }, 'running', response.job_id)
+        const jobResult = (await pollJobStatus(response.job_id)) as {
+          result?: { message?: string }
+        }
+        exportMessage =
+          jobResult?.result?.message || 'Model successfully exported to shared catalog'
+      } else {
+        exportMessage = response.message
+      }
     } catch (err: unknown) {
       exportMessage = `Export failed: ${err instanceof Error ? err.message : String(err)}`
     } finally {

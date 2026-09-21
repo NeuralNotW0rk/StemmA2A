@@ -2,8 +2,8 @@
 <script lang="ts">
   import { onDestroy, type Snippet } from 'svelte'
   import NodeSelector from './NodeSelector.svelte'
-  import { selectionStore } from '../utils/stores'
-  import type { NodeData } from '../utils/forms'
+  import { selectionStore, cyInstanceStore } from '../utils/stores'
+  import type { NodeData, GroupData } from '../utils/forms'
   import type { NodeFilter, NodeListItem } from '../utils/types'
 
   let {
@@ -66,11 +66,53 @@
           items = items.filter((item) => item.id !== newItem.id)
           return
         }
-        const item = items.find((i) => i.id === newItem.id)
-        if (item) {
-          item.node = selected as NodeData
+
+        const selectedNode = selected as NodeData
+        const cy = $cyInstanceStore
+
+        // If a group node was selected, unpack its member nodes into individual top-level items
+        if (selectedNode.type === 'group' && (selectedNode as unknown as GroupData).member_ids && cy) {
+          const memberIds = (selectedNode as unknown as GroupData).member_ids
+          const memberNodes = memberIds
+            .map((mId) => cy.$id(mId).data() as NodeData)
+            .filter(Boolean)
+            .filter((m) => !filter?.type || m.type === filter.type)
+
+          // Remove the placeholder item
+          items = items.filter((item) => item.id !== newItem.id)
+
+          if (memberNodes.length > 0) {
+            for (const member of memberNodes) {
+              items.push({ id: nextId++, node: member, strength: defaultStrength })
+            }
+          }
+        } else {
+          const item = items.find((i) => i.id === newItem.id)
+          if (item) {
+            item.node = selectedNode
+          }
         }
       })
+    }
+  }
+
+  function handleChildNodeSelect(selectedNode: NodeData, index: number): void {
+    const cy = $cyInstanceStore
+    if (selectedNode.type === 'group' && (selectedNode as unknown as GroupData).member_ids && cy) {
+      const memberIds = (selectedNode as unknown as GroupData).member_ids
+      const memberNodes = memberIds
+        .map((mId) => cy.$id(mId).data() as NodeData)
+        .filter(Boolean)
+        .filter((m) => !filter?.type || m.type === filter.type)
+
+      if (memberNodes.length > 0) {
+        items[index].node = memberNodes[0]
+        for (let i = 1; i < memberNodes.length; i++) {
+          items.push({ id: nextId++, node: memberNodes[i], strength: defaultStrength })
+        }
+      } else {
+        items[index].node = null
+      }
     }
   }
 
@@ -97,7 +139,15 @@
       <div class="list-item-container">
         <div class="member-row">
           <div class="member-selector">
-            <NodeSelector {filter} bind:node={items[index].node} id={`${idPrefix}-${item.id}`} />
+            <NodeSelector
+              {filter}
+              bind:node={items[index].node}
+              allowBatchToggle={false}
+              id={`${idPrefix}-${item.id}`}
+              onNodeSelect={(selectedNode: NodeData): void => {
+                handleChildNodeSelect(selectedNode, index)
+              }}
+            />
           </div>
           <button
             type="button"

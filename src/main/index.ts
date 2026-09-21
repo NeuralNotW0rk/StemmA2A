@@ -468,6 +468,19 @@ app.whenReady().then(async (): Promise<void> => {
     return await response.json()
   })
 
+  ipcMain.handle('rescanSource', async (_event, sourceName: string) => {
+    const response = await fetchWithAuth(`${BACKEND_URL}/rescan_source`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source_name: sourceName })
+    })
+    if (!response.ok) {
+      const errorBody = await response.text()
+      throw new Error(`Failed to rescan source. Status: ${response.status}. Error: ${errorBody}`)
+    }
+    return await response.json()
+  })
+
   ipcMain.handle('expandPath', async (_event, pathNodeId) => {
     const response = await fetchWithAuth(`${BACKEND_URL}/expand_path`, {
       method: 'POST',

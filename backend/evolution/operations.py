@@ -4,28 +4,19 @@ def get_evolution_operations() -> list[dict]:
     """Returns the list of host-level evolutionary operations."""
     return [
         {
-            "name": "mutate",
-            "description": "Initialize a mutated population from this artifact",
+            "name": "wrap_individual",
+            "description": "Wrap this precursor artifact into a baseline evolutionary Individual",
             "category": "evolution",
-            "execution": "queued",
-            "initiator_types": ["audio"],
+            "execution": "immediate",
+            "initiator_types": ["audio", "image", "grating", "latent"],
             "context_overrides": {},
             "form_config": [
                 {
-                    "name": "source_audio",
+                    "name": "source_node",
                     "type": "node",
-                    "label": "Precursor Audio",
+                    "label": "Precursor Artifact",
                     "filter": {"type": "audio"},
                     "required": True
-                },
-                {
-                    "name": "population_size",
-                    "type": "integer",
-                    "label": "Population Size (N)",
-                    "defaultValue": 10,
-                    "min": 2,
-                    "max": 100,
-                    "allowSequence": False
                 },
                 {
                     "name": "lora_rank",
@@ -44,11 +35,38 @@ def get_evolution_operations() -> list[dict]:
                     "min": 0.1,
                     "step": 0.1,
                     "allowSequence": False
+                }
+            ]
+        },
+        {
+            "name": "mutate",
+            "description": "Mutate individual(s) to produce variant offspring",
+            "category": "evolution",
+            "execution": "queued",
+            "initiator_types": ["individual", "group"],
+            "context_overrides": {},
+            "form_config": [
+                {
+                    "name": "parents",
+                    "type": "node-list",
+                    "label": "Target Individual(s)",
+                    "filter": {"type": "individual"},
+                    "required": True,
+                    "minItems": 1
+                },
+                {
+                    "name": "offspring_size",
+                    "type": "integer",
+                    "label": "Mutant Count (N)",
+                    "defaultValue": 10,
+                    "min": 1,
+                    "max": 100,
+                    "allowSequence": False
                 },
                 {
                     "name": "lora_noise",
                     "type": "float",
-                    "label": "LoRA Noise",
+                    "label": "LoRA Perturbation Noise",
                     "defaultValue": 1.0,
                     "min": 0.0,
                     "max": 2.0,
@@ -59,7 +77,17 @@ def get_evolution_operations() -> list[dict]:
                     "name": "active_flip_prob",
                     "type": "float",
                     "label": "Active Flip Probability",
-                    "defaultValue": 0.5,
+                    "defaultValue": 0.8,
+                    "min": 0.0,
+                    "max": 1.0,
+                    "step": 0.01,
+                    "allowSequence": False
+                },
+                {
+                    "name": "mutation_rate",
+                    "type": "float",
+                    "label": "Gene Mutation Rate",
+                    "defaultValue": 1.0,
                     "min": 0.0,
                     "max": 1.0,
                     "step": 0.01,
@@ -72,7 +100,7 @@ def get_evolution_operations() -> list[dict]:
             "description": "Recombine selected individuals into a new generation of variants",
             "category": "evolution",
             "execution": "queued",
-            "initiator_types": ["group", "individual", "bundle"],
+            "initiator_types": ["group", "individual"],
             "context_overrides": {},
             "form_config": [
                 {
@@ -118,13 +146,23 @@ def get_evolution_operations() -> list[dict]:
                     "allowSequence": False
                 },
                 {
+                    "name": "crossover_prob",
+                    "type": "float",
+                    "label": "Crossover Probability",
+                    "defaultValue": 1.0,
+                    "min": 0.0,
+                    "max": 1.0,
+                    "step": 0.05,
+                    "allowSequence": False
+                },
+                {
                     "name": "mutation_rate",
                     "type": "float",
                     "label": "Mutation Rate",
-                    "defaultValue": 0.1,
+                    "defaultValue": 0.01,
                     "min": 0.0,
                     "max": 1.0,
-                    "step": 0.01,
+                    "step": 0.001,
                     "allowSequence": False
                 }
             ]

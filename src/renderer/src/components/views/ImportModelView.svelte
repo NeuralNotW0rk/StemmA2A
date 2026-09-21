@@ -110,27 +110,47 @@
     loadConfig()
   })
 
+  import { addJob, pollJobStatus } from '../../utils/job-management'
+
   async function importModel(): Promise<void> {
     if (!isImportValid) return
 
     inProgress = true
     try {
+      let res: { success?: boolean; job_id?: string; message?: string }
       if (importMode === 'shared') {
         const selectedModel = sharedModels.find((m: SharedModel): boolean => m.id === selectedSharedModelId)
         if (!selectedModel) throw new Error('Selected shared model not found')
 
-        await window.api.importModel({
+        res = (await window.api.importModel({
           model_element: {
             ...$state.snapshot(selectedModel),
             name: customModelName
           }
-        })
+        })) as { success?: boolean; job_id?: string; message?: string }
       } else {
-        await window.api.importModel({
+        res = (await window.api.importModel({
           adapter: selectedAdapter,
           ...$state.snapshot(formData)
-        })
+        })) as { success?: boolean; job_id?: string; message?: string }
       }
+
+      if (res?.job_id) {
+        const displayName =
+          importMode === 'shared' ? customModelName || 'shared' : selectedAdapter || 'local'
+        addJob(`Import Model (${displayName})`, { mode: importMode }, 'running', res.job_id)
+        formData = {}
+        onclose()
+        pollJobStatus(res.job_id)
+          .then((): void => {
+            onrefresh()
+          })
+          .catch((err: unknown): void => {
+            console.error('Background model import failed:', err)
+          })
+        return
+      }
+
       formData = {}
       onclose()
       onrefresh()

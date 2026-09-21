@@ -280,7 +280,20 @@
     const nodeData = targetNode ? targetNode.data() : null
     closeOperationsMenu()
     if (onselectOperation && nodeData) {
-      onselectOperation(op, nodeData)
+      if (op.name === 'recombine' || op.name === 'mutate') {
+        const individuals = getSelectedIndividuals(targetNode || undefined)
+        const isIndividualNode = targetNode && targetNode.isNode() && targetNode.data('type') === 'individual'
+        const isGroupNode = targetNode && targetNode.isNode() && targetNode.data('type') === 'group'
+        const fallback = isIndividualNode || isGroupNode ? [nodeData] : []
+        const baseInitiator = isIndividualNode || isGroupNode ? nodeData : (individuals[0] || nodeData)
+        const initiatorData = {
+          ...baseInitiator,
+          selectedNodes: individuals.length > 0 ? individuals : fallback
+        }
+        onselectOperation(op, initiatorData)
+      } else {
+        onselectOperation(op, nodeData)
+      }
     }
   }
 
@@ -373,7 +386,8 @@
     }
   }
 
-  function matchesFilter(node: cytoscape.NodeSingular, filter: Record<string, any>): boolean {
+  function matchesFilter(node: cytoscape.NodeSingular | cytoscape.EdgeSingular, filter: Record<string, any>): boolean {
+    if (!node.isNode()) return false
     const data = node.data()
 
     if (data.type === 'group') {
@@ -584,33 +598,34 @@
       }
     }
 
-    const PINNED_OPERATIONS = new Set(['generate', 'invert', 'recombine'])
+    const PINNED_OPERATIONS = new Set(['generate', 'invert', 'wrap_individual', 'mutate', 'recombine'])
 
-    const getSelectedIndividuals = (clickedEle?: cytoscape.NodeSingular): any[] => {
+    const getSelectedIndividuals = (clickedEle?: cytoscape.NodeSingular | cytoscape.EdgeSingular): any[] => {
       const selectedEles = cy ? cy.$(':selected') : null
       const candidates: any[] = []
       if (selectedEles && selectedEles.length > 0 && (!clickedEle || selectedEles.contains(clickedEle))) {
         selectedEles.forEach((e) => {
+          if (!e.isNode()) return
           const d = e.data()
           if (d.type === 'individual') {
             candidates.push(d)
           } else if (d.type === 'group' && Array.isArray(d.member_ids)) {
             d.member_ids.forEach((mid: string) => {
               const m = cy?.getElementById(mid)
-              if (m && m.length > 0 && m.data('type') === 'individual') {
+              if (m && m.length > 0 && m.isNode() && m.data('type') === 'individual') {
                 candidates.push(m.data())
               }
             })
           }
         })
-      } else if (clickedEle) {
+      } else if (clickedEle && clickedEle.isNode()) {
         const d = clickedEle.data()
         if (d.type === 'individual') {
           candidates.push(d)
         } else if (d.type === 'group' && Array.isArray(d.member_ids)) {
           d.member_ids.forEach((mid: string) => {
             const m = cy?.getElementById(mid)
-            if (m && m.length > 0 && m.data('type') === 'individual') {
+            if (m && m.length > 0 && m.isNode() && m.data('type') === 'individual') {
               candidates.push(m.data())
             }
           })
@@ -634,11 +649,15 @@
           return {
             content: toTitleCase(display.name),
             select: () => {
-              if (op.name === 'recombine') {
+              if (op.name === 'recombine' || op.name === 'mutate') {
                 const individuals = getSelectedIndividuals(ele)
+                const isIndividualNode = ele && ele.isNode() && ele.data('type') === 'individual'
+                const isGroupNode = ele && ele.isNode() && ele.data('type') === 'group'
+                const fallback = isIndividualNode || isGroupNode ? [ele.data()] : []
+                const baseInitiator = isIndividualNode || isGroupNode ? ele.data() : (individuals[0] || ele.data())
                 const initiatorData = {
-                  ...ele.data(),
-                  selectedNodes: individuals.length > 0 ? individuals : [ele.data()]
+                  ...baseInitiator,
+                  selectedNodes: individuals.length > 0 ? individuals : fallback
                 }
                 onselectOperation?.(op, initiatorData)
               } else {
@@ -762,6 +781,8 @@
       if (replicateCmd) {
         specificCommands.push(replicateCmd)
       }
+
+      specificCommands.push(...getPinnedOperations(ele))
 
       specificCommands.push({
         content: 'Export',

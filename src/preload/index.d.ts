@@ -45,6 +45,7 @@ interface API {
   groupElements: (memberIds: string[]) => Promise<any>
   updateGroup: (groupId: string, memberIds: string[]) => Promise<any>
   addExternalSource: (sourcePath: string) => Promise<any>
+  rescanSource: (sourceName: string) => Promise<any>
   expandPath: (pathNodeId: string) => Promise<any>
   cancelJob: (jobId: string) => Promise<any>
   saveNodePositions: (projectName: string, positions: Record<string, { x: number; y: number }>) => Promise<void>

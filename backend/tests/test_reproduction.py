@@ -4,6 +4,7 @@ import tempfile
 import shutil
 import os
 import time
+import uuid
 from unittest.mock import AsyncMock
 
 from neutral_selection.representation.individual import Individual as NSIndividual
@@ -229,7 +230,26 @@ class TestReproductionAPI(unittest.TestCase):
             g = ParameterGraph(tmp_dir)
             provider = EngineProvider(data_root=tmp_dir)
             mock_engine = provider.get_engine()
-            mock_engine.execute = AsyncMock(return_value="mock-breed-job")
+            mock_engine.execute = AsyncMock(side_effect=lambda *args, **kwargs: kwargs.get("job_id") or str(uuid.uuid4()))
+
+            async def _mock_get_job_status(jid):
+                fpath = os.path.join(tmp_dir, f"mock_audio_{uuid.uuid4().hex[:6]}.wav")
+                with open(fpath, "wb") as f:
+                    f.write(b"RIFFmockwavdata")
+                return {
+                    "status": "completed",
+                    "result": {
+                        "artifact": {
+                            "type": "audio",
+                            "id": f"audio_child_{uuid.uuid4().hex[:6]}",
+                            "name": "Generated Audio",
+                            "file": {"path": fpath, "uid": f"uid_{uuid.uuid4().hex[:6]}", "extension": ".wav"},
+                            "context": {}
+                        }
+                    }
+                }
+
+            mock_engine.get_job_status = AsyncMock(side_effect=_mock_get_job_status)
 
             old_graph = app_module.param_graph
             old_provider = app_module.engine_provider
@@ -357,6 +377,17 @@ class TestReproductionAPI(unittest.TestCase):
                 self.assertEqual(recombine_ctx.get("mutation_rate"), 0.05)
                 self.assertEqual(recombine_ctx.get("offspring_size"), 4)
 
+            # Check that child exemplar sub-jobs complete cleanly without spurious audio-to-audio source edges
+            for sub_job_id in completed_data.get("job_ids", []):
+                sub_status_resp = client.get(f"/job_status/{sub_job_id}")
+                self.assertEqual(sub_status_resp.status_code, 200)
+                sub_data = sub_status_resp.get_json()
+                self.assertEqual(sub_data.get("status"), "completed")
+                audio_node_id = sub_data.get("node_id")
+                self.assertIsNotNone(audio_node_id)
+                # Verify no direct source edges from precursor audio to this evolved exemplar audio
+                self.assertFalse(app_module.param_graph.G.has_edge(precursor_audio.id, audio_node_id))
+
             # 6. Test /execute_operation with operation="recombine"
             execute_payload = {
                 "operation": "recombine",
@@ -382,6 +413,120 @@ class TestReproductionAPI(unittest.TestCase):
                     if status_data.get("status") in ("completed", "failed"):
                         break
                 time.sleep(0.1)
+
+            # Restore globals
+            app_module.param_graph = old_graph
+            app_module.engine_provider = old_provider
+
+        finally:
+            shutil.rmtree(tmp_dir)
+
+    def test_recombine_tosses_out_selected_edges(self) -> None:
+        """Verify that passing edge IDs, edge dictionaries, or invalid elements in parents is cleanly filtered out."""
+        import app as app_module
+        from param_graph.graph import ParameterGraph
+        from param_graph.elements.models.stylegan_element import StyleGANModel
+        from param_graph.elements.artifacts.individual_element import Individual
+        from param_graph.elements.artifacts.audio_element import Audio
+        from param_graph.elements.base_elements import Asset
+        from engine.engine_provider import EngineProvider
+
+        tmp_dir = tempfile.mkdtemp()
+        try:
+            g = ParameterGraph(tmp_dir)
+            provider = EngineProvider(data_root=tmp_dir)
+            mock_engine = provider.get_engine()
+            mock_engine.execute = AsyncMock(side_effect=lambda *args, **kwargs: kwargs.get("job_id") or str(uuid.uuid4()))
+
+            old_graph = app_module.param_graph
+            old_provider = app_module.engine_provider
+            app_module.param_graph = g
+            app_module.engine_provider = provider
+
+            client = app_module.app.test_client()
+
+            # Add model
+            model_node = StyleGANModel(
+                id="model_edge_test",
+                name="Edge Test Model",
+                context={},
+                checkpoint=Asset(path="mock_model_path", uid="mock_model_uid", extension=".pt"),
+                adapter="stylegan2"
+            )
+            g.add_element(model_node)
+
+            # Create 2 parent individuals
+            output_dir = g.root / "generate"
+            os.makedirs(output_dir, exist_ok=True)
+            parent_ids = []
+            for i in range(2):
+                gene = PerturbationGene(f"layer_{i}", torch.randn(2, 2), torch.randn(2, 2), True)
+                genome = LoRAGenome([gene])
+                genome_path = output_dir / f"parent_edge_{i}.safetensors"
+                genome.save(str(genome_path))
+
+                ind = Individual(
+                    id=f"ind_edge_{i}",
+                    name=f"Parent Edge {i}",
+                    file=Asset(path=str(genome_path), uid=f"ind_edge_{i}", extension=".safetensors"),
+                    base_model_id=model_node.id,
+                    baseline_grating_id=None,
+                    generation=0,
+                    fitness=1.0,
+                    context={
+                        "model_id": model_node.id,
+                        "baseline_elements": [{"address": "layer_0", "kernel_type": "lora", "params": {"rank": 1, "alpha": 1.0}}],
+                        "baseline_file_path": str(genome_path)
+                    }
+                )
+                g.add_element(ind)
+                parent_ids.append(ind.id)
+
+            # Link ind_edge_0 to ind_edge_1 (creates edge "ind_edge_0->ind_edge_1")
+            ind0 = g.get_element("ind_edge_0")
+            ind1 = g.get_element("ind_edge_1")
+            g.link(ind0, ind1, relation='parent')
+            g.save()
+
+            # Test _extract_individual_parent_ids directly
+            mixed_selection = [
+                "ind_edge_0",
+                "ind_edge_0->ind_edge_1", # edge string
+                {"id": "ind_edge_0->ind_edge_1", "source": "ind_edge_0", "target": "ind_edge_1", "type": "individual"}, # edge dict
+                {"id": 0, "node": {"id": "ind_edge_1", "type": "individual"}}, # NodeSelectorList item
+                "non_existent_id",
+            ]
+            extracted = app_module._extract_individual_parent_ids(mixed_selection)
+            self.assertEqual(extracted, ["ind_edge_0", "ind_edge_1"])
+
+            # Test recombine endpoint with edge IDs mixed in
+            resp = client.post("/recombine_evolution", json={
+                "parent_ids": mixed_selection,
+                "offspring_size": 2,
+                "selection_type": "uniform",
+                "crossover_type": "two_point"
+            })
+            self.assertEqual(resp.status_code, 202)
+            res_data = resp.get_json()
+            self.assertTrue(res_data["success"])
+
+            # Wait for job completion
+            job_id = res_data["job_id"]
+            completed = False
+            for _ in range(50):
+                status_resp = client.get(f"/job_status/{job_id}")
+                if status_resp.status_code == 200:
+                    status_data = status_resp.get_json()
+                    if status_data.get("status") == "completed":
+                        completed = True
+                        break
+                    elif status_data.get("status") == "failed":
+                        self.fail(f"Recombine failed unexpectedly: {status_data.get('error')}\n{status_data.get('traceback')}")
+                elif status_resp.status_code == 500:
+                    status_data = status_resp.get_json()
+                    self.fail(f"Recombine failed: {status_data.get('error')}\n{status_data.get('traceback')}")
+                time.sleep(0.1)
+            self.assertTrue(completed, "Recombine job timed out")
 
             # Restore globals
             app_module.param_graph = old_graph

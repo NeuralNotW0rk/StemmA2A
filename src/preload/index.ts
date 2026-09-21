@@ -56,6 +56,8 @@ const api = {
     ipcRenderer.invoke('updateGroup', groupId, memberIds),
   addExternalSource: (sourcePath: string): Promise<any> =>
     ipcRenderer.invoke('addExternalSource', sourcePath),
+  rescanSource: (sourceName: string): Promise<any> =>
+    ipcRenderer.invoke('rescanSource', sourceName),
   expandPath: (pathNodeId: string): Promise<any> => ipcRenderer.invoke('expandPath', pathNodeId),
   cancelJob: (jobId: string): Promise<any> => ipcRenderer.invoke('cancel-job', jobId),
   saveNodePositions: (

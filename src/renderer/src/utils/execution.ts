@@ -46,10 +46,41 @@ export async function startExecution(
       job.status = 'success'
       job.result = finalResult
       updateJob(job)
+
+      // If this was a compound evolution job that queued child generation jobs, poll all sub-jobs
+      if (finalResult && typeof finalResult === 'object') {
+        const res = ((finalResult as Record<string, unknown>).result || finalResult) as Record<string, unknown>
+        if (Array.isArray(res.job_ids) && res.job_ids.length > 0) {
+          const totalSubJobs = res.job_ids.length
+          res.job_ids.forEach((subJobId: unknown, idx: number) => {
+            if (typeof subJobId === 'string') {
+              addJob(`Exemplar Generation (${idx + 1}/${totalSubJobs})`, null, 'running', subJobId)
+              pollJobStatus(subJobId).catch((subErr: unknown) => {
+                console.error('Sub-job polling error:', subErr)
+              })
+            }
+          })
+        }
+      }
     } else {
       job.status = 'success'
       job.result = initData
       updateJob(job)
+
+      if (initData && typeof initData === 'object') {
+        const res = ((initData as Record<string, unknown>).result || initData) as Record<string, unknown>
+        if (Array.isArray(res.job_ids) && res.job_ids.length > 0) {
+          const totalSubJobs = res.job_ids.length
+          res.job_ids.forEach((subJobId: unknown, idx: number) => {
+            if (typeof subJobId === 'string') {
+              addJob(`Exemplar Generation (${idx + 1}/${totalSubJobs})`, null, 'running', subJobId)
+              pollJobStatus(subJobId).catch((subErr: unknown) => {
+                console.error('Sub-job polling error:', subErr)
+              })
+            }
+          })
+        }
+      }
     }
   } catch (e: unknown) {
     let message = e instanceof Error ? e.message : String(e)
@@ -62,20 +93,16 @@ export async function startExecution(
 }
 
 export async function startEmbeddingUpdate(): Promise<void> {
-  const job = addJob('Updating Embeddings', {})
-
   try {
-    const result = await window.api.updateEmbeddings()
-    job.status = 'success'
-    job.result = result
-    updateJob(job)
+    const res = (await window.api.updateEmbeddings()) as { success?: boolean; job_id?: string }
+    if (res?.job_id) {
+      addJob('Updating Embeddings', {}, 'running', res.job_id)
+      await pollJobStatus(res.job_id)
+    }
   } catch (e: unknown) {
     let message = e instanceof Error ? e.message : String(e)
     message = message.replace(/^Error invoking remote method '[^']+':\s*(Error:\s*)?/, '')
-    const error = { title: 'Embedding Update Failed', message }
-    job.status = 'error'
-    job.error = error
-    updateJob(job)
+    throw new Error(message)
   }
 }
 

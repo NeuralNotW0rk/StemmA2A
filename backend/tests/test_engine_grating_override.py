@@ -190,12 +190,23 @@ def test_flask_endpoints():
             ]
         }
         resp = client.post("/create_grating", json=payload)
-        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
+        assert resp.status_code == 202, f"Expected 202, got {resp.status_code}"
         data = resp.get_json()
         assert data["success"] is True
-        assert "grating" in data
-        
-        grating_node = data["grating"]
+        job_id = data["job_id"]
+
+        # Poll job status until completion (clustering can take ~25-30s on CPU)
+        for _ in range(120):
+            import time
+            time.sleep(0.5)
+            status_resp = client.get(f"/job_status/{job_id}")
+            assert status_resp.status_code == 200
+            status_data = status_resp.get_json()
+            if status_data.get("status") in ("completed", "failed"):
+                break
+
+        assert status_data.get("status") == "completed", f"Job failed: {status_data.get('error')}"
+        grating_node = status_data["result"]["grating"]
         assert grating_node["id"].startswith("grating_")
         assert grating_node["base_model_id"] == model_info.id
         
@@ -292,10 +303,23 @@ def test_flask_endpoints():
             "model_id": model_info.id
         }
         resp = client.post("/export_shared_model", json=export_payload)
-        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
+        assert resp.status_code == 202, f"Expected 202, got {resp.status_code}"
         export_data = resp.get_json()
         assert export_data["success"] is True
-        assert "Successfully exported" in export_data["message"]
+        export_job_id = export_data["job_id"]
+
+        # Poll export job status
+        for _ in range(50):
+            import time
+            time.sleep(0.1)
+            status_resp = client.get(f"/job_status/{export_job_id}")
+            assert status_resp.status_code == 200
+            status_data = status_resp.get_json()
+            if status_data.get("status") in ("completed", "failed"):
+                break
+
+        assert status_data.get("status") == "completed", f"Job failed: {status_data.get('error')}"
+        assert "Successfully exported" in status_data["result"]["message"]
         
         # Verify dummy config file was created
         dummy_file = Path(tmp_dir) / "shared_models_dummy.json"
@@ -319,6 +343,14 @@ def test_flask_endpoints():
         except Exception as e:
             print(f"Non-critical cleanup warning: {e}")
 
+import unittest
+
+class TestEngineGratingOverride(unittest.TestCase):
+    def test_grating_override_async(self):
+        asyncio.run(test_grating_override())
+
+    def test_flask_endpoints_suite(self):
+        test_flask_endpoints()
+
 if __name__ == "__main__":
-    asyncio.run(test_grating_override())
-    test_flask_endpoints()
+    unittest.main()

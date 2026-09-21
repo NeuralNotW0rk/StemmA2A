@@ -31,7 +31,7 @@
     onclose
   }: Props = $props()
 
-  let inputVal = $state<number | string | null>(initialValue)
+  let inputVal = $state<number | string | null>(null)
   let inputElement = $state<HTMLInputElement | null>(null)
   let popperElement = $state<HTMLElement | null>(null)
   let isSubmitting = $state<boolean>(false)

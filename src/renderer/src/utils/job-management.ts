@@ -27,9 +27,14 @@ export interface Job {
 
 export const jobStore: Writable<Job[]> = writable([])
 
-export function addJob(name: string, payload: unknown, initialStatus: JobStatus = 'running'): Job {
+export function addJob(
+  name: string,
+  payload: unknown,
+  initialStatus: JobStatus = 'running',
+  customId?: string
+): Job {
   const job: Job = {
-    id: uuidv4(),
+    id: customId || uuidv4(),
     name,
     status: initialStatus,
     payload,
@@ -144,12 +149,41 @@ export async function pollJobStatus(jobId: string, intervalMs = 1500): Promise<u
     const data = (await window.api.pollJobStatus(jobId)) as Record<string, unknown>
     
     if (data.status === 'completed') {
+      jobStore.update((jobs: Job[]): Job[] => {
+        const index = jobs.findIndex((j: Job): boolean => j.id === jobId)
+        if (index > -1) {
+          const newJobs = [...jobs]
+          newJobs[index] = {
+            ...jobs[index],
+            status: 'success',
+            progress: { value: 100, total: 100, description: 'Completed' },
+            result: (data.result as JobResult | null) || (data as JobResult),
+            updatedAt: Date.now()
+          }
+          return newJobs
+        }
+        return jobs
+      })
       return data // Returns the fully processed artifact and context
     } else if (data.status === 'failed' || data.status === 'not_found' || data.error) {
       let errMsg = (data.error as string) || 'Job failed'
       if (data.traceback) {
         errMsg += `\n\nTraceback:\n${data.traceback}`
       }
+      jobStore.update((jobs: Job[]): Job[] => {
+        const index = jobs.findIndex((j: Job): boolean => j.id === jobId)
+        if (index > -1) {
+          const newJobs = [...jobs]
+          newJobs[index] = {
+            ...jobs[index],
+            status: 'error',
+            error: { title: 'Job Failed', message: errMsg },
+            updatedAt: Date.now()
+          }
+          return newJobs
+        }
+        return jobs
+      })
       throw new Error(errMsg)
     } else if (data.status === 'running' || data.status === 'pending') {
       // Update the job store with the intermediate status and progress to reflect in the UI

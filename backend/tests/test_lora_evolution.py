@@ -389,7 +389,7 @@ class TestLoRAEvolution(unittest.TestCase):
                 LoRAGenome.load(save_path)
 
     def test_start_evolution_api_structure(self) -> None:
-        """Test `/start_evolution` API endpoint, verifying population bundle, precursor audio linking, and population group visual compound hierarchy."""
+        """Test `/wrap_individual` and `/mutate_evolution` API endpoints, verifying individual baseline wrapping, precursor audio linking, direct parent lineage, and mutation group compound hierarchy (no bundles)."""
         import tempfile
         import shutil
         import os
@@ -456,12 +456,37 @@ class TestLoRAEvolution(unittest.TestCase):
             g.add_element(grating_node)
             g.save()
 
-            # 4. Invoke /start_evolution
-            payload = {
-                "model_id": "model_test",
+            # 4. Invoke /wrap_individual to turn precursor audio into baseline individual
+            wrap_payload = {
+                "precursor_id": "precursor_audio_test",
                 "baseline_grating_id": "grating_test",
-                "precursor_audio_id": "precursor_audio_test",
-                "population_size": 3,
+                "model_id": "model_test"
+            }
+            wrap_resp = client.post("/wrap_individual", json=wrap_payload)
+            self.assertEqual(wrap_resp.status_code, 200)
+            wrap_data = wrap_resp.get_json()
+            self.assertTrue(wrap_data["success"])
+            baseline_ind_id = wrap_data["node_id"]
+            self.assertIsNotNone(baseline_ind_id)
+
+            # Verify baseline individual in graph
+            g_reloaded = ParameterGraph(tmp_dir)
+            g_reloaded.load()
+            base_ind = g_reloaded.get_element(baseline_ind_id)
+            self.assertEqual(base_ind.type, "individual")
+            self.assertEqual(base_ind.generation, 0)
+            self.assertIsNone(base_ind.fitness)
+            # Model binds_to individual
+            self.assertTrue(g_reloaded.G.has_edge("model_test", baseline_ind_id))
+            self.assertEqual(g_reloaded.G.get_edge_data("model_test", baseline_ind_id)["relation"], "binds_to")
+            # Precursor edge
+            self.assertTrue(g_reloaded.G.has_edge("precursor_audio_test", baseline_ind_id))
+            self.assertEqual(g_reloaded.G.get_edge_data("precursor_audio_test", baseline_ind_id)["relation"], "precursor")
+
+            # 5. Invoke /mutate_evolution on baseline individual
+            payload = {
+                "parents": [baseline_ind_id],
+                "offspring_size": 3,
                 "lora_noise": 0.05,
                 "active_flip_prob": 0.05,
                 "generation_context": {
@@ -470,7 +495,7 @@ class TestLoRAEvolution(unittest.TestCase):
                 }
             }
 
-            resp = client.post("/start_evolution", json=payload)
+            resp = client.post("/mutate_evolution", json=payload)
             self.assertEqual(resp.status_code, 202)
             
             res_data = resp.get_json()
@@ -488,41 +513,40 @@ class TestLoRAEvolution(unittest.TestCase):
                         completed_data = status_data.get("result")
                         break
                     elif status_data.get("status") == "failed":
-                        self.fail(f"Evolution init job failed: {status_data.get('error')}")
+                        self.fail(f"Evolution mutate job failed: {status_data.get('error')}")
                 time.sleep(0.1)
                 
             self.assertIsNotNone(completed_data, "Job did not complete in time")
             res_data = completed_data
 
-            # 5. Reload graph and verify elements & relationships
+            # 6. Reload graph and verify elements & relationships
             g_reloaded = ParameterGraph(tmp_dir)
             g_reloaded.load()
             
-            bundle_node = g_reloaded.get_element(res_data["bundle_id"])
-            self.assertEqual(bundle_node.type, "bundle")
-            self.assertEqual(len(bundle_node.member_ids), 3)
+            # Verify NO bundle node exists
+            for nid in g_reloaded.G.nodes:
+                el = g_reloaded.get_element(nid)
+                self.assertNotEqual(el.type, "bundle")
 
             group_node = g_reloaded.get_element(res_data["group_id"])
             self.assertEqual(group_node.type, "group")
             self.assertEqual(len(group_node.member_ids), 3)
 
-            # Check edges
-            # Precursor audio --precursor--> Bundle
-            self.assertTrue(g_reloaded.G.has_edge("precursor_audio_test", res_data["bundle_id"]))
-            edge_data = g_reloaded.G.get_edge_data("precursor_audio_test", res_data["bundle_id"])
-            self.assertEqual(edge_data["relation"], "precursor")
-
             # Check each individual member
             for ind_id in res_data["individual_ids"]:
                 ind_node = g_reloaded.get_element(ind_id)
                 self.assertEqual(ind_node.type, "individual")
-                # Parent must be the Group ID
+                self.assertEqual(ind_node.generation, 1)
+                # Parent compound must be the Group ID
                 node_attrs = g_reloaded.G.nodes[ind_id]
                 self.assertEqual(node_attrs.get("parent"), res_data["group_id"])
                 
-                # Bundle --member--> Individual edge
-                self.assertTrue(g_reloaded.G.has_edge(res_data["bundle_id"], ind_id))
-                self.assertEqual(g_reloaded.G.get_edge_data(res_data["bundle_id"], ind_id)["relation"], "member")
+                # Direct parent individual edge: baseline_ind_id -> child ind_id
+                self.assertTrue(g_reloaded.G.has_edge(baseline_ind_id, ind_id))
+                self.assertEqual(g_reloaded.G.get_edge_data(baseline_ind_id, ind_id)["relation"], "parent")
+                # Model binds_to edge
+                self.assertTrue(g_reloaded.G.has_edge("model_test", ind_id))
+                self.assertEqual(g_reloaded.G.get_edge_data("model_test", ind_id)["relation"], "binds_to")
 
             # Verify that registering a child artifact under an individual does NOT create an edge from the individual
             sample_ind_id = res_data["individual_ids"][0]
@@ -551,7 +575,7 @@ class TestLoRAEvolution(unittest.TestCase):
             shutil.rmtree(tmp_dir)
 
     def test_start_evolution_genome_centric(self) -> None:
-        """Test `/start_evolution` and `/express_individual` in a genome-centric manner without registering baseline grating nodes."""
+        """Test `/wrap_individual` with elements blueprint, `/mutate_evolution`, and `/express_individual` in a genome-centric manner without registering baseline grating nodes."""
         import tempfile
         import shutil
         import os
@@ -601,9 +625,10 @@ class TestLoRAEvolution(unittest.TestCase):
             g.add_element(precursor_audio)
             g.save()
 
-            # 3. Invoke /start_evolution with elements config directly
-            payload = {
+            # 3. Invoke /wrap_individual with elements config directly
+            wrap_payload = {
                 "model_id": "model_test",
+                "precursor_id": "precursor_audio_test",
                 "elements": [
                     {
                         "address": "layer1",
@@ -615,13 +640,22 @@ class TestLoRAEvolution(unittest.TestCase):
                             "out_features": 4
                         }
                     }
-                ],
-                "precursor_audio_id": "precursor_audio_test",
-                "population_size": 2,
+                ]
+            }
+            wrap_resp = client.post("/wrap_individual", json=wrap_payload)
+            self.assertEqual(wrap_resp.status_code, 200)
+            wrap_data = wrap_resp.get_json()
+            self.assertTrue(wrap_data["success"])
+            baseline_ind_id = wrap_data["node_id"]
+
+            # 4. Invoke /mutate_evolution on baseline individual
+            mutate_payload = {
+                "parents": [baseline_ind_id],
+                "offspring_size": 2,
                 "lora_noise": 0.05,
                 "active_flip_prob": 0.05
             }
-            resp = client.post("/start_evolution", json=payload)
+            resp = client.post("/mutate_evolution", json=mutate_payload)
             self.assertEqual(resp.status_code, 202)
             res_data = resp.get_json()
             self.assertTrue(res_data["success"])
@@ -638,13 +672,13 @@ class TestLoRAEvolution(unittest.TestCase):
                         completed_data = status_data.get("result")
                         break
                     elif status_data.get("status") == "failed":
-                        self.fail(f"Evolution init job failed: {status_data.get('error')}")
+                        self.fail(f"Evolution mutate job failed: {status_data.get('error')}")
                 time.sleep(0.1)
                 
             self.assertIsNotNone(completed_data, "Job did not complete in time")
             res_data = completed_data
 
-            # 4. Verify no baseline grating node was added to the graph database
+            # 5. Verify no baseline grating node was added to the graph database
             g_reloaded = ParameterGraph(tmp_dir)
             g_reloaded.load()
             
@@ -655,7 +689,7 @@ class TestLoRAEvolution(unittest.TestCase):
             self.assertIn("baseline_elements", ind_node.context)
             self.assertIn("baseline_file_path", ind_node.context)
 
-            # 5. Verify /express_individual works on this individual using its self-contained context blueprint
+            # 6. Verify /express_individual works on this individual using its self-contained context blueprint
             express_payload = {
                 "individual_id": individual_id
             }
@@ -676,7 +710,7 @@ class TestLoRAEvolution(unittest.TestCase):
             shutil.rmtree(tmp_dir)
 
     def test_execute_operation_mutate(self) -> None:
-        """Test `/execute_operation` endpoint with operation='mutate'."""
+        """Test `/execute_operation` endpoint with operation='wrap_individual' and operation='mutate'."""
         import tempfile
         import shutil
         from unittest.mock import AsyncMock
@@ -722,11 +756,12 @@ class TestLoRAEvolution(unittest.TestCase):
             g.add_element(precursor_audio)
             g.save()
 
-            # 3. Invoke /execute_operation with operation='mutate' (inferring model from precursor)
-            payload = {
-                "operation": "mutate",
-                "execution_mode": "async",
+            # 3. Invoke /execute_operation with operation='wrap_individual'
+            wrap_payload = {
+                "operation": "wrap_individual",
+                "execution_mode": "sync",
                 "source_audio": "precursor_audio_test",
+                "model_id": "model_test",
                 "elements": [
                     {
                         "address": "layer1",
@@ -738,8 +773,20 @@ class TestLoRAEvolution(unittest.TestCase):
                             "out_features": 4
                         }
                     }
-                ],
-                "population_size": 2,
+                ]
+            }
+            resp = client.post("/execute_operation", json=wrap_payload)
+            self.assertEqual(resp.status_code, 200)
+            wrap_data = resp.get_json()
+            self.assertTrue(wrap_data["success"])
+            baseline_ind_id = wrap_data["node_id"]
+
+            # 4. Invoke /execute_operation with operation='mutate' on baseline individual
+            payload = {
+                "operation": "mutate",
+                "execution_mode": "async",
+                "parents": [baseline_ind_id],
+                "offspring_size": 2,
                 "lora_noise": 0.05,
                 "active_flip_prob": 0.05
             }
@@ -760,7 +807,7 @@ class TestLoRAEvolution(unittest.TestCase):
                         completed_data = status_data.get("result")
                         break
                     elif status_data.get("status") == "failed":
-                        self.fail(f"Evolution init job failed: {status_data.get('error')}")
+                        self.fail(f"Evolution mutate job failed: {status_data.get('error')}")
                 time.sleep(0.1)
                 
             self.assertIsNotNone(completed_data, "Job did not complete in time")

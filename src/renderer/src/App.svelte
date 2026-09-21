@@ -30,6 +30,7 @@
     jobStore,
     addJob,
     updateJob,
+    pollJobStatus,
     clearDismissableJobs,
     cancelAllJobs
   } from './utils/job-management'
@@ -306,26 +307,30 @@
   }
 
   async function handleExpandPath(pathNodeId: string): Promise<void> {
-    // 1. Register the job locally before the backend blocks
-    const job = addJob('Expand Directory', { pathNodeId }, 'running')
-
     try {
       const response = await window.api.expandPath(pathNodeId)
-
-      // 2. When the backend finally unblocks, mark it successful
-      job.status = 'success'
-      job.result = { id: response.directory_id, viewed: false }
-      updateJob(job)
-
+      if (response && response.job_id) {
+        addJob('Expand Directory', { pathNodeId }, 'running', response.job_id)
+        await pollJobStatus(response.job_id)
+      }
       await refreshGraphData()
     } catch (error: any) {
       console.error('Error expanding path:', error)
       errorInInfoPanel = { title: 'Expand Path Failed', message: error.message || String(error) }
+    }
+  }
 
-      // 3. Capture any failures
-      job.status = 'error'
-      job.error = { title: 'Expansion Failed', message: error.message || String(error) }
-      updateJob(job)
+  async function handleRescanSource(sourceName: string): Promise<void> {
+    try {
+      const response = await window.api.rescanSource(sourceName)
+      if (response && response.job_id) {
+        addJob('Rescan Source', { sourceName }, 'running', response.job_id)
+        await pollJobStatus(response.job_id)
+      }
+      await refreshGraphData()
+    } catch (error: any) {
+      console.error('Error rescanning source:', error)
+      errorInInfoPanel = { title: 'Rescan Source Failed', message: error.message || String(error) }
     }
   }
 
@@ -463,10 +468,22 @@
       if (!customPath) return // User cancelled
 
       const response = await window.api.exportAudio(data.names, customPath)
-
+      let exportPath = response?.export_path || customPath
+      if (response && response.job_id) {
+        addJob(
+          'Export Audio',
+          { count: data.names.length, target: customPath },
+          'running',
+          response.job_id
+        )
+        const jobResult = (await pollJobStatus(response.job_id)) as {
+          result?: { export_path?: string }
+        }
+        exportPath = jobResult?.result?.export_path || customPath
+      }
       errorInInfoPanel = {
         title: 'Export Successful',
-        message: `Successfully exported to: ${response?.export_path || 'project export folder'}`
+        message: `Successfully exported to: ${exportPath}`
       }
     } catch (error: any) {
       console.error('Export failed:', error)
@@ -801,6 +818,7 @@
     onstartGrouping={handleStartGrouping}
     onsavePositions={handleSavePositions}
     onexpandPath={handleExpandPath}
+    onrescanSource={handleRescanSource}
     ontoggleFavorite={handleToggleFavorite}
     {showDetailedLabels}
     {chronologicalConstraint}

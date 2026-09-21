@@ -94,6 +94,8 @@
 
   let isFormValid = $derived(selectedAddress !== '' && !loadingLayers && !!selectedModel)
 
+  import { addJob, pollJobStatus } from '../../utils/job-management'
+
   async function createGrating(): Promise<void> {
     if (!isFormValid || !selectedModel) return
 
@@ -120,7 +122,20 @@
         ]
       }
 
-      await window.api.createGrating(payload)
+      const res = (await window.api.createGrating(payload)) as { success?: boolean; job_id?: string }
+      if (res?.job_id) {
+        addJob(`Create Grating (${finalName})`, { model_id: selectedModel.id }, 'running', res.job_id)
+        onclose()
+        pollJobStatus(res.job_id)
+          .then((): void => {
+            onrefresh()
+          })
+          .catch((err: unknown): void => {
+            console.error('Background grating creation failed:', err)
+          })
+        return
+      }
+
       onclose()
       onrefresh()
     } catch (e: unknown) {
