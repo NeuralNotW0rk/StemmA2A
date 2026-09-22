@@ -21,13 +21,6 @@ class SliceOperation(SyncOperation):
     def initiator_types(self) -> list:
         return ["audio"]
 
-    def get_form_config(self) -> list:
-        return [
-            {"name": "source_audio", "type": "node", "label": "Source Audio", "filter": {"type": "audio"}, "required": True},
-            {"name": "chunk_duration", "type": "float", "label": "Chunk Duration (s)", "defaultValue": 1.0, "required": True},
-            {"name": "overlap", "type": "float", "label": "Overlap (s)", "defaultValue": 0.0, "required": False}
-        ]
-
     def execute(self, **kwargs) -> list[tuple[Audio, torch.Tensor]]:
         source_element = kwargs.get("source_audio_element")
         chunk_duration = float(kwargs.get("chunk_duration", 1.0))

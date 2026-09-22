@@ -1,3 +1,6 @@
+import inspect
+import json
+import os
 from abc import ABC, abstractmethod
 from typing import Any, List, Tuple
 from param_graph.elements.base_elements import GraphElement
@@ -22,7 +25,26 @@ class SyncOperation(ABC):
         pass
 
     def get_form_config(self) -> list:
-        """Returns UI form configuration for dynamic argument generation."""
+        """Returns UI form configuration for dynamic argument generation.
+
+        By default, attempts to load <name>.json or <module_name>.json colocated
+        with the operation subclass file.
+        """
+        try:
+            cls_file = inspect.getfile(self.__class__)
+            dir_name = os.path.dirname(cls_file)
+            name_json_path = os.path.join(dir_name, f"{self.name}.json")
+            if os.path.exists(name_json_path):
+                with open(name_json_path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+
+            module_base = os.path.splitext(os.path.basename(cls_file))[0]
+            module_json_path = os.path.join(dir_name, f"{module_base}.json")
+            if os.path.exists(module_json_path):
+                with open(module_json_path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+        except Exception as e:
+            print(f"Error loading form config for operation '{self.name}': {e}")
         return []
 
     @property
@@ -42,7 +64,7 @@ class SyncOperation(ABC):
     def context_overrides(self) -> dict:
         return {}
 
-    def to_dict(self):
+    def to_dict(self) -> dict:
         return {
             "name": self.name,
             "description": self.description,

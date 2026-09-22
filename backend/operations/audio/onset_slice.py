@@ -21,12 +21,6 @@ class LibrosaOnsetSliceOperation(SyncOperation):
     def initiator_types(self) -> list:
         return ["audio"]
 
-    def get_form_config(self) -> list:
-        return [
-            {"name": "source_audio", "type": "node", "label": "Source Audio", "filter": {"type": "audio"}, "required": True},
-            {"name": "backtrack", "type": "boolean", "label": "Backtrack to Local Minima", "defaultValue": True, "required": False}
-        ]
-
     def execute(self, **kwargs) -> list[tuple[Audio, torch.Tensor]]:
         import librosa
         

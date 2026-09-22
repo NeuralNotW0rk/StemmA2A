@@ -21,12 +21,6 @@ class NormalizeOperation(SyncOperation):
     def initiator_types(self) -> list:
         return ["audio"]
 
-    def get_form_config(self) -> list:
-        return [
-            {"name": "source_audio", "type": "node", "label": "Source Audio", "filter": {"type": "audio"}, "required": True},
-            {"name": "target_peak", "type": "float", "label": "Target Peak", "defaultValue": 1.0, "required": True}
-        ]
-
     def execute(self, **kwargs) -> list[tuple[Audio, torch.Tensor]]:
         source_element = kwargs.get("source_audio_element")
         target_peak = float(kwargs.get("target_peak", 1.0))

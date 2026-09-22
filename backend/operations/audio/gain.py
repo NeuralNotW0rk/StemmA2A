@@ -22,18 +22,6 @@ class GainOperation(SyncOperation):
     def initiator_types(self) -> list:
         return ["audio"]
 
-    def get_form_config(self) -> list:
-        return [
-            {"name": "source_audio", "type": "node", "label": "Source Audio", "filter": {"type": "audio"}, "required": True},
-            {
-                "name": "gain_db",
-                "type": "float",
-                "label": "Gain (dB)",
-                "defaultValue": 3.0,
-                "required": True
-            }
-        ]
-
     def execute(self, **kwargs) -> list[tuple[Audio, torch.Tensor]]:
         source_element = kwargs.get("source_audio_element")
         gain_db = float(kwargs.get("gain_db", 3.0))
