@@ -1,5 +1,7 @@
+"""Agnostic evolutionary recombination / crossover operators and breeding coordinators."""
+
 from dataclasses import dataclass
-from typing import Optional, Any, Union
+from typing import Optional, Union
 
 from neutral_selection.representation.individual import Individual
 from neutral_selection.representation.population import Population
@@ -18,20 +20,24 @@ from neutral_selection.builders import (
 
 @dataclass
 class LineageRecord:
-    """Tracks the lineage and reproduction history of an offspring individual."""
+    """Tracks the lineage and recombination history of an offspring individual."""
     parent_ids: list[str]
     crossover_applied: bool
     mutated: bool
 
 
 @dataclass
-class ReproducedOffspring:
-    """Wraps a newly bred Individual alongside its lineage metadata."""
+class RecombinedOffspring:
+    """Wraps a newly bred/recombined Individual alongside its lineage metadata."""
     individual: Individual
     lineage: LineageRecord
 
 
-def breed_offspring(
+# Backward-compatibility alias
+ReproducedOffspring = RecombinedOffspring
+
+
+def recombine_offspring(
     parents: Union[Population, list[Individual]],
     offspring_count: int,
     selection_strategy: SelectionStrategy,
@@ -40,10 +46,12 @@ def breed_offspring(
     crossover_prob: float = 0.8,
     elitism: int = 0,
     parent_ids: Optional[list[str]] = None,
-) -> list[ReproducedOffspring]:
+) -> list[RecombinedOffspring]:
     """
     Generates `offspring_count` child Individuals from the given parent population
     by coordinating selection, crossover, mutation, and elitism via neutral_selection.
+
+    This operation is representation-agnostic and works with any Individual genotype.
 
     Args:
         parents: Population or list of parent Individuals.
@@ -56,7 +64,7 @@ def breed_offspring(
         parent_ids: Optional list of ID strings corresponding to `parents` in order.
 
     Returns:
-        A list of ReproducedOffspring items containing the child Individuals and lineage records.
+        A list of RecombinedOffspring items containing the child Individuals and lineage records.
     """
     bred_population: Population = step(
         parents=parents,
@@ -69,13 +77,17 @@ def breed_offspring(
         parent_ids=parent_ids,
     )
 
-    offspring: list[ReproducedOffspring] = []
+    offspring: list[RecombinedOffspring] = []
     for ind in bred_population:
         lineage_record = LineageRecord(
             parent_ids=list(ind.lineage.parent_ids) if ind.lineage else [],
             crossover_applied=ind.lineage.crossover_applied if ind.lineage else False,
             mutated=ind.lineage.mutated if ind.lineage else False,
         )
-        offspring.append(ReproducedOffspring(individual=ind, lineage=lineage_record))
+        offspring.append(RecombinedOffspring(individual=ind, lineage=lineage_record))
 
     return offspring
+
+
+# Backward-compatibility alias
+breed_offspring = recombine_offspring

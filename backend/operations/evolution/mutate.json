@@ -1,0 +1,59 @@
+{
+  "name": "mutate",
+  "description": "Mutate individual(s) to produce variant offspring",
+  "category": "evolution",
+  "execution": "queued",
+  "initiator_types": ["individual", "group"],
+  "context_overrides": {},
+  "form_config": [
+    {
+      "name": "parents",
+      "type": "node-list",
+      "label": "Target Individual(s)",
+      "filter": {
+        "type": "individual"
+      },
+      "required": true,
+      "minItems": 1
+    },
+    {
+      "name": "offspring_size",
+      "type": "integer",
+      "label": "Mutant Count (N)",
+      "defaultValue": 10,
+      "min": 1,
+      "max": 100,
+      "allowSequence": false
+    },
+    {
+      "name": "lora_noise",
+      "type": "float",
+      "label": "LoRA Perturbation Noise",
+      "defaultValue": 1.0,
+      "min": 0.0,
+      "max": 2.0,
+      "step": 0.01,
+      "allowSequence": false
+    },
+    {
+      "name": "active_flip_prob",
+      "type": "float",
+      "label": "Active Flip Probability",
+      "defaultValue": 0.8,
+      "min": 0.0,
+      "max": 1.0,
+      "step": 0.01,
+      "allowSequence": false
+    },
+    {
+      "name": "mutation_rate",
+      "type": "float",
+      "label": "Gene Mutation Rate",
+      "defaultValue": 1.0,
+      "min": 0.0,
+      "max": 1.0,
+      "step": 0.01,
+      "allowSequence": false
+    }
+  ]
+}

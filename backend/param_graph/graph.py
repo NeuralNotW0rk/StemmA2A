@@ -1,6 +1,7 @@
 import os
 import json
 import shutil
+import uuid
 from pathlib import Path
 from time import time
 
@@ -126,7 +127,7 @@ class ParameterGraph:
     def save(self):
         check_dir(self.root)
         data_path = self.root / DICT_FILE
-        temp_path = self.root / f"{DICT_FILE}.tmp"
+        temp_path = self.root / f"{DICT_FILE}.{uuid.uuid4().hex[:8]}.tmp"
         bak_path = self.root / f"{DICT_FILE}.bak"
 
         data = {
@@ -150,13 +151,30 @@ class ParameterGraph:
             except Exception as e:
                 print(f"[ParameterGraph] Warning: Failed to create backup {bak_path}: {e}")
 
-        # 4. Atomically swap temp_path to data_path
-        try:
-            os.replace(str(temp_path), str(data_path))
-        except Exception:
-            if os.path.exists(str(data_path)):
-                os.remove(str(data_path))
-            os.rename(str(temp_path), str(data_path))
+        # 4. Atomically swap temp_path to data_path (with retry on Windows)
+        last_err = None
+        for attempt in range(5):
+            try:
+                os.replace(str(temp_path), str(data_path))
+                last_err = None
+                break
+            except Exception as e:
+                last_err = e
+                import time
+                time.sleep(0.05 * (attempt + 1))
+        
+        if last_err is not None:
+            try:
+                if os.path.exists(str(data_path)):
+                    os.remove(str(data_path))
+                os.rename(str(temp_path), str(data_path))
+            except Exception as final_err:
+                if os.path.exists(str(temp_path)):
+                    try:
+                        os.remove(str(temp_path))
+                    except Exception:
+                        pass
+                raise final_err
 
     def to_json(self, mode='batch'):
         if mode == 'batch':

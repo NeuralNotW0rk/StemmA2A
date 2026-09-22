@@ -4,7 +4,7 @@ from operations.audio.gain import GainOperation
 from operations.audio.normalize import NormalizeOperation
 from operations.audio.slice import SliceOperation
 from operations.audio.onset_slice import LibrosaOnsetSliceOperation
-from evolution.operations import get_evolution_operations
+from operations.evolution import get_evolution_operations
 
 class TestOperationsConfig(unittest.TestCase):
     def setUp(self) -> None:

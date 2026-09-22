@@ -1,0 +1,37 @@
+{
+  "name": "wrap_individual",
+  "description": "Wrap this precursor artifact into a baseline evolutionary Individual",
+  "category": "evolution",
+  "execution": "immediate",
+  "initiator_types": ["audio", "image", "grating", "latent"],
+  "context_overrides": {},
+  "form_config": [
+    {
+      "name": "source_node",
+      "type": "node",
+      "label": "Precursor Artifact",
+      "filter": {
+        "type": "audio"
+      },
+      "required": true
+    },
+    {
+      "name": "lora_rank",
+      "type": "integer",
+      "label": "LoRA Rank",
+      "defaultValue": 1,
+      "min": 1,
+      "max": 128,
+      "allowSequence": false
+    },
+    {
+      "name": "lora_alpha",
+      "type": "float",
+      "label": "LoRA Alpha",
+      "defaultValue": 1.0,
+      "min": 0.1,
+      "step": 0.1,
+      "allowSequence": false
+    }
+  ]
+}

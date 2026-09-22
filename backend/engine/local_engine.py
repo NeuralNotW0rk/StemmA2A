@@ -17,7 +17,7 @@ from .engine import Engine
 from .model_cache import ModelCache
 from utils.uid import path_from_uid
 from utils.audio import save_audio
-from evolution.lora.lora_genome import LoRAGenome, express_to_grating
+from evolution.genome import LoRAGenome, express_to_grating
 
 from diffracture import Actant
 from diffracture.topology.grating import Grating as DiffractureGrating

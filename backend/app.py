@@ -62,19 +62,22 @@ from param_graph.elements.artifacts.individual_element import Individual
 from param_graph.elements.artifacts.bundle_element import Bundle
 from param_graph.elements.collections.group_element import Group
 
-from evolution.reproduction import (
+from operations.evolution import (
+    recombine_offspring,
+    RecombinedOffspring,
     breed_offspring,
+    ReproducedOffspring,
     build_selection_strategy,
     build_crossover_strategy,
-    ReproducedOffspring,
+    get_evolution_operations,
+    wrap_artifact_as_individual,
 )
-from evolution.lora.lora_genome import (
+from evolution.lora_genome import (
     LoRAGenome,
     express_to_grating,
     get_lora_mutation_strategy,
     get_lora_crossover_strategy,
 )
-from evolution.operations import get_evolution_operations
 from neutral_selection.representation.individual import Individual as NSIndividual
 import copy
 import uuid
@@ -1072,7 +1075,7 @@ async def _dispatch_wrap_individual_operation(data: dict):
         diff_base_grating = DiffractureGrating.load(base_grating_path)
 
     # Build baseline genome from base grating
-    from evolution.lora.lora_genome import LoRAGenome
+    from evolution.genome import LoRAGenome
     baseline_genome = LoRAGenome.from_grating(diff_base_grating)
 
     # Compute deterministic UID from baseline genome
@@ -1164,7 +1167,8 @@ async def _mutate_evolution_task(
         }
 
         engine = engine_provider.get_engine()
-        from evolution.lora.lora_genome import LoRAGenome, get_lora_mutation_strategy
+        from evolution.genome import LoRAGenome
+        from evolution.lora_genome import get_lora_mutation_strategy
         from neutral_selection.variation.mutation import mutate
 
         with graph_lock:
@@ -1447,6 +1451,17 @@ async def recombine_evolution():
         elitism = int(data.get("elitism", 0))
         generation_context = data.get("generation_context") or {}
 
+        raw_default_fitness = (
+            data.get("default_fitness")
+            if data.get("default_fitness") is not None
+            else (
+                data.get("null_fitness_override")
+                if data.get("null_fitness_override") is not None
+                else data.get("override_null_fitness")
+            )
+        )
+        default_fitness = float(raw_default_fitness) if raw_default_fitness is not None else 0.0
+
         # Resolve parent IDs from group if only group passed
         if not parent_ids and parent_group_id:
             with graph_lock:
@@ -1490,6 +1505,7 @@ async def recombine_evolution():
                     crossover_prob=crossover_prob,
                     elitism=elitism,
                     generation_context=generation_context,
+                    default_fitness=default_fitness,
                 )
             )
         )
@@ -1521,6 +1537,7 @@ async def _recombine_evolution_task(
     crossover_prob: float,
     elitism: int,
     generation_context: dict,
+    default_fitness: float = 0.0,
 ) -> None:
     """
     Background worker that breeds a new generation from parent individuals,
@@ -1636,7 +1653,8 @@ async def _recombine_evolution_task(
             for p_node in parent_nodes:
                 genome = LoRAGenome.load(p_node.file.path)
                 ns_ind = NSIndividual(genotype=genome)
-                ns_ind.fitness = p_node.fitness
+                fitness_val = p_node.fitness if p_node.fitness is not None else default_fitness
+                ns_ind.fitness = fitness_val
                 parent_ns_individuals.append(ns_ind)
                 parent_id_list.append(p_node.id)
 
@@ -1660,7 +1678,7 @@ async def _recombine_evolution_task(
             )
 
             # 4. Perform breeding
-            offspring_records: list[ReproducedOffspring] = breed_offspring(
+            offspring_records: list[RecombinedOffspring] = recombine_offspring(
                 parents=parent_ns_individuals,
                 offspring_count=target_offspring_count,
                 selection_strategy=selection_strat,
@@ -1710,6 +1728,7 @@ async def _recombine_evolution_task(
             child_context["recombine_operation"] = {
                 "crossover_type": crossover_cfg.get("type", "hierarchical") if isinstance(crossover_cfg, dict) else str(crossover_cfg),
                 "selection_type": selection_cfg.get("type", "tournament") if isinstance(selection_cfg, dict) else str(selection_cfg),
+                "default_fitness": default_fitness,
                 "mutation_rate": mutation_rate,
                 "crossover_prob": crossover_prob,
                 "elitism": elitism,
@@ -2474,6 +2493,29 @@ async def _dispatch_recombine_operation(data):
         )
         generation_context = data.get("generation_context") or params.get("generation_context") or {}
 
+        raw_default_fitness = (
+            data.get("default_fitness")
+            if data.get("default_fitness") is not None
+            else (
+                params.get("default_fitness")
+                if params.get("default_fitness") is not None
+                else (
+                    data.get("null_fitness_override")
+                    if data.get("null_fitness_override") is not None
+                    else (
+                        params.get("null_fitness_override")
+                        if params.get("null_fitness_override") is not None
+                        else (
+                            data.get("override_null_fitness")
+                            if data.get("override_null_fitness") is not None
+                            else params.get("override_null_fitness")
+                        )
+                    )
+                )
+            )
+        )
+        default_fitness = float(raw_default_fitness) if raw_default_fitness is not None else 0.0
+
         parent_job_id = data.get("job_id") or f"evolution_recombine_{uuid.uuid4().hex[:12]}"
         local_jobs[parent_job_id] = {
             "status": "pending",
@@ -2494,7 +2536,8 @@ async def _dispatch_recombine_operation(data):
                     mutation_cfg=mutation_cfg,
                     crossover_prob=crossover_prob,
                     elitism=elitism,
-                    generation_context=generation_context
+                    generation_context=generation_context,
+                    default_fitness=default_fitness
                 )
             )
         )

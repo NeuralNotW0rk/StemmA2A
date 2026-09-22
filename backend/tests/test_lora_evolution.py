@@ -3,12 +3,13 @@ import torch
 from diffracture.topology.grating import Grating
 from diffracture.topology.lora import LoRAElement
 
-from evolution.lora.lora_genome import (
+from evolution.genome import (
+    LoRAGene,
     PerturbationGene,
     LoRAGenome,
     express_to_grating,
-    lora_gaussian_noise_mutator
 )
+from evolution.lora_genome import lora_gaussian_noise_mutator
 from neutral_selection.variation.mutation import mutate, UniformMutation, attribute_mutator, bit_flip_mutator
 from neutral_selection.variation.recombination import RandomNPointCrossover, recombine
 from neutral_selection.representation.individual import Individual
@@ -21,12 +22,14 @@ class TestLoRAEvolution(unittest.TestCase):
         torch.manual_seed(42)
 
     def test_gene_from_and_to_tensors(self) -> None:
-        """Verify initialization and scaling on reconstruction."""
+        """Verify initialization and scaling on reconstruction with LoRAGene."""
+        self.assertIs(PerturbationGene, LoRAGene)
+
         address = "layer_test"
         lora_down = torch.randn(2, 5, dtype=torch.float64) * 5.0
         lora_up = torch.randn(8, 2, dtype=torch.float64) * 5.0
 
-        gene = PerturbationGene.from_tensors(address, lora_down, lora_up, active=True)
+        gene = LoRAGene.from_tensors(address, lora_down, lora_up, active=True)
 
         # Check weights are saved
         self.assertTrue(torch.allclose(gene.lora_down, lora_down))

@@ -12,38 +12,40 @@ from neutral_selection.representation.population import Population
 from neutral_selection.variation.selection import TournamentSelection, TruncationSelection
 from neutral_selection.variation.recombination import RandomNPointCrossover
 
-from evolution.lora.lora_genome import (
+from evolution.lora_genome import (
+    LoRAGene,
     PerturbationGene,
     LoRAGenome,
     get_lora_mutation_strategy,
     get_lora_crossover_strategy,
 )
-from evolution.reproduction import (
-    breed_offspring,
+from operations.evolution.recombination import (
+    recombine_offspring,
     build_selection_strategy,
     build_crossover_strategy,
+    RecombinedOffspring,
     ReproducedOffspring,
+    breed_offspring,
 )
 
 
-
-class TestReproductionEngine(unittest.TestCase):
+class TestRecombinationEngine(unittest.TestCase):
 
     def setUp(self) -> None:
         torch.manual_seed(42)
 
     def _create_mock_lora_individual(self, val: float, fitness: float | None = None) -> NSIndividual:
         genes = [
-            PerturbationGene("layer1", torch.full((2, 2), val), torch.full((2, 2), val), True),
-            PerturbationGene("layer2", torch.full((2, 2), val * 2.0), torch.full((2, 2), val * 2.0), True),
+            LoRAGene("layer1", torch.full((2, 2), val), torch.full((2, 2), val), True),
+            LoRAGene("layer2", torch.full((2, 2), val * 2.0), torch.full((2, 2), val * 2.0), True),
         ]
         genome = LoRAGenome(genes)
         ind = NSIndividual(genotype=genome)
         ind.fitness = fitness
         return ind
 
-    def test_breed_offspring_basic(self) -> None:
-        """Verify that breed_offspring produces the expected number of offspring with lineage."""
+    def test_recombine_offspring_basic(self) -> None:
+        """Verify that recombine_offspring produces the expected number of offspring with lineage."""
         p1 = self._create_mock_lora_individual(1.0, fitness=10.0)
         p2 = self._create_mock_lora_individual(2.0, fitness=20.0)
         p3 = self._create_mock_lora_individual(3.0, fitness=30.0)
@@ -55,7 +57,7 @@ class TestReproductionEngine(unittest.TestCase):
         crossover_strat = get_lora_crossover_strategy(num_cut_points=1)
         mutation_strat = get_lora_mutation_strategy(lora_noise=0.05, active_flip_prob=0.0)
 
-        offspring = breed_offspring(
+        offspring = recombine_offspring(
             parents=parents,
             offspring_count=5,
             selection_strategy=selection_strat,
@@ -68,13 +70,14 @@ class TestReproductionEngine(unittest.TestCase):
 
         self.assertEqual(len(offspring), 5)
         for item in offspring:
-            self.assertIsInstance(item, ReproducedOffspring)
+            self.assertIsInstance(item, RecombinedOffspring)
+            self.assertIsInstance(item, ReproducedOffspring)  # Alias check
             self.assertIsInstance(item.individual.genotype, LoRAGenome)
             self.assertTrue(item.lineage.crossover_applied)
             self.assertTrue(item.lineage.mutated)
             self.assertGreaterEqual(len(item.lineage.parent_ids), 1)
 
-    def test_breed_offspring_elitism(self) -> None:
+    def test_recombine_offspring_elitism(self) -> None:
         """Verify that elitism preserves the exact top fitness individuals."""
         p1 = self._create_mock_lora_individual(1.0, fitness=10.0)
         p2 = self._create_mock_lora_individual(2.0, fitness=50.0)  # Highest fitness
@@ -87,7 +90,7 @@ class TestReproductionEngine(unittest.TestCase):
         crossover_strat = get_lora_crossover_strategy(num_cut_points=1)
         mutation_strat = get_lora_mutation_strategy(lora_noise=0.1, active_flip_prob=0.0)
 
-        offspring = breed_offspring(
+        offspring = recombine_offspring(
             parents=parents,
             offspring_count=4,
             selection_strategy=selection_strat,
@@ -112,7 +115,7 @@ class TestReproductionEngine(unittest.TestCase):
             self.assertTrue(torch.equal(elite_gene.lora_down, p2_gene.lora_down))
             self.assertTrue(torch.equal(elite_gene.lora_up, p2_gene.lora_up))
 
-    def test_breed_offspring_no_crossover(self) -> None:
+    def test_recombine_offspring_no_crossover(self) -> None:
         """Verify breeding with crossover probability 0.0 (mutation only)."""
         p1 = self._create_mock_lora_individual(1.0, fitness=10.0)
         p2 = self._create_mock_lora_individual(2.0, fitness=20.0)
@@ -124,7 +127,7 @@ class TestReproductionEngine(unittest.TestCase):
         crossover_strat = get_lora_crossover_strategy(num_cut_points=1)
         mutation_strat = get_lora_mutation_strategy(lora_noise=0.05, active_flip_prob=0.0)
 
-        offspring = breed_offspring(
+        offspring = recombine_offspring(
             parents=parents,
             offspring_count=2,
             selection_strategy=selection_strat,
@@ -140,26 +143,26 @@ class TestReproductionEngine(unittest.TestCase):
             self.assertFalse(item.lineage.crossover_applied)
             self.assertEqual(len(item.lineage.parent_ids), 1)
 
-    def test_breed_offspring_fail_fast_validation(self) -> None:
+    def test_recombine_offspring_fail_fast_validation(self) -> None:
         """Verify fail-fast error boundaries for invalid arguments."""
         p1 = self._create_mock_lora_individual(1.0)
         selection_strat = TournamentSelection(tournament_size=2)
 
         # Empty population
         with self.assertRaises(ValueError):
-            breed_offspring([], offspring_count=2, selection_strategy=selection_strat)
+            recombine_offspring([], offspring_count=2, selection_strategy=selection_strat)
 
         # Non-positive offspring count
         with self.assertRaises(ValueError):
-            breed_offspring([p1], offspring_count=0, selection_strategy=selection_strat)
+            recombine_offspring([p1], offspring_count=0, selection_strategy=selection_strat)
 
         # Invalid crossover_prob
         with self.assertRaises(ValueError):
-            breed_offspring([p1], offspring_count=2, selection_strategy=selection_strat, crossover_prob=1.5)
+            recombine_offspring([p1], offspring_count=2, selection_strategy=selection_strat, crossover_prob=1.5)
 
         # Invalid elitism count
         with self.assertRaises(ValueError):
-            breed_offspring([p1], offspring_count=2, selection_strategy=selection_strat, elitism=5)
+            recombine_offspring([p1], offspring_count=2, selection_strategy=selection_strat, elitism=5)
 
     def test_strategy_builders(self) -> None:
         """Verify strategy factory functions from dictionary configurations."""
@@ -210,9 +213,7 @@ class TestReproductionEngine(unittest.TestCase):
         self.assertEqual(len(child_genomes[1]), 2)
 
 
-
-
-class TestReproductionAPI(unittest.TestCase):
+class TestRecombinationAPI(unittest.TestCase):
 
     def test_recombine_evolution_api_and_graph_lineage(self) -> None:
         """Test `/recombine_evolution` endpoint, verifying generation increment, group creation, direct parent-child edges, and child context provenance."""
@@ -283,7 +284,7 @@ class TestReproductionAPI(unittest.TestCase):
 
             parent_ids = []
             for i in range(3):
-                gene = PerturbationGene(f"layer_{i}", torch.randn(2, 2), torch.randn(2, 2), True)
+                gene = LoRAGene(f"layer_{i}", torch.randn(2, 2), torch.randn(2, 2), True)
                 genome = LoRAGenome([gene])
                 genome_path = output_dir / f"parent_gen0_{i}.safetensors"
                 genome.save(str(genome_path))
@@ -460,7 +461,7 @@ class TestReproductionAPI(unittest.TestCase):
             os.makedirs(output_dir, exist_ok=True)
             parent_ids = []
             for i in range(2):
-                gene = PerturbationGene(f"layer_{i}", torch.randn(2, 2), torch.randn(2, 2), True)
+                gene = LoRAGene(f"layer_{i}", torch.randn(2, 2), torch.randn(2, 2), True)
                 genome = LoRAGenome([gene])
                 genome_path = output_dir / f"parent_edge_{i}.safetensors"
                 genome.save(str(genome_path))
@@ -469,23 +470,13 @@ class TestReproductionAPI(unittest.TestCase):
                     id=f"ind_edge_{i}",
                     name=f"Parent Edge {i}",
                     file=Asset(path=str(genome_path), uid=f"ind_edge_{i}", extension=".safetensors"),
-                    base_model_id=model_node.id,
-                    baseline_grating_id=None,
+                    base_model_id="model_edge_test",
                     generation=0,
                     fitness=1.0,
-                    context={
-                        "model_id": model_node.id,
-                        "baseline_elements": [{"address": "layer_0", "kernel_type": "lora", "params": {"rank": 1, "alpha": 1.0}}],
-                        "baseline_file_path": str(genome_path)
-                    }
+                    context={"model_id": "model_edge_test"}
                 )
                 g.add_element(ind)
                 parent_ids.append(ind.id)
-
-            # Link ind_edge_0 to ind_edge_1 (creates edge "ind_edge_0->ind_edge_1")
-            ind0 = g.get_element("ind_edge_0")
-            ind1 = g.get_element("ind_edge_1")
-            g.link(ind0, ind1, relation='parent')
             g.save()
 
             # Test _extract_individual_parent_ids directly
@@ -527,6 +518,138 @@ class TestReproductionAPI(unittest.TestCase):
                     self.fail(f"Recombine failed: {status_data.get('error')}\n{status_data.get('traceback')}")
                 time.sleep(0.1)
             self.assertTrue(completed, "Recombine job timed out")
+
+            # Restore globals
+            app_module.param_graph = old_graph
+            app_module.engine_provider = old_provider
+
+        finally:
+            shutil.rmtree(tmp_dir)
+
+    def test_recombine_null_fitness_override(self) -> None:
+        """Verify that recombination with tournament selection handles parent individuals with null fitness via default_fitness override."""
+        import app as app_module
+        from param_graph.graph import ParameterGraph
+        from param_graph.elements.models.stylegan_element import StyleGANModel
+        from param_graph.elements.artifacts.individual_element import Individual
+        from param_graph.elements.base_elements import Asset
+        from engine.engine_provider import EngineProvider
+
+        tmp_dir = tempfile.mkdtemp()
+        try:
+            g = ParameterGraph(tmp_dir)
+            provider = EngineProvider(data_root=tmp_dir)
+            mock_engine = provider.get_engine()
+            mock_engine.execute = AsyncMock(side_effect=lambda *args, **kwargs: kwargs.get("job_id") or str(uuid.uuid4()))
+
+            old_graph = app_module.param_graph
+            old_provider = app_module.engine_provider
+            app_module.param_graph = g
+            app_module.engine_provider = provider
+
+            client = app_module.app.test_client()
+
+            # Register base model
+            model_node = StyleGANModel(
+                id="model_null_fit_test",
+                name="Mock Model",
+                adapter="stylegan2",
+                checkpoint=Asset(path="mock_model_path", uid="mock_model_uid", extension=".pt"),
+                context={}
+            )
+            g.add_element(model_node)
+
+            # Create 2 parent individuals with fitness=None
+            output_dir = g.root / "generate"
+            os.makedirs(output_dir, exist_ok=True)
+            parents = []
+            for i in range(2):
+                gene = LoRAGene(f"layer_{i}", torch.randn(2, 2), torch.randn(2, 2), True)
+                genome = LoRAGenome([gene])
+                genome_path = output_dir / f"parent_null_{i}.safetensors"
+                genome.save(str(genome_path))
+
+                ind = Individual(
+                    id=f"ind_null_fit_{i}",
+                    name=f"Parent Null {i}",
+                    file=Asset(path=str(genome_path), uid=f"ind_null_fit_{i}", extension=".safetensors"),
+                    base_model_id="model_null_fit_test",
+                    generation=0,
+                    fitness=None,
+                    context={"model_id": "model_null_fit_test"}
+                )
+                g.add_element(ind)
+                parents.append(f"ind_null_fit_{i}")
+            g.save()
+
+            # Test recombine with tournament selection (which requires numeric fitness) and custom default_fitness
+            resp = client.post("/recombine_evolution", json={
+                "parent_ids": parents,
+                "offspring_size": 2,
+                "selection_type": "tournament",
+                "crossover_type": "two_point",
+                "default_fitness": 2.5
+            })
+            self.assertEqual(resp.status_code, 202)
+            res_data = resp.get_json()
+            self.assertTrue(res_data["success"])
+
+            job_id = res_data["job_id"]
+            completed = False
+            for _ in range(50):
+                status_resp = client.get(f"/job_status/{job_id}")
+                if status_resp.status_code == 200:
+                    status_data = status_resp.get_json()
+                    if status_data.get("status") == "completed":
+                        completed = True
+                        break
+                    elif status_data.get("status") == "failed":
+                        self.fail(f"Recombine failed unexpectedly: {status_data.get('error')}\n{status_data.get('traceback')}")
+                elif status_resp.status_code == 500:
+                    status_data = status_resp.get_json()
+                    self.fail(f"Recombine failed: {status_data.get('error')}\n{status_data.get('traceback')}")
+                time.sleep(0.1)
+            self.assertTrue(completed, "Recombine job timed out")
+
+            # Reload graph and verify child recombine_operation has default_fitness
+            g_reloaded = ParameterGraph(tmp_dir)
+            g_reloaded.load()
+            children = [
+                g_reloaded.get_element(nid) for nid in g_reloaded.G.nodes
+                if isinstance(g_reloaded.get_element(nid), Individual) and g_reloaded.get_element(nid).generation == 1
+            ]
+            self.assertEqual(len(children), 2)
+            for child in children:
+                recomb_ctx = child.context.get("recombine_operation", {})
+                self.assertEqual(recomb_ctx.get("default_fitness"), 2.5)
+
+            # Also test /execute_operation with operation='recombine' without specifying default_fitness (should default to 0.0)
+            exec_resp = client.post("/execute_operation", json={
+                "operation": "recombine",
+                "params": {
+                    "parents": parents,
+                    "offspring_size": 2,
+                    "selection_type": "tournament",
+                    "crossover_type": "two_point"
+                }
+            })
+            self.assertEqual(exec_resp.status_code, 202)
+            exec_data = exec_resp.get_json()
+            self.assertTrue(exec_data["success"])
+
+            job_id = exec_data["job_id"]
+            completed = False
+            for _ in range(50):
+                status_resp = client.get(f"/job_status/{job_id}")
+                if status_resp.status_code == 200:
+                    status_data = status_resp.get_json()
+                    if status_data.get("status") == "completed":
+                        completed = True
+                        break
+                    elif status_data.get("status") == "failed":
+                        self.fail(f"Recombine via execute_operation failed: {status_data.get('error')}\n{status_data.get('traceback')}")
+                time.sleep(0.1)
+            self.assertTrue(completed, "Recombine via execute_operation timed out")
 
             # Restore globals
             app_module.param_graph = old_graph
