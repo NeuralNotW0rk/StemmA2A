@@ -834,7 +834,7 @@ class StyleGANAdapter(ModelAdapter):
         name="generate",
         is_standard=True,
         description="Generate images using StyleGAN2 model",
-        initiator_types=["model", "grating", "latent"],
+        initiator_types=["model", "grating", "latent", "individual"],
         context_overrides={
             "model": {
                 "name": "Generate Image",
@@ -843,6 +843,10 @@ class StyleGANAdapter(ModelAdapter):
             "grating": {
                 "name": "generate from grating",
                 "description": "Generate image guided by the selected grating structure"
+            },
+            "individual": {
+                "name": "generate exemplar",
+                "description": "Generate an image exemplar expressing the selected individual's genome"
             }
         }
     )

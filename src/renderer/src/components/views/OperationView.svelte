@@ -219,6 +219,14 @@
         modelId = $initiatorNodeStore.context.model_id
       } else if ($initiatorNodeStore?.type === 'model') {
         modelId = $initiatorNodeStore.id
+      } else if ($initiatorNodeStore?.type === 'group' && $cyInstanceStore) {
+        const memberIds = $initiatorNodeStore.member_ids || []
+        if (memberIds.length > 0) {
+          const firstMember = $cyInstanceStore.getElementById(memberIds[0])
+          if (firstMember && firstMember.length > 0) {
+            modelId = firstMember.data('base_model_id') || firstMember.data('context')?.model_id || null
+          }
+        }
       }
 
       if (modelId && baseFieldsConfig.some((f) => f.name === 'model')) {

@@ -212,7 +212,7 @@ class StableAudioAdapter(ModelAdapter):
         name="generate",
         is_standard=True,
         description="Generate audio from a generative model",
-        initiator_types=["model", "grating", "latent", "audio"],
+        initiator_types=["model", "grating", "latent", "audio", "individual"],
         context_overrides={
             "audio": {
                 "name": "audio-to-audio",
@@ -225,6 +225,10 @@ class StableAudioAdapter(ModelAdapter):
             "latent": {
                 "name": "generate from latent",
                 "description": "Generate audio guided by the selected latent structure"
+            },
+            "individual": {
+                "name": "generate exemplar",
+                "description": "Generate an audio exemplar expressing the selected individual's genome"
             },
             "model": {
                 "name": "Generate Audio",

@@ -1322,33 +1322,6 @@ async def _mutate_evolution_task(
 
             individual_ids.append(child_ind_id)
 
-            # Queue async execution job
-            job_id = str(uuid.uuid4())
-            engine_args = {
-                "model_element": model_element,
-                "individual_elements": [child_node],
-                "baseline_grating": base_grating,
-                **node_engine_args
-            }
-
-            returned_job_id = await engine.execute(operation, job_id=job_id, **engine_args, **dumped_params)
-            if returned_job_id != job_id:
-                job_id = returned_job_id
-
-            job_ids.append(job_id)
-
-            v_params = {**dumped_params}
-            v_params["model_id"] = model_id
-            v_params["operation"] = operation
-            v_params["individuals"] = [{"id": child_ind_id, "strength": 1.0}]
-
-            active_jobs[job_id] = {
-                "parent_id": child_ind_id,
-                "linked_elements": [],
-                "validated_params": v_params,
-                "operation": operation
-            }
-
         local_jobs[parent_job_id]["status"] = "completed"
         local_jobs[parent_job_id]["progress"] = {
             "value": offspring_size,
@@ -1356,7 +1329,6 @@ async def _mutate_evolution_task(
             "description": "Mutation complete."
         }
         local_jobs[parent_job_id]["result"] = {
-            "job_ids": job_ids,
             "individual_ids": individual_ids,
             "group_id": group_id,
             "generation": next_generation
@@ -1775,33 +1747,6 @@ async def _recombine_evolution_task(
 
             individual_ids.append(child_ind_id)
 
-            # Queue execution job
-            job_id = str(uuid.uuid4())
-            engine_args = {
-                "model_element": model_element,
-                "individual_elements": [child_node],
-                "baseline_grating": base_grating,
-                **node_engine_args
-            }
-
-            returned_job_id = await engine.execute(operation, job_id=job_id, **engine_args, **dumped_params)
-            if returned_job_id != job_id:
-                job_id = returned_job_id
-
-            job_ids.append(job_id)
-
-            v_params = {**dumped_params}
-            v_params["model_id"] = model_id
-            v_params["operation"] = operation
-            v_params["individuals"] = [{"id": child_ind_id, "strength": 1.0}]
-
-            active_jobs[job_id] = {
-                "parent_id": child_ind_id,
-                "linked_elements": [],
-                "validated_params": v_params,
-                "operation": operation
-            }
-
         local_jobs[parent_job_id]["status"] = "completed"
         local_jobs[parent_job_id]["progress"] = {
             "value": target_offspring_count,
@@ -1809,7 +1754,6 @@ async def _recombine_evolution_task(
             "description": "Recombination complete."
         }
         local_jobs[parent_job_id]["result"] = {
-            "job_ids": job_ids,
             "individual_ids": individual_ids,
             "group_id": gen_group_id,
             "generation": next_generation
@@ -2577,6 +2521,41 @@ async def _dispatch_async_operation(data):
         operation = data.get("operation")
         params = data.get("params", {})
         
+        initiator = data.get("initiator") or params.get("initiator") or {}
+        initiator_id = initiator.get("id") if isinstance(initiator, dict) else (str(initiator).strip() if initiator else None)
+        initiator_type = initiator.get("type") if isinstance(initiator, dict) else None
+
+        # Resolve targeted Individual elements (if any)
+        target_individual_nodes: list[Individual] = []
+        target_individual_strengths: list[float] = []
+
+        raw_individuals = data.get("individuals") or params.get("individuals")
+        individual_id = (
+            data.get("individual_id")
+            or params.get("individual_id")
+            or (initiator_id if initiator_type == "individual" else None)
+        )
+
+        with graph_lock:
+            if raw_individuals and isinstance(raw_individuals, list):
+                for ind_item in raw_individuals:
+                    ind_id = ind_item.get("id") if isinstance(ind_item, dict) else ind_item
+                    ind_str = ind_item.get("strength", 1.0) if isinstance(ind_item, dict) else 1.0
+                    if ind_id and param_graph.G.has_node(ind_id):
+                        ind_elem = param_graph.get_element(ind_id)
+                        if isinstance(ind_elem, Individual) and ind_elem not in target_individual_nodes:
+                            target_individual_nodes.append(ind_elem)
+                            target_individual_strengths.append(float(ind_str))
+            elif individual_id and param_graph.G.has_node(individual_id):
+                ind_elem = param_graph.get_element(individual_id)
+                if isinstance(ind_elem, Individual):
+                    target_individual_nodes.append(ind_elem)
+                    target_individual_strengths.append(1.0)
+
+            # Auto-infer model_id from target individual if not explicitly specified
+            if not model_id and target_individual_nodes:
+                model_id = target_individual_nodes[0].base_model_id
+
         if not job_id:
             return jsonify({"error": "'job_id' is required."}), 400
         if not model_id:
@@ -2611,7 +2590,7 @@ async def _dispatch_async_operation(data):
                     if element:
                         node_engine_args[f"{field_name}_element"] = element
 
-        # --- Special Case Handlers (Gratings & Inversion Sources) ---
+        # --- Special Case Handlers (Gratings, Individuals & Inversion Sources) ---
         grating_strengths = []
         gratings = data.get("gratings") or params.get("gratings")
         if gratings:
@@ -2624,6 +2603,27 @@ async def _dispatch_async_operation(data):
                 grating_elements.append(g_element)
                 grating_strengths.append(g_conf.get("strength", 1.0))
             node_engine_args["grating_elements"] = grating_elements
+
+        # Pass individual_elements and resolve baseline grating
+        if target_individual_nodes:
+            node_engine_args["individual_elements"] = target_individual_nodes
+
+            # Resolve baseline grating from the first individual if needed
+            first_ind = target_individual_nodes[0]
+            base_grating_elem = None
+            if first_ind.baseline_grating_id and param_graph.G.has_node(first_ind.baseline_grating_id):
+                base_grating_elem = param_graph.get_element(first_ind.baseline_grating_id)
+            elif first_ind.context.get("baseline_file_path"):
+                base_grating_elem = Grating(
+                    id=f"grating_{uuid.uuid4().hex[:8]}",
+                    name="Baseline Grating",
+                    context={},
+                    file=Asset(path=str(first_ind.context.get("baseline_file_path")), uid=f"grating_{uuid.uuid4().hex[:8]}", extension=".safetensors"),
+                    base_model_id=model_id,
+                    elements=first_ind.context.get("baseline_elements") or []
+                )
+            if base_grating_elem:
+                node_engine_args["baseline_grating"] = base_grating_elem
 
         source_audio_id = data.get("source_audio_id") or params.get("source_audio_id")
         if source_audio_id:
@@ -2644,7 +2644,7 @@ async def _dispatch_async_operation(data):
         for arg_name, element in node_engine_args.items():
             if isinstance(element, list):
                 for el in element:
-                    if not isinstance(el, (Audio, Model, Grating, Latent)):
+                    if not isinstance(el, (Audio, Model, Grating, Latent, Individual)):
                         return jsonify({"error": f"Node '{el.id}' is not a valid artifact."}), 400
             else:
                 if isinstance(element, Audio):
@@ -2654,7 +2654,7 @@ async def _dispatch_async_operation(data):
                         element.file = replace(element.file, path=str(valid_path))
                         node_engine_args[arg_name] = element
                 
-                if not isinstance(element, (Audio, Model, Grating, Latent)):
+                if not isinstance(element, (Audio, Model, Grating, Latent, Individual)):
                     field_name = arg_name.removesuffix("_element")
                     return jsonify({"error": f"Node '{element.id}' for field '{field_name}' is not a valid artifact."}), 400
 
@@ -2662,9 +2662,15 @@ async def _dispatch_async_operation(data):
         if gratings:
             engine_args["grating_strengths"] = grating_strengths
             engine_args["gratings"] = gratings
+        if target_individual_nodes:
+            engine_args["individual_strengths"] = target_individual_strengths
         
-        # If gratings are used, the model is implied, so we omit the direct edge
-        if "grating_elements" in node_engine_args and node_engine_args["grating_elements"]:
+        # Determine parent and linked elements
+        parent_id = None
+        if target_individual_nodes:
+            parent_id = target_individual_nodes[0].id
+            linked_elements = [target_individual_nodes[0], *[el for el in resolved_elements if el.id != target_individual_nodes[0].id]]
+        elif "grating_elements" in node_engine_args and node_engine_args["grating_elements"]:
             linked_elements = [*resolved_elements]
         else:
             linked_elements = [model_element, *resolved_elements]
@@ -2701,8 +2707,14 @@ async def _dispatch_async_operation(data):
         v_params["operation"] = operation
         if gratings:
             v_params["gratings"] = gratings
+        if target_individual_nodes:
+            v_params["individuals"] = [
+                {"id": ind.id, "strength": str_val}
+                for ind, str_val in zip(target_individual_nodes, target_individual_strengths)
+            ]
             
         active_jobs[job_id] = {
+            "parent_id": parent_id,
             "group_id": group_id,
             "linked_elements": linked_elements,
             "validated_params": v_params,

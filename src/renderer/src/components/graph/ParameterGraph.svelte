@@ -637,19 +637,22 @@
     const getPinnedOperations = (ele: cytoscape.NodeSingular): Command[] => {
       if (!operations) return []
       const type = ele.data('type')
+      const memberType = ele.data('member_type')
       return operations
         .filter(
           (op) =>
             PINNED_OPERATIONS.has(op.name) &&
             op.initiator_types &&
-            op.initiator_types.includes(type)
+            (op.initiator_types.includes(type) ||
+              (type === 'group' && memberType && op.initiator_types.includes(memberType)))
         )
         .map((op) => {
-          const display = getOpDisplayProps(op, type)
+          const effectiveType = type === 'group' && memberType ? memberType : type
+          const display = getOpDisplayProps(op, effectiveType)
           return {
             content: toTitleCase(display.name),
             select: () => {
-              if (op.name === 'recombine' || op.name === 'mutate') {
+              if (op.name === 'recombine' || op.name === 'mutate' || op.name === 'generate') {
                 const individuals = getSelectedIndividuals(ele)
                 const isIndividualNode = ele && ele.isNode() && ele.data('type') === 'individual'
                 const isGroupNode = ele && ele.isNode() && ele.data('type') === 'group'

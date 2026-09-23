@@ -37,3 +37,12 @@
   - Windows: `backend\.venv\Scripts\python.exe` (or `.\.venv\Scripts\python.exe` when working inside `backend/`).
 - **Working Directory for Backend Tasks:** When running backend scripts, migrations, or tests, ensure the working directory is `backend/` (or that `backend/` is on `PYTHONPATH`) so local packages (such as `param_graph`, `engine`, `utils`, `operations`) resolve cleanly.
 
+## 7. Canonical Test Commands & Automation
+- **Single-Command Test Entry Points:** Always use the standardized root `npm` scripts or direct virtualenv paths rather than ad-hoc search:
+  - **Run Full Test Suite (Frontend + Backend):** `npm.cmd test` (from project root).
+  - **Run Backend Tests (Full Suite):** `npm.cmd run test:backend` (from root) OR `.\.venv\Scripts\python.exe -m unittest discover -s tests` (from `backend/`).
+  - **Run Single Backend Test File:** `.\.venv\Scripts\python.exe -m unittest tests/test_<name>.py` (from `backend/`).
+  - **Run Frontend Typecheck & Svelte Diagnostics:** `npm.cmd run typecheck` (or `npm.cmd run test:frontend` from root).
+- **Execution Policy on Windows:** Always run `npm.cmd` rather than `npm` when invoking shell commands in PowerShell to avoid script execution policy blocks.
+
+
