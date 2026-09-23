@@ -21,6 +21,7 @@ from dotenv import load_dotenv
 # Load .env file from the project root (parent directory)
 load_dotenv(Path(__file__).parent.parent / ".env")
 
+import time
 import threading
 import asyncio
 from flask import Flask, request, jsonify, send_file
@@ -1132,7 +1133,7 @@ async def _dispatch_wrap_individual_operation(data: dict):
 async def mutate_evolution():
     """
     Mutates parent individuals to produce variant offspring.
-    Queues on-the-fly generation tasks for the mutant offspring.
+    Genetics runs 100% locally on CPU without remote engine dependencies.
     """
     if param_graph is None or engine_provider is None:
         return jsonify({"error": "No project loaded"}), 400
@@ -1149,7 +1150,35 @@ async def mutate_evolution():
 start_evolution = mutate_evolution
 
 
-async def _mutate_evolution_task(
+def _run_mutate_task(
+    parent_job_id: str,
+    parent_ids: list[str],
+    offspring_size: int,
+    lora_noise: float,
+    active_flip_prob: float,
+    mutation_rate: float,
+    generation_context: dict
+) -> None:
+    try:
+        _mutate_evolution_task(
+            parent_job_id=parent_job_id,
+            parent_ids=parent_ids,
+            offspring_size=offspring_size,
+            lora_noise=lora_noise,
+            active_flip_prob=active_flip_prob,
+            mutation_rate=mutation_rate,
+            generation_context=generation_context,
+        )
+    except Exception as e:
+        print(f"Failed in async evolution mutation: {e}")
+        traceback.print_exc()
+        local_jobs[parent_job_id]["status"] = "failed"
+        local_jobs[parent_job_id]["progress"] = None
+        local_jobs[parent_job_id]["error"] = str(e)
+        local_jobs[parent_job_id]["traceback"] = traceback.format_exc()
+
+
+def _mutate_evolution_task(
     parent_job_id: str,
     parent_ids: list[str],
     offspring_size: int,
@@ -1166,7 +1195,6 @@ async def _mutate_evolution_task(
             "description": "Starting mutation..."
         }
 
-        engine = engine_provider.get_engine()
         from evolution.genome import LoRAGenome
         from evolution.lora_genome import get_lora_mutation_strategy
         from neutral_selection.variation.mutation import mutate
@@ -1267,7 +1295,8 @@ async def _mutate_evolution_task(
 
             # Select parent (round-robin across supplied parent individuals)
             selected_parent = parent_nodes[i % len(parent_nodes)]
-            parent_genome = LoRAGenome.load(selected_parent.file.path)
+            genome_path = param_graph.get_path_from_id(selected_parent.id) or selected_parent.file.path
+            parent_genome = LoRAGenome.load(genome_path)
 
             child_genome = copy.deepcopy(parent_genome)
             child_genome = mutate(child_genome, mutation_strategy)
@@ -1280,8 +1309,8 @@ async def _mutate_evolution_task(
 
             output_dir = param_graph.root / "generate"
             os.makedirs(output_dir, exist_ok=True)
-            genome_path = output_dir / f"{child_ind_id}.safetensors"
-            child_genome.save(str(genome_path))
+            saved_genome_path = output_dir / f"{child_ind_id}.safetensors"
+            child_genome.save(str(saved_genome_path))
 
             child_context = copy.deepcopy(merged_context)
             child_context["baseline_elements"] = baseline_elements
@@ -1303,7 +1332,7 @@ async def _mutate_evolution_task(
             child_node = Individual(
                 id=child_ind_id,
                 name=f"Gen {next_generation} - Mut {i+1} ({slug})",
-                file=Asset(path=str(genome_path), uid=child_ind_id, extension=".safetensors"),
+                file=Asset(path=str(saved_genome_path), uid=child_ind_id, extension=".safetensors"),
                 base_model_id=model_id,
                 baseline_grating_id=baseline_grating_id,
                 generation=next_generation,
@@ -1350,7 +1379,7 @@ _initialize_evolution_task = _mutate_evolution_task
 def _extract_individual_parent_ids(parent_input) -> list[str]:
     """
     Extracts valid Individual node IDs from parent inputs, automatically
-    discarding any edge IDs (e.g. containing '->'), edge dicts, or non-individual elements.
+    unpacking groups/bundles and discarding edge IDs (e.g. containing '->') or invalid elements.
     """
     if not parent_input:
         return []
@@ -1386,6 +1415,12 @@ def _extract_individual_parent_ids(parent_input) -> list[str]:
                 elem = param_graph.get_element(pid)
                 if isinstance(elem, Individual) and pid not in resolved_ids:
                     resolved_ids.append(pid)
+                elif isinstance(elem, (Group, Bundle)) and hasattr(elem, "member_ids") and elem.member_ids:
+                    for mid in elem.member_ids:
+                        if param_graph.G.has_node(mid):
+                            m_elem = param_graph.get_element(mid)
+                            if isinstance(m_elem, Individual) and mid not in resolved_ids:
+                                resolved_ids.append(mid)
     return resolved_ids
 
 
@@ -1394,6 +1429,7 @@ async def recombine_evolution():
     """
     Starts an evolutionary recombination (breeding) run.
     Selects, crosses over, and mutates parent individuals to produce a new generation.
+    Genetics runs 100% locally on CPU without remote engine dependencies.
     """
     if param_graph is None:
         return jsonify({"error": "No project loaded"}), 400
@@ -1454,7 +1490,7 @@ async def recombine_evolution():
                     return jsonify({"error": f"Parent bundle '{parent_bundle_id}' has no members."}), 400
 
         # Generate unique local job ID
-        parent_job_id = f"evolution_recombine_{uuid.uuid4().hex[:12]}"
+        parent_job_id = data.get("job_id") or f"evolution_recombine_{uuid.uuid4().hex[:12]}"
         local_jobs[parent_job_id] = {
             "status": "pending",
             "progress": None,
@@ -1462,24 +1498,23 @@ async def recombine_evolution():
             "error": None
         }
 
-        # Spawn background evolution task via background thread
-        import asyncio
+        # Spawn background evolution task via clean thread runner
         thread = threading.Thread(
-            target=lambda: asyncio.run(
-                _recombine_evolution_task(
-                    parent_job_id=parent_job_id,
-                    parent_ids=parent_ids,
-                    parent_bundle_id=parent_bundle_id,
-                    offspring_size=offspring_size,
-                    selection_cfg=selection_cfg,
-                    crossover_cfg=crossover_cfg,
-                    mutation_cfg=mutation_cfg,
-                    crossover_prob=crossover_prob,
-                    elitism=elitism,
-                    generation_context=generation_context,
-                    default_fitness=default_fitness,
-                )
-            )
+            target=_run_recombine_task,
+            kwargs=dict(
+                parent_job_id=parent_job_id,
+                parent_ids=parent_ids,
+                parent_bundle_id=parent_bundle_id,
+                offspring_size=offspring_size,
+                selection_cfg=selection_cfg,
+                crossover_cfg=crossover_cfg,
+                mutation_cfg=mutation_cfg,
+                crossover_prob=crossover_prob,
+                elitism=elitism,
+                generation_context=generation_context,
+                default_fitness=default_fitness,
+            ),
+            daemon=True
         )
         thread.start()
 
@@ -1498,7 +1533,43 @@ async def recombine_evolution():
 reproduce_evolution = recombine_evolution
 
 
-async def _recombine_evolution_task(
+def _run_recombine_task(
+    parent_job_id: str,
+    parent_ids: list[str] | None,
+    parent_bundle_id: str | None,
+    offspring_size: int | None,
+    selection_cfg: dict,
+    crossover_cfg: dict,
+    mutation_cfg: dict,
+    crossover_prob: float,
+    elitism: int,
+    generation_context: dict,
+    default_fitness: float = 0.0,
+) -> None:
+    try:
+        _recombine_evolution_task(
+            parent_job_id=parent_job_id,
+            parent_ids=parent_ids,
+            parent_bundle_id=parent_bundle_id,
+            offspring_size=offspring_size,
+            selection_cfg=selection_cfg,
+            crossover_cfg=crossover_cfg,
+            mutation_cfg=mutation_cfg,
+            crossover_prob=crossover_prob,
+            elitism=elitism,
+            generation_context=generation_context,
+            default_fitness=default_fitness,
+        )
+    except Exception as e:
+        print(f"Failed in async evolution reproduction: {e}")
+        traceback.print_exc()
+        local_jobs[parent_job_id]["status"] = "failed"
+        local_jobs[parent_job_id]["progress"] = None
+        local_jobs[parent_job_id]["error"] = str(e)
+        local_jobs[parent_job_id]["traceback"] = traceback.format_exc()
+
+
+def _recombine_evolution_task(
     parent_job_id: str,
     parent_ids: list[str] | None,
     parent_bundle_id: str | None,
@@ -1514,13 +1585,11 @@ async def _recombine_evolution_task(
     """
     Background worker that breeds a new generation from parent individuals,
     creates child nodes in the parameter graph with lineage relationships,
-    and queues audio generation jobs for each offspring.
+    and groups offspring in a generation Group.
     """
     try:
         local_jobs[parent_job_id]["status"] = "running"
         print(f"[_reproduce_evolution_task] Started reproduction task for job {parent_job_id}")
-
-        engine = engine_provider.get_engine()
 
         with graph_lock:
             # 1. Resolve parent individual nodes
@@ -1623,7 +1692,8 @@ async def _recombine_evolution_task(
             parent_ns_individuals: list[NSIndividual] = []
             parent_id_list: list[str] = []
             for p_node in parent_nodes:
-                genome = LoRAGenome.load(p_node.file.path)
+                genome_path = param_graph.get_path_from_id(p_node.id) or p_node.file.path
+                genome = LoRAGenome.load(genome_path)
                 ns_ind = NSIndividual(genotype=genome)
                 fitness_val = p_node.fitness if p_node.fitness is not None else default_fitness
                 ns_ind.fitness = fitness_val
@@ -1874,8 +1944,13 @@ async def get_job_status(job_id):
         status = job_info.get("status")
         
         if status in ["completed", "failed"]:
-            # Pop the job from memory once we send the final completed/failed state
-            return jsonify(local_jobs.pop(job_id)), 200 if status == "completed" else 500
+            # Mark completed timestamp and clean up jobs older than 5 minutes to prevent leaking
+            job_info["completed_at"] = job_info.get("completed_at", time.time())
+            now = time.time()
+            expired_keys = [k for k, v in local_jobs.items() if v.get("completed_at") and (now - v["completed_at"] > 300)]
+            for k in expired_keys:
+                local_jobs.pop(k, None)
+            return jsonify(job_info), 200 if status == "completed" else 500
         return jsonify(job_info), 200
 
     try:
@@ -2317,17 +2392,17 @@ async def _dispatch_mutate_operation(data):
 
         # Spawn background task
         thread = threading.Thread(
-            target=lambda: asyncio.run(
-                _mutate_evolution_task(
-                    parent_job_id=parent_job_id,
-                    parent_ids=parent_ids,
-                    offspring_size=offspring_size,
-                    lora_noise=lora_noise,
-                    active_flip_prob=active_flip_prob,
-                    mutation_rate=mutation_rate,
-                    generation_context=generation_context
-                )
-            )
+            target=_run_mutate_task,
+            kwargs=dict(
+                parent_job_id=parent_job_id,
+                parent_ids=parent_ids,
+                offspring_size=offspring_size,
+                lora_noise=lora_noise,
+                active_flip_prob=active_flip_prob,
+                mutation_rate=mutation_rate,
+                generation_context=generation_context,
+            ),
+            daemon=True
         )
         thread.start()
 
@@ -2469,21 +2544,21 @@ async def _dispatch_recombine_operation(data):
         }
 
         thread = threading.Thread(
-            target=lambda: asyncio.run(
-                _recombine_evolution_task(
-                    parent_job_id=parent_job_id,
-                    parent_ids=parent_ids,
-                    parent_bundle_id=parent_bundle_id,
-                    offspring_size=offspring_size,
-                    selection_cfg=selection_cfg,
-                    crossover_cfg=crossover_cfg,
-                    mutation_cfg=mutation_cfg,
-                    crossover_prob=crossover_prob,
-                    elitism=elitism,
-                    generation_context=generation_context,
-                    default_fitness=default_fitness
-                )
-            )
+            target=_run_recombine_task,
+            kwargs=dict(
+                parent_job_id=parent_job_id,
+                parent_ids=parent_ids,
+                parent_bundle_id=parent_bundle_id,
+                offspring_size=offspring_size,
+                selection_cfg=selection_cfg,
+                crossover_cfg=crossover_cfg,
+                mutation_cfg=mutation_cfg,
+                crossover_prob=crossover_prob,
+                elitism=elitism,
+                generation_context=generation_context,
+                default_fitness=default_fitness,
+            ),
+            daemon=True
         )
         thread.start()
 

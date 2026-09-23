@@ -1,5 +1,6 @@
 import unittest
 import torch
+from unittest.mock import AsyncMock, MagicMock
 from diffracture.topology.grating import Grating
 from diffracture.topology.lora import LoRAElement
 
@@ -419,8 +420,10 @@ class TestLoRAEvolution(unittest.TestCase):
             # Bind to Flask app module globals
             old_graph = app_module.param_graph
             old_provider = app_module.engine_provider
+            old_trigger = app_module.trigger_embedding_update
             app_module.param_graph = g
             app_module.engine_provider = provider
+            app_module.trigger_embedding_update = MagicMock()
             
             client = app_module.app.test_client()
 
@@ -517,7 +520,7 @@ class TestLoRAEvolution(unittest.TestCase):
                         break
                     elif status_data.get("status") == "failed":
                         self.fail(f"Evolution mutate job failed: {status_data.get('error')}")
-                time.sleep(0.1)
+                time.sleep(0.01)
                 
             self.assertIsNotNone(completed_data, "Job did not complete in time")
             res_data = completed_data
@@ -573,6 +576,7 @@ class TestLoRAEvolution(unittest.TestCase):
             # Restore original globals
             app_module.param_graph = old_graph
             app_module.engine_provider = old_provider
+            app_module.trigger_embedding_update = old_trigger
 
         finally:
             shutil.rmtree(tmp_dir)
@@ -603,8 +607,10 @@ class TestLoRAEvolution(unittest.TestCase):
             # Bind to Flask app module globals
             old_graph = app_module.param_graph
             old_provider = app_module.engine_provider
+            old_trigger = app_module.trigger_embedding_update
             app_module.param_graph = g
             app_module.engine_provider = provider
+            app_module.trigger_embedding_update = MagicMock()
             
             client = app_module.app.test_client()
 
@@ -676,7 +682,7 @@ class TestLoRAEvolution(unittest.TestCase):
                         break
                     elif status_data.get("status") == "failed":
                         self.fail(f"Evolution mutate job failed: {status_data.get('error')}")
-                time.sleep(0.1)
+                time.sleep(0.01)
                 
             self.assertIsNotNone(completed_data, "Job did not complete in time")
             res_data = completed_data
@@ -708,6 +714,7 @@ class TestLoRAEvolution(unittest.TestCase):
             # Restore original globals
             app_module.param_graph = old_graph
             app_module.engine_provider = old_provider
+            app_module.trigger_embedding_update = old_trigger
 
         finally:
             shutil.rmtree(tmp_dir)
@@ -734,8 +741,10 @@ class TestLoRAEvolution(unittest.TestCase):
 
             old_graph = app_module.param_graph
             old_provider = app_module.engine_provider
+            old_trigger = app_module.trigger_embedding_update
             app_module.param_graph = g
             app_module.engine_provider = provider
+            app_module.trigger_embedding_update = MagicMock()
             
             client = app_module.app.test_client()
 
@@ -811,7 +820,7 @@ class TestLoRAEvolution(unittest.TestCase):
                         break
                     elif status_data.get("status") == "failed":
                         self.fail(f"Evolution mutate job failed: {status_data.get('error')}")
-                time.sleep(0.1)
+                time.sleep(0.01)
                 
             self.assertIsNotNone(completed_data, "Job did not complete in time")
             
@@ -827,6 +836,7 @@ class TestLoRAEvolution(unittest.TestCase):
             # Restore original globals
             app_module.param_graph = old_graph
             app_module.engine_provider = old_provider
+            app_module.trigger_embedding_update = old_trigger
 
         finally:
             shutil.rmtree(tmp_dir)

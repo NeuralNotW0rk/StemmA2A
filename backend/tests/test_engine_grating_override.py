@@ -90,7 +90,7 @@ async def test_grating_override():
             status = await engine.get_job_status(job_id)
             if status["status"] in ["completed", "failed"]:
                 break
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.01)
             
         print(f"Job finished with status: {status['status']}")
         if status["status"] == "failed":
@@ -132,6 +132,7 @@ def test_flask_endpoints():
     tmp_dir = tempfile.mkdtemp()
     
     # Instantiate clean graph and engine provider
+    from unittest.mock import AsyncMock, MagicMock
     from engine.engine_provider import EngineProvider
     import app as app_module
     
@@ -141,11 +142,14 @@ def test_flask_endpoints():
     
     old_graph = app_module.param_graph
     old_provider = app_module.engine_provider
+    old_trigger = app_module.trigger_embedding_update
     app_module.param_graph = g
     app_module.engine_provider = provider
+    app_module.trigger_embedding_update = MagicMock()
     
     # Import and register model in the graph using asyncio.run
     engine = provider.get_engine()
+    engine.cluster_features = AsyncMock(return_value=[i % 3 for i in range(512)])
     model_info = asyncio.run(engine.register_model(
         "stylegan2",
         name="Test StyleGAN2",
@@ -195,10 +199,9 @@ def test_flask_endpoints():
         assert data["success"] is True
         job_id = data["job_id"]
 
-        # Poll job status until completion (clustering can take ~25-30s on CPU)
         for _ in range(120):
             import time
-            time.sleep(0.5)
+            time.sleep(0.01)
             status_resp = client.get(f"/job_status/{job_id}")
             assert status_resp.status_code == 200
             status_data = status_resp.get_json()
@@ -311,7 +314,7 @@ def test_flask_endpoints():
         # Poll export job status
         for _ in range(50):
             import time
-            time.sleep(0.1)
+            time.sleep(0.01)
             status_resp = client.get(f"/job_status/{export_job_id}")
             assert status_resp.status_code == 200
             status_data = status_resp.get_json()
@@ -337,6 +340,7 @@ def test_flask_endpoints():
     finally:
         app_module.param_graph = old_graph
         app_module.engine_provider = old_provider
+        app_module.trigger_embedding_update = old_trigger
         try:
             shutil.rmtree(tmp_dir)
             print("Temporary test directory cleared.")

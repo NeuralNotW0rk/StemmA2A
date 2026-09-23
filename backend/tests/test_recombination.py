@@ -5,7 +5,7 @@ import shutil
 import os
 import time
 import uuid
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 from neutral_selection.representation.individual import Individual as NSIndividual
 from neutral_selection.representation.population import Population
@@ -254,8 +254,10 @@ class TestRecombinationAPI(unittest.TestCase):
 
             old_graph = app_module.param_graph
             old_provider = app_module.engine_provider
+            old_trigger = app_module.trigger_embedding_update
             app_module.param_graph = g
             app_module.engine_provider = provider
+            app_module.trigger_embedding_update = MagicMock()
 
             client = app_module.app.test_client()
 
@@ -337,7 +339,7 @@ class TestRecombinationAPI(unittest.TestCase):
                         break
                     elif status_data.get("status") == "failed":
                         self.fail(f"Recombination job failed: {status_data.get('error')}\n{status_data.get('traceback')}")
-                    time.sleep(0.1)
+                    time.sleep(0.01)
 
             self.assertIsNotNone(completed_data, "Recombination job timed out")
             self.assertEqual(completed_data["generation"], 1)
@@ -413,11 +415,12 @@ class TestRecombinationAPI(unittest.TestCase):
                     status_data = status_resp.get_json()
                     if status_data.get("status") in ("completed", "failed"):
                         break
-                time.sleep(0.1)
+                time.sleep(0.01)
 
             # Restore globals
             app_module.param_graph = old_graph
             app_module.engine_provider = old_provider
+            app_module.trigger_embedding_update = old_trigger
 
         finally:
             shutil.rmtree(tmp_dir)
@@ -441,8 +444,10 @@ class TestRecombinationAPI(unittest.TestCase):
 
             old_graph = app_module.param_graph
             old_provider = app_module.engine_provider
+            old_trigger = app_module.trigger_embedding_update
             app_module.param_graph = g
             app_module.engine_provider = provider
+            app_module.trigger_embedding_update = MagicMock()
 
             client = app_module.app.test_client()
 
@@ -516,12 +521,13 @@ class TestRecombinationAPI(unittest.TestCase):
                 elif status_resp.status_code == 500:
                     status_data = status_resp.get_json()
                     self.fail(f"Recombine failed: {status_data.get('error')}\n{status_data.get('traceback')}")
-                time.sleep(0.1)
+                time.sleep(0.01)
             self.assertTrue(completed, "Recombine job timed out")
 
             # Restore globals
             app_module.param_graph = old_graph
             app_module.engine_provider = old_provider
+            app_module.trigger_embedding_update = old_trigger
 
         finally:
             shutil.rmtree(tmp_dir)
@@ -544,8 +550,10 @@ class TestRecombinationAPI(unittest.TestCase):
 
             old_graph = app_module.param_graph
             old_provider = app_module.engine_provider
+            old_trigger = app_module.trigger_embedding_update
             app_module.param_graph = g
             app_module.engine_provider = provider
+            app_module.trigger_embedding_update = MagicMock()
 
             client = app_module.app.test_client()
 
@@ -608,7 +616,7 @@ class TestRecombinationAPI(unittest.TestCase):
                 elif status_resp.status_code == 500:
                     status_data = status_resp.get_json()
                     self.fail(f"Recombine failed: {status_data.get('error')}\n{status_data.get('traceback')}")
-                time.sleep(0.1)
+                time.sleep(0.01)
             self.assertTrue(completed, "Recombine job timed out")
 
             # Reload graph and verify child recombine_operation has default_fitness
@@ -648,12 +656,13 @@ class TestRecombinationAPI(unittest.TestCase):
                         break
                     elif status_data.get("status") == "failed":
                         self.fail(f"Recombine via execute_operation failed: {status_data.get('error')}\n{status_data.get('traceback')}")
-                time.sleep(0.1)
+                time.sleep(0.01)
             self.assertTrue(completed, "Recombine via execute_operation timed out")
 
             # Restore globals
             app_module.param_graph = old_graph
             app_module.engine_provider = old_provider
+            app_module.trigger_embedding_update = old_trigger
 
         finally:
             shutil.rmtree(tmp_dir)

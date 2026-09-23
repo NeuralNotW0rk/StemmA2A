@@ -4,6 +4,7 @@ import time
 import shutil
 import tempfile
 import unittest
+from unittest.mock import AsyncMock, MagicMock
 from pathlib import Path
 import numpy as np
 import soundfile as sf
@@ -33,6 +34,8 @@ class TestAsyncLocalJobs(unittest.TestCase):
         EngineProvider._engine_instance = None
         self.test_provider = EngineProvider(data_root=self.tmp_dir)
         app_module.engine_provider = self.test_provider
+        self.old_trigger = app_module.trigger_embedding_update
+        app_module.trigger_embedding_update = MagicMock()
 
         self.client = app.test_client()
 
@@ -40,6 +43,7 @@ class TestAsyncLocalJobs(unittest.TestCase):
         app_module.param_graph = self.old_graph
         app_module.engine_provider = self.old_provider
         app_module.local_jobs = self.old_local_jobs
+        app_module.trigger_embedding_update = self.old_trigger
         try:
             shutil.rmtree(self.tmp_dir)
         except Exception:
@@ -53,7 +57,7 @@ class TestAsyncLocalJobs(unittest.TestCase):
             data = resp.get_json()
             if data.get("status") in ("completed", "failed"):
                 return data
-            time.sleep(0.1)
+            time.sleep(0.01)
         self.fail(f"Job {job_id} timed out after {timeout_sec}s")
 
     def test_async_register_model(self):
@@ -93,6 +97,10 @@ class TestAsyncLocalJobs(unittest.TestCase):
         model_job_id = reg_resp.get_json()["job_id"]
         model_job = self._poll_job(model_job_id)
         model_id = model_job["result"]["id"]
+
+        # Mock heavy clustering computation on CPU
+        engine = self.test_provider.get_engine()
+        engine.cluster_features = AsyncMock(return_value=[i % 2 for i in range(512)])
 
         # Request grating creation
         payload = {
@@ -249,6 +257,9 @@ class TestAsyncLocalJobs(unittest.TestCase):
         )
         self.test_graph.add_element(audio_node)
         self.test_graph.save()
+
+        # Restore real embedding update for this specific test
+        app_module.trigger_embedding_update = self.old_trigger
 
         resp = self.client.post("/update_embeddings")
         self.assertEqual(resp.status_code, 202)

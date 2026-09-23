@@ -52,14 +52,17 @@ class TestExemplarGeneration(unittest.TestCase):
 
         self.old_graph = app_module.param_graph
         self.old_provider = app_module.engine_provider
+        self.old_trigger = app_module.trigger_embedding_update
         app_module.param_graph = self.graph
         app_module.engine_provider = self.provider
+        app_module.trigger_embedding_update = AsyncMock(return_value=None) if hasattr(app_module.trigger_embedding_update, "__await__") else unittest.mock.MagicMock()
 
         self.client = app_module.app.test_client()
 
     def tearDown(self) -> None:
         app_module.param_graph = self.old_graph
         app_module.engine_provider = self.old_provider
+        app_module.trigger_embedding_update = self.old_trigger
         shutil.rmtree(self.tmp_dir, ignore_errors=True)
 
     def test_decoupled_recombination_offline(self) -> None:
@@ -134,7 +137,7 @@ class TestExemplarGeneration(unittest.TestCase):
                     break
                 elif s_data.get("status") == "failed":
                     self.fail(f"Recombination failed: {s_data.get('error')}")
-            time.sleep(0.1)
+            time.sleep(0.01)
 
         self.assertIsNotNone(completed_data)
         self.assertEqual(len(completed_data["individual_ids"]), 3)
@@ -201,7 +204,7 @@ class TestExemplarGeneration(unittest.TestCase):
                     break
                 elif s_data.get("status") == "failed":
                     self.fail(f"Mutation failed: {s_data.get('error')}")
-            time.sleep(0.1)
+            time.sleep(0.01)
 
         self.assertIsNotNone(completed_data)
         self.assertEqual(len(completed_data["individual_ids"]), 2)

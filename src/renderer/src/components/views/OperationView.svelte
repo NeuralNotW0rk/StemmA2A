@@ -531,7 +531,11 @@
         }
       } else if (effectiveType === 'individual') {
         if (!basePayload.parent_ids && !basePayload.parents) {
-          basePayload.parent_ids = [initiatorId]
+          if ($initiatorNodeStore.type === 'group') {
+            basePayload.parent_group_id = initiatorId
+          } else {
+            basePayload.parent_ids = [initiatorId]
+          }
         }
       }
     }
