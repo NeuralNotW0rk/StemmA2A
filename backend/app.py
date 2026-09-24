@@ -1157,7 +1157,8 @@ def _run_mutate_task(
     lora_noise: float,
     active_flip_prob: float,
     mutation_rate: float,
-    generation_context: dict
+    generation_context: dict,
+    generate_exemplars: bool = False,
 ) -> None:
     try:
         _mutate_evolution_task(
@@ -1168,6 +1169,7 @@ def _run_mutate_task(
             active_flip_prob=active_flip_prob,
             mutation_rate=mutation_rate,
             generation_context=generation_context,
+            generate_exemplars=generate_exemplars,
         )
     except Exception as e:
         print(f"Failed in async evolution mutation: {e}")
@@ -1186,6 +1188,7 @@ def _mutate_evolution_task(
     active_flip_prob: float,
     mutation_rate: float,
     generation_context: dict,
+    generate_exemplars: bool = False,
 ) -> None:
     try:
         local_jobs[parent_job_id]["status"] = "running"
@@ -1259,7 +1262,7 @@ def _mutate_evolution_task(
             for k, v in merged_context.items():
                 if isinstance(v, (str, int, float, bool)) and k not in [
                     "model_id", "operation", "gratings", "source_audio_id", "source_audio", "job_id",
-                    "baseline_elements", "baseline_file_path", "lineage"
+                    "baseline_elements", "baseline_file_path", "lineage", "generate_exemplars", "auto_generate_exemplars"
                 ]:
                     dumped_params[k] = v
 
@@ -1351,6 +1354,39 @@ def _mutate_evolution_task(
 
             individual_ids.append(child_ind_id)
 
+            # Optional automatic exemplar generation
+            if generate_exemplars and engine_provider is not None:
+                try:
+                    engine = engine_provider.get_engine()
+                    sub_job_id = f"job_exemplar_{uuid.uuid4().hex[:8]}"
+
+                    child_engine_args = dict(node_engine_args)
+                    child_engine_args["model_element"] = model_element
+                    child_engine_args["individual_elements"] = [child_node]
+                    child_engine_args["individual_strengths"] = [1.0]
+                    if base_grating:
+                        child_engine_args["baseline_grating"] = base_grating
+
+                    active_jobs[sub_job_id] = {
+                        "parent_id": child_ind_id,
+                        "group_id": None,
+                        "linked_elements": [child_node],
+                        "validated_params": {
+                            **dumped_params,
+                            "model_id": model_id,
+                            "operation": operation,
+                            "individuals": [{"id": child_ind_id, "strength": 1.0}]
+                        },
+                        "operation": operation
+                    }
+
+                    asyncio.run(engine.execute(operation, job_id=sub_job_id, **child_engine_args, **dumped_params))
+                    job_ids.append(sub_job_id)
+                    print(f"[_mutate_evolution_task] Queued exemplar generation job {sub_job_id} for individual {child_ind_id}")
+                except Exception as ex:
+                    print(f"[_mutate_evolution_task] Warning: Failed to queue exemplar generation for individual {child_ind_id}: {ex}")
+                    traceback.print_exc()
+
         local_jobs[parent_job_id]["status"] = "completed"
         local_jobs[parent_job_id]["progress"] = {
             "value": offspring_size,
@@ -1360,7 +1396,8 @@ def _mutate_evolution_task(
         local_jobs[parent_job_id]["result"] = {
             "individual_ids": individual_ids,
             "group_id": group_id,
-            "generation": next_generation
+            "generation": next_generation,
+            "job_ids": job_ids
         }
         print(f"[_mutate_evolution_task] Mutation completed successfully for job {parent_job_id}")
 
@@ -1425,105 +1462,19 @@ def _extract_individual_parent_ids(parent_input) -> list[str]:
 
 
 @app.route("/recombine_evolution", methods=["POST"])
+@app.route("/reproduce_evolution", methods=["POST"])
 async def recombine_evolution():
     """
     Starts an evolutionary recombination (breeding) run.
     Selects, crosses over, and mutates parent individuals to produce a new generation.
     Genetics runs 100% locally on CPU without remote engine dependencies.
     """
-    if param_graph is None:
+    if param_graph is None or engine_provider is None:
         return jsonify({"error": "No project loaded"}), 400
 
     try:
         data = request.get_json() or {}
-        raw_parents = data.get("parent_ids") or data.get("parents")
-        parent_ids = _extract_individual_parent_ids(raw_parents)
-        parent_bundle_id = data.get("parent_bundle_id")
-        parent_group_id = data.get("parent_group_id")
-        offspring_size = data.get("offspring_size")
-        selection_input = data.get("selection") or data.get("selection_type") or "tournament"
-        if isinstance(selection_input, str):
-            selection_cfg = {"type": selection_input, "tournament_size": 2}
-        else:
-            selection_cfg = selection_input
-
-        crossover_input = data.get("crossover") or data.get("crossover_type") or "hierarchical"
-        if isinstance(crossover_input, str):
-            crossover_cfg = {"type": crossover_input, "num_cut_points": 1}
-        else:
-            crossover_cfg = crossover_input
-
-        mutation_rate = float(data.get("mutation_rate", 0.1))
-        mutation_cfg = data.get("mutation") or {"mutation_rate": mutation_rate}
-        crossover_prob = float(data.get("crossover_prob", 1.0))
-        elitism = int(data.get("elitism", 0))
-        generation_context = data.get("generation_context") or {}
-
-        raw_default_fitness = (
-            data.get("default_fitness")
-            if data.get("default_fitness") is not None
-            else (
-                data.get("null_fitness_override")
-                if data.get("null_fitness_override") is not None
-                else data.get("override_null_fitness")
-            )
-        )
-        default_fitness = float(raw_default_fitness) if raw_default_fitness is not None else 0.0
-
-        # Resolve parent IDs from group if only group passed
-        if not parent_ids and parent_group_id:
-            with graph_lock:
-                grp = param_graph.get_element(parent_group_id)
-                if grp and hasattr(grp, "member_ids") and grp.member_ids:
-                    parent_ids = _extract_individual_parent_ids(grp.member_ids)
-
-        if not parent_ids and not parent_bundle_id:
-            return jsonify({"error": "Either parent_ids, parents, or parent_group_id must contain valid individual nodes."}), 400
-
-        # Validate existence of parent bundle early if bundle passed
-        with graph_lock:
-            if parent_bundle_id:
-                bundle_node = param_graph.get_element(parent_bundle_id)
-                if not isinstance(bundle_node, Bundle):
-                    return jsonify({"error": f"Node '{parent_bundle_id}' is not a valid bundle."}), 400
-                if len(bundle_node.member_ids) == 0:
-                    return jsonify({"error": f"Parent bundle '{parent_bundle_id}' has no members."}), 400
-
-        # Generate unique local job ID
-        parent_job_id = data.get("job_id") or f"evolution_recombine_{uuid.uuid4().hex[:12]}"
-        local_jobs[parent_job_id] = {
-            "status": "pending",
-            "progress": None,
-            "result": None,
-            "error": None
-        }
-
-        # Spawn background evolution task via clean thread runner
-        thread = threading.Thread(
-            target=_run_recombine_task,
-            kwargs=dict(
-                parent_job_id=parent_job_id,
-                parent_ids=parent_ids,
-                parent_bundle_id=parent_bundle_id,
-                offspring_size=offspring_size,
-                selection_cfg=selection_cfg,
-                crossover_cfg=crossover_cfg,
-                mutation_cfg=mutation_cfg,
-                crossover_prob=crossover_prob,
-                elitism=elitism,
-                generation_context=generation_context,
-                default_fitness=default_fitness,
-            ),
-            daemon=True
-        )
-        thread.start()
-
-        return jsonify({
-            "success": True,
-            "message": "Evolutionary recombination started",
-            "job_id": parent_job_id
-        }), 202
-
+        return await _dispatch_recombine_operation(data)
     except Exception as e:
         print(f"Failed to start recombination: {e}")
         traceback.print_exc()
@@ -1545,6 +1496,7 @@ def _run_recombine_task(
     elitism: int,
     generation_context: dict,
     default_fitness: float = 0.0,
+    generate_exemplars: bool = False,
 ) -> None:
     try:
         _recombine_evolution_task(
@@ -1559,6 +1511,7 @@ def _run_recombine_task(
             elitism=elitism,
             generation_context=generation_context,
             default_fitness=default_fitness,
+            generate_exemplars=generate_exemplars,
         )
     except Exception as e:
         print(f"Failed in async evolution reproduction: {e}")
@@ -1581,6 +1534,7 @@ def _recombine_evolution_task(
     elitism: int,
     generation_context: dict,
     default_fitness: float = 0.0,
+    generate_exemplars: bool = False,
 ) -> None:
     """
     Background worker that breeds a new generation from parent individuals,
@@ -1684,7 +1638,7 @@ def _recombine_evolution_task(
             for k, v in merged_context.items():
                 if isinstance(v, (str, int, float, bool)) and k not in [
                     "model_id", "operation", "gratings", "source_audio_id", "source_audio", "job_id",
-                    "baseline_elements", "baseline_file_path", "lineage"
+                    "baseline_elements", "baseline_file_path", "lineage", "generate_exemplars", "auto_generate_exemplars"
                 ]:
                     dumped_params[k] = v
 
@@ -1817,6 +1771,39 @@ def _recombine_evolution_task(
 
             individual_ids.append(child_ind_id)
 
+            # Optional automatic exemplar generation
+            if generate_exemplars and engine_provider is not None:
+                try:
+                    engine = engine_provider.get_engine()
+                    sub_job_id = f"job_exemplar_{uuid.uuid4().hex[:8]}"
+
+                    child_engine_args = dict(node_engine_args)
+                    child_engine_args["model_element"] = model_element
+                    child_engine_args["individual_elements"] = [child_node]
+                    child_engine_args["individual_strengths"] = [1.0]
+                    if base_grating:
+                        child_engine_args["baseline_grating"] = base_grating
+
+                    active_jobs[sub_job_id] = {
+                        "parent_id": child_ind_id,
+                        "group_id": None,
+                        "linked_elements": [child_node],
+                        "validated_params": {
+                            **dumped_params,
+                            "model_id": model_id,
+                            "operation": operation,
+                            "individuals": [{"id": child_ind_id, "strength": 1.0}]
+                        },
+                        "operation": operation
+                    }
+
+                    asyncio.run(engine.execute(operation, job_id=sub_job_id, **child_engine_args, **dumped_params))
+                    job_ids.append(sub_job_id)
+                    print(f"[_recombine_evolution_task] Queued exemplar generation job {sub_job_id} for individual {child_ind_id}")
+                except Exception as ex:
+                    print(f"[_recombine_evolution_task] Warning: Failed to queue exemplar generation for individual {child_ind_id}: {ex}")
+                    traceback.print_exc()
+
         local_jobs[parent_job_id]["status"] = "completed"
         local_jobs[parent_job_id]["progress"] = {
             "value": target_offspring_count,
@@ -1826,7 +1813,8 @@ def _recombine_evolution_task(
         local_jobs[parent_job_id]["result"] = {
             "individual_ids": individual_ids,
             "group_id": gen_group_id,
-            "generation": next_generation
+            "generation": next_generation,
+            "job_ids": job_ids
         }
         print(f"[_recombine_evolution_task] Evolution recombination completed successfully for job {parent_job_id}")
 
@@ -2381,6 +2369,25 @@ async def _dispatch_mutate_operation(data):
             or 1.0
         )
         generation_context = data.get("generation_context") or params.get("generation_context") or {}
+        merged_generation_context = {**params, **generation_context}
+
+        generate_exemplars = (
+            data.get("generate_exemplars")
+            if data.get("generate_exemplars") is not None
+            else (
+                params.get("generate_exemplars")
+                if params.get("generate_exemplars") is not None
+                else (
+                    data.get("auto_generate_exemplars")
+                    if data.get("auto_generate_exemplars") is not None
+                    else params.get("auto_generate_exemplars", False)
+                )
+            )
+        )
+        if isinstance(generate_exemplars, str):
+            generate_exemplars = generate_exemplars.lower() in ("true", "1", "yes")
+        else:
+            generate_exemplars = bool(generate_exemplars)
 
         parent_job_id = data.get("job_id") or f"evolution_mutate_{uuid.uuid4().hex[:12]}"
         local_jobs[parent_job_id] = {
@@ -2400,7 +2407,8 @@ async def _dispatch_mutate_operation(data):
                 lora_noise=lora_noise,
                 active_flip_prob=active_flip_prob,
                 mutation_rate=mutation_rate,
-                generation_context=generation_context,
+                generation_context=merged_generation_context,
+                generate_exemplars=generate_exemplars,
             ),
             daemon=True
         )
@@ -2511,6 +2519,25 @@ async def _dispatch_recombine_operation(data):
             or 0
         )
         generation_context = data.get("generation_context") or params.get("generation_context") or {}
+        merged_generation_context = {**params, **generation_context}
+
+        generate_exemplars = (
+            data.get("generate_exemplars")
+            if data.get("generate_exemplars") is not None
+            else (
+                params.get("generate_exemplars")
+                if params.get("generate_exemplars") is not None
+                else (
+                    data.get("auto_generate_exemplars")
+                    if data.get("auto_generate_exemplars") is not None
+                    else params.get("auto_generate_exemplars", False)
+                )
+            )
+        )
+        if isinstance(generate_exemplars, str):
+            generate_exemplars = generate_exemplars.lower() in ("true", "1", "yes")
+        else:
+            generate_exemplars = bool(generate_exemplars)
 
         raw_default_fitness = (
             data.get("default_fitness")
@@ -2555,8 +2582,9 @@ async def _dispatch_recombine_operation(data):
                 mutation_cfg=mutation_cfg,
                 crossover_prob=crossover_prob,
                 elitism=elitism,
-                generation_context=generation_context,
+                generation_context=merged_generation_context,
                 default_fitness=default_fitness,
+                generate_exemplars=generate_exemplars,
             ),
             daemon=True
         )

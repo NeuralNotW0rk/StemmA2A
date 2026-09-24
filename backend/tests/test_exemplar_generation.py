@@ -271,3 +271,173 @@ class TestExemplarGeneration(unittest.TestCase):
         audio_elem = self.graph.get_element(audio_id)
         self.assertIsNotNone(audio_elem)
         self.assertEqual(self.graph.G.nodes[audio_id].get("parent"), ind.id)
+
+    def test_recombine_with_auto_exemplar_generation(self) -> None:
+        """Verify that recombination with generate_exemplars=True queues engine jobs and parents exemplars to individuals."""
+        model_node = StyleGANModel(
+            id="model_recomb_auto_ex",
+            name="Auto Ex Recomb Model",
+            context={},
+            checkpoint=Asset(path="mock_model_path", uid="mock_model_uid", extension=".pt"),
+            adapter="stylegan2"
+        )
+        self.graph.add_element(model_node)
+
+        output_dir = self.graph.root / "generate"
+        os.makedirs(output_dir, exist_ok=True)
+        parent_ids = []
+        for i in range(2):
+            gene = LoRAGene(f"layer_auto_{i}", torch.randn(2, 2), torch.randn(2, 2), True)
+            genome = LoRAGenome([gene])
+            gpath = output_dir / f"p_auto_{i}.safetensors"
+            genome.save(str(gpath))
+
+            ind = Individual(
+                id=f"p_auto_ind_{i}",
+                name=f"Parent Auto {i}",
+                file=Asset(path=str(gpath), uid=f"p_auto_ind_{i}", extension=".safetensors"),
+                base_model_id="model_recomb_auto_ex",
+                generation=0,
+                fitness=float(i * 10),
+                context={"model_id": "model_recomb_auto_ex", "baseline_elements": []}
+            )
+            self.graph.add_element(ind)
+            self.graph.link(model_node, ind, relation="binds_to")
+            parent_ids.append(ind.id)
+
+        self.graph.save()
+        self.mock_engine.execute.reset_mock()
+
+        resp = self.client.post("/recombine_evolution", json={
+            "parent_ids": parent_ids,
+            "offspring_size": 2,
+            "selection_type": "tournament",
+            "crossover_type": "two_point",
+            "generate_exemplars": True,
+            "params": {
+                "truncation": 0.7
+            }
+        })
+        self.assertEqual(resp.status_code, 202)
+        job_id = resp.get_json()["job_id"]
+
+        completed_data = None
+        for _ in range(50):
+            status_resp = self.client.get(f"/job_status/{job_id}")
+            if status_resp.status_code == 200:
+                s_data = status_resp.get_json()
+                if s_data.get("status") == "completed":
+                    completed_data = s_data.get("result")
+                    break
+                elif s_data.get("status") == "failed":
+                    self.fail(f"Recombination failed: {s_data.get('error')}")
+            time.sleep(0.01)
+
+        self.assertIsNotNone(completed_data)
+        self.assertEqual(len(completed_data["individual_ids"]), 2)
+        self.assertIn("job_ids", completed_data)
+        self.assertEqual(len(completed_data["job_ids"]), 2)
+
+        # Verify engine.execute was called twice (once per child individual)
+        self.assertEqual(self.mock_engine.execute.call_count, 2)
+
+        # Poll and complete each exemplar sub-job
+        for sub_job_id in completed_data["job_ids"]:
+            sub_resp = self.client.get(f"/job_status/{sub_job_id}")
+            self.assertEqual(sub_resp.status_code, 200)
+            sub_res = sub_resp.get_json()
+            self.assertEqual(sub_res["status"], "completed")
+
+        # Reload graph and verify that each child individual has an exemplar audio parented to it
+        self.graph.load()
+        for child_id in completed_data["individual_ids"]:
+            child_node = self.graph.get_element(child_id)
+            self.assertIsNotNone(child_node)
+            # Find audio artifact parented to this child individual
+            exemplar_audios = [
+                node_id for node_id, attrs in self.graph.G.nodes(data=True)
+                if attrs.get("parent") == child_id and self.graph.get_element(node_id).type == "audio"
+            ]
+            self.assertEqual(len(exemplar_audios), 1)
+
+    def test_mutate_with_auto_exemplar_generation(self) -> None:
+        """Verify that mutation with generate_exemplars=True queues engine jobs and parents exemplars to individuals."""
+        model_node = StyleGANModel(
+            id="model_mutate_auto_ex",
+            name="Auto Ex Mutate Model",
+            context={},
+            checkpoint=Asset(path="mock_model_path", uid="mock_model_uid", extension=".pt"),
+            adapter="stylegan2"
+        )
+        self.graph.add_element(model_node)
+
+        output_dir = self.graph.root / "generate"
+        os.makedirs(output_dir, exist_ok=True)
+        gene = LoRAGene("layer_mut_auto", torch.randn(2, 2), torch.randn(2, 2), True)
+        genome = LoRAGenome([gene])
+        gpath = output_dir / "p_mut_auto.safetensors"
+        genome.save(str(gpath))
+
+        parent_ind = Individual(
+            id="p_mut_auto_ind",
+            name="Parent Mut Auto",
+            file=Asset(path=str(gpath), uid="p_mut_auto_ind", extension=".safetensors"),
+            base_model_id="model_mutate_auto_ex",
+            generation=0,
+            context={"model_id": "model_mutate_auto_ex", "baseline_elements": []}
+        )
+        self.graph.add_element(parent_ind)
+        self.graph.link(model_node, parent_ind, relation="binds_to")
+        self.graph.save()
+
+        self.mock_engine.execute.reset_mock()
+
+        resp = self.client.post("/execute_operation", json={
+            "operation": "mutate",
+            "parents": [parent_ind.id],
+            "offspring_size": 2,
+            "generate_exemplars": True,
+            "lora_noise": 0.05,
+            "mutation_rate": 0.5
+        })
+        self.assertEqual(resp.status_code, 202)
+        job_id = resp.get_json()["job_id"]
+
+        completed_data = None
+        for _ in range(50):
+            status_resp = self.client.get(f"/job_status/{job_id}")
+            if status_resp.status_code == 200:
+                s_data = status_resp.get_json()
+                if s_data.get("status") == "completed":
+                    completed_data = s_data.get("result")
+                    break
+                elif s_data.get("status") == "failed":
+                    self.fail(f"Mutation failed: {s_data.get('error')}")
+            time.sleep(0.01)
+
+        self.assertIsNotNone(completed_data)
+        self.assertEqual(len(completed_data["individual_ids"]), 2)
+        self.assertIn("job_ids", completed_data)
+        self.assertEqual(len(completed_data["job_ids"]), 2)
+
+        # Verify engine.execute was called twice (once per child individual)
+        self.assertEqual(self.mock_engine.execute.call_count, 2)
+
+        # Poll and complete each exemplar sub-job
+        for sub_job_id in completed_data["job_ids"]:
+            sub_resp = self.client.get(f"/job_status/{sub_job_id}")
+            self.assertEqual(sub_resp.status_code, 200)
+            sub_res = sub_resp.get_json()
+            self.assertEqual(sub_res["status"], "completed")
+
+        # Reload graph and verify that each child individual has an exemplar audio parented to it
+        self.graph.load()
+        for child_id in completed_data["individual_ids"]:
+            child_node = self.graph.get_element(child_id)
+            self.assertIsNotNone(child_node)
+            exemplar_audios = [
+                node_id for node_id, attrs in self.graph.G.nodes(data=True)
+                if attrs.get("parent") == child_id and self.graph.get_element(node_id).type == "audio"
+            ]
+            self.assertEqual(len(exemplar_audios), 1)
+

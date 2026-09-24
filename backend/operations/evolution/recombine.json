@@ -98,6 +98,13 @@
       "max": 1.0,
       "step": 0.001,
       "allowSequence": false
+    },
+    {
+      "name": "generate_exemplars",
+      "type": "boolean",
+      "label": "Auto-Generate Exemplars",
+      "defaultValue": true,
+      "allowSequence": false
     }
   ]
 }
