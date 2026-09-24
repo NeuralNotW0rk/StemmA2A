@@ -53,6 +53,10 @@ class TestExemplarGeneration(unittest.TestCase):
         self.old_graph = app_module.param_graph
         self.old_provider = app_module.engine_provider
         self.old_trigger = app_module.trigger_embedding_update
+        self.old_active_jobs = dict(app_module.active_jobs)
+        self.old_local_jobs = dict(app_module.local_jobs)
+        app_module.active_jobs.clear()
+        app_module.local_jobs.clear()
         app_module.param_graph = self.graph
         app_module.engine_provider = self.provider
         app_module.trigger_embedding_update = AsyncMock(return_value=None) if hasattr(app_module.trigger_embedding_update, "__await__") else unittest.mock.MagicMock()
@@ -63,6 +67,8 @@ class TestExemplarGeneration(unittest.TestCase):
         app_module.param_graph = self.old_graph
         app_module.engine_provider = self.old_provider
         app_module.trigger_embedding_update = self.old_trigger
+        app_module.active_jobs = self.old_active_jobs
+        app_module.local_jobs = self.old_local_jobs
         shutil.rmtree(self.tmp_dir, ignore_errors=True)
 
     def test_decoupled_recombination_offline(self) -> None:

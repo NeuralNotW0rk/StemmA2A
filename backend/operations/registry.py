@@ -1,36 +1,51 @@
-from typing import Dict, List, Type
-from .base import SyncOperation
+"""Unified Operation Registry for immediate and queued host operations."""
 
-# Global registry mapping names to operation instances
-_SYNC_OPERATIONS_REGISTRY: Dict[str, SyncOperation] = {}
+import inspect
+from typing import Optional, Union, Type
+from .base import Operation, SyncOperation
 
-def register(op_class: Type[SyncOperation]):
-    """Decorator to automatically instantiate and register a SyncOperation."""
-    instance = op_class()
-    name = instance.name
-    print(f"DEBUG: Registering sync operation '{name}' ({op_class.__name__})")
-    if name in _SYNC_OPERATIONS_REGISTRY:
-        raise ValueError(f"Operation name '{name}' is already registered.")
-    _SYNC_OPERATIONS_REGISTRY[name] = instance
-    return op_class
 
-class SyncRegistry:
-    def __init__(self):
-        self._operations: Dict[str, SyncOperation] = _SYNC_OPERATIONS_REGISTRY
+class OperationRegistry:
+    """Singleton registry tracking all available host operations."""
+    _instance: Optional["OperationRegistry"] = None
 
-    def register(self, operation: SyncOperation):
-        self._operations[operation.name] = operation
+    def __new__(cls) -> "OperationRegistry":
+        if cls._instance is None:
+            cls._instance = super(OperationRegistry, cls).__new__(cls)
+            cls._instance._operations = {}
+        return cls._instance
 
-    def get(self, name: str) -> SyncOperation:
-        if name not in self._operations:
-            raise ValueError(f"Sync operation '{name}' not found in registry. Available operations: {list(self._operations.keys())}")
-        return self._operations[name]
-        
-    def __contains__(self, name: str) -> bool:
-        return name in self._operations
+    def register(self, operation: Union[Type[Operation], Operation]) -> Union[Type[Operation], Operation]:
+        """Registers an operation class or instance and returns the original class/instance."""
+        if inspect.isclass(operation):
+            op_instance = operation()
+            self._operations[op_instance.name] = op_instance
+            return operation
+        else:
+            self._operations[operation.name] = operation
+            return operation
+
+    def get(self, name: str) -> Optional[Operation]:
+        """Retrieves an operation instance by its unique name."""
+        return self._operations.get(name)
 
     def has(self, name: str) -> bool:
+        """Returns True if an operation with the given name is registered."""
         return name in self._operations
 
-    def get_all(self) -> List[SyncOperation]:
+    def get_all(self) -> list[Operation]:
+        """Returns all registered operations."""
         return list(self._operations.values())
+
+    def get_by_category(self, category: str) -> list[Operation]:
+        """Returns all registered operations belonging to a specific category."""
+        return [op for op in self._operations.values() if op.category == category]
+
+
+# Global singleton and decorator
+operation_registry = OperationRegistry()
+register = operation_registry.register
+
+# Backward-compatibility alias
+SyncRegistry = OperationRegistry
+sync_registry = operation_registry

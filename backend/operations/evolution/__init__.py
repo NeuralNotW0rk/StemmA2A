@@ -3,23 +3,35 @@
 import json
 from pathlib import Path
 
-from .wrap_individual import wrap_artifact_as_individual
-from .mutation import (
+from .wrap_individual import (
+    WrapIndividualOperation,
+    wrap_artifact_as_individual,
+    wrap_precursor_as_individual,
+)
+from .mutate import (
+    MutateOperation,
     MutatedOffspring,
     mutate_offspring,
+    mutate_evolution_task,
+    run_mutate_task,
+    dispatch_mutate_operation,
 )
-from .recombination import (
+from .recombine import (
+    RecombineOperation,
     LineageRecord,
     RecombinedOffspring,
-    ReproducedOffspring,
     recombine_offspring,
-    breed_offspring,
     build_selection_strategy,
     build_crossover_strategy,
     build_mutation_strategy,
     build_replacement_strategy,
     build_pipeline,
+    recombine_evolution_task,
+    run_recombine_task,
+    dispatch_recombine_operation,
 )
+from .expression import express_individual_to_grating_artifact
+from .resolution import extract_individual_parent_ids
 
 
 def get_evolution_operations() -> list[dict]:
@@ -37,17 +49,27 @@ def get_evolution_operations() -> list[dict]:
 
 __all__ = [
     "get_evolution_operations",
+    "WrapIndividualOperation",
     "wrap_artifact_as_individual",
+    "wrap_precursor_as_individual",
+    "MutateOperation",
     "MutatedOffspring",
     "mutate_offspring",
+    "mutate_evolution_task",
+    "run_mutate_task",
+    "dispatch_mutate_operation",
+    "RecombineOperation",
     "LineageRecord",
     "RecombinedOffspring",
-    "ReproducedOffspring",
     "recombine_offspring",
-    "breed_offspring",
     "build_selection_strategy",
     "build_crossover_strategy",
     "build_mutation_strategy",
     "build_replacement_strategy",
     "build_pipeline",
+    "recombine_evolution_task",
+    "run_recombine_task",
+    "dispatch_recombine_operation",
+    "express_individual_to_grating_artifact",
+    "extract_individual_parent_ids",
 ]

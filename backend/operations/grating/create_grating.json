@@ -1,0 +1,28 @@
+{
+  "name": "create_grating",
+  "category": "grating",
+  "execution": "queued",
+  "description": "Dynamically constructs a new Bending Grating and attaches it to a base model in the parameter graph.",
+  "initiator_types": ["model"],
+  "inputs": [
+    {
+      "name": "model_id",
+      "type": "string",
+      "required": true,
+      "description": "ID of the base model to bind the grating to."
+    },
+    {
+      "name": "name",
+      "type": "string",
+      "required": false,
+      "default": "New Grating",
+      "description": "Custom display name for the newly created grating."
+    },
+    {
+      "name": "elements",
+      "type": "array",
+      "required": true,
+      "description": "Layer override addresses and kernel configuration elements."
+    }
+  ]
+}

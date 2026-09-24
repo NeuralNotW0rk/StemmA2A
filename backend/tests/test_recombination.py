@@ -19,14 +19,13 @@ from evolution.lora_genome import (
     get_lora_mutation_strategy,
     get_lora_crossover_strategy,
 )
-from operations.evolution.recombination import (
+from operations.evolution.recombine import (
     recombine_offspring,
     build_selection_strategy,
     build_crossover_strategy,
     RecombinedOffspring,
-    ReproducedOffspring,
-    breed_offspring,
 )
+from operations.evolution.resolution import extract_individual_parent_ids
 
 
 class TestRecombinationEngine(unittest.TestCase):
@@ -71,7 +70,6 @@ class TestRecombinationEngine(unittest.TestCase):
         self.assertEqual(len(offspring), 5)
         for item in offspring:
             self.assertIsInstance(item, RecombinedOffspring)
-            self.assertIsInstance(item, ReproducedOffspring)  # Alias check
             self.assertIsInstance(item.individual.genotype, LoRAGenome)
             self.assertTrue(item.lineage.crossover_applied)
             self.assertTrue(item.lineage.mutated)
@@ -484,7 +482,7 @@ class TestRecombinationAPI(unittest.TestCase):
                 parent_ids.append(ind.id)
             g.save()
 
-            # Test _extract_individual_parent_ids directly
+            # Test extract_individual_parent_ids directly
             mixed_selection = [
                 "ind_edge_0",
                 "ind_edge_0->ind_edge_1", # edge string
@@ -492,7 +490,7 @@ class TestRecombinationAPI(unittest.TestCase):
                 {"id": 0, "node": {"id": "ind_edge_1", "type": "individual"}}, # NodeSelectorList item
                 "non_existent_id",
             ]
-            extracted = app_module._extract_individual_parent_ids(mixed_selection)
+            extracted = extract_individual_parent_ids(mixed_selection, param_graph=app_module.param_graph, graph_lock=app_module.graph_lock)
             self.assertEqual(extracted, ["ind_edge_0", "ind_edge_1"])
 
             # Test recombine endpoint with edge IDs mixed in
