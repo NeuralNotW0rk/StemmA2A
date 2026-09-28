@@ -484,6 +484,12 @@ const defaultStyle: CssStyleDeclaration[] = [
 
   // Edge-specific style configuration
   {
+    selector: 'edge.hidden',
+    style: {
+      display: 'none'
+    }
+  },
+  {
     selector: 'edge[type="spring"]',
     style: {
       display: 'none',
@@ -633,6 +639,12 @@ const defaultStyle: CssStyleDeclaration[] = [
     selector: '.dimmed, node.dimmed, edge.dimmed, edge[type="spring"].dimmed',
     style: {
       opacity: 0.4
+    }
+  },
+  {
+    selector: 'edge.hidden:selected',
+    style: {
+      display: 'element'
     }
   },
   {

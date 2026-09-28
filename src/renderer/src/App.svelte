@@ -44,6 +44,8 @@
   let showSpringEdges = $state(false)
   let showDetailedLabelsToggle = $state(false)
   let chronologicalConstraint = $state(false)
+  let hideEvolutionaryEdges = $state(false)
+  let hideAllEdges = $state(false)
   let isPeekPressed = $state(false)
   let showDetailedLabels = $derived(showDetailedLabelsToggle || isPeekPressed)
   let selectedElementData: ElementData | null = $state(null)
@@ -678,6 +680,8 @@
     bind:showSpringEdges
     bind:showDetailedLabels={showDetailedLabelsToggle}
     bind:chronologicalConstraint
+    bind:hideEvolutionaryEdges
+    bind:hideAllEdges
   />
 
   {#if errorInInfoPanel}
@@ -822,6 +826,8 @@
     ontoggleFavorite={handleToggleFavorite}
     {showDetailedLabels}
     {chronologicalConstraint}
+    {hideEvolutionaryEdges}
+    {hideAllEdges}
     onchangeGroupMembership={handleChangeGroupMembership}
     onselectOperation={handleSelectOperation}
     onrefresh={refreshGraphData}

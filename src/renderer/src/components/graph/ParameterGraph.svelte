@@ -22,6 +22,8 @@
     showSpringEdges?: boolean
     showDetailedLabels?: boolean
     chronologicalConstraint?: boolean
+    hideEvolutionaryEdges?: boolean
+    hideAllEdges?: boolean
     operations?: any[]
     onaudioSelect?: (data: any) => void
     onexport?: (data: { names: string[] }) => void
@@ -51,6 +53,8 @@
     showSpringEdges = false,
     showDetailedLabels = true,
     chronologicalConstraint = false,
+    hideEvolutionaryEdges = false,
+    hideAllEdges = false,
     operations: operationsProp = [],
     onaudioSelect,
     onimportGrating,
@@ -522,6 +526,15 @@
     }
   })
 
+  // Dynamically update edge visibility whenever edge hiding settings change
+  $effect(() => {
+    void hideEvolutionaryEdges
+    void hideAllEdges
+    if (isInitialized && cy) {
+      queueUpdateEdgeVisibility()
+    }
+  })
+
   // Run layout when chronological constraint changes to show the immediate effect
   let firstEffectRun = true
   $effect(() => {
@@ -535,6 +548,101 @@
     }
   })
 
+  let edgeVisibilityRafId: number | null = null
+
+  function queueUpdateEdgeVisibility(): void {
+    if (edgeVisibilityRafId !== null) return
+    edgeVisibilityRafId = requestAnimationFrame(() => {
+      edgeVisibilityRafId = null
+      updateEdgeVisibility()
+    })
+  }
+
+  function isEvolutionaryEdge(edge: cytoscape.EdgeSingular): boolean {
+    const edgeType = edge.data('type') as string | undefined
+    const relation = edge.data('relation') as string | undefined
+    if (
+      edgeType === 'individual' ||
+      relation === 'shares_phenotype' ||
+      relation === 'precursor' ||
+      relation === 'parent' ||
+      relation === 'expressed_to'
+    ) {
+      return true
+    }
+
+    const src = edge.source()
+    const tgt = edge.target()
+
+    const srcType = src.data('type') as string | undefined
+    const tgtType = tgt.data('type') as string | undefined
+    const srcMemberType = src.data('member_type') as string | undefined
+    const tgtMemberType = tgt.data('member_type') as string | undefined
+
+    if (
+      srcType === 'individual' ||
+      tgtType === 'individual' ||
+      srcMemberType === 'individual' ||
+      tgtMemberType === 'individual'
+    ) {
+      return true
+    }
+
+    return false
+  }
+
+  function updateEdgeVisibility(): void {
+    if (!isInitialized || !cy) return
+
+    cy.batch(() => {
+      if (!hideEvolutionaryEdges && !hideAllEdges) {
+        cy?.edges('.hidden').removeClass('hidden')
+        return
+      }
+
+      const selectedEles = cy?.$(':selected')
+      if (!selectedEles) return
+
+      const selectedNodes = selectedEles.nodes()
+      const selectedEdges = selectedEles.edges()
+
+      let revealedEdges = selectedNodes.connectedEdges().union(selectedEdges)
+
+      selectedNodes.forEach((node) => {
+        if (node.isParent()) {
+          revealedEdges = revealedEdges.union(node.descendants().connectedEdges())
+        }
+        const memberIds = node.data('member_ids') as string[] | undefined
+        if (Array.isArray(memberIds) && memberIds.length > 0) {
+          memberIds.forEach((id: string) => {
+            const memberNode = cy?.getElementById(id)
+            if (memberNode && memberNode.length > 0) {
+              revealedEdges = revealedEdges.union(memberNode.connectedEdges())
+            }
+          })
+        }
+      })
+
+      cy?.edges().forEach((edge) => {
+        if (edge.data('type') === 'spring') {
+          return
+        }
+
+        const isTargeted = hideAllEdges || (hideEvolutionaryEdges && isEvolutionaryEdge(edge))
+
+        if (!isTargeted) {
+          edge.removeClass('hidden')
+        } else {
+          if (revealedEdges.contains(edge)) {
+            edge.removeClass('hidden')
+          } else {
+            edge.addClass('hidden')
+          }
+        }
+      })
+    })
+  }
+
   onMount(() => {
     initializeGraph()
   })
@@ -542,6 +650,10 @@
   let removeKeydownListener: (() => void) | null = null
 
   onDestroy(() => {
+    if (edgeVisibilityRafId !== null) {
+      cancelAnimationFrame(edgeVisibilityRafId)
+      edgeVisibilityRafId = null
+    }
     removeKeydownListener?.()
     cyInstanceStore.set(null) // Clean up
     if (cy) {
@@ -940,10 +1052,15 @@
       }
     })
 
+    cy.on('select unselect', 'node, edge', () => {
+      queueUpdateEdgeVisibility()
+    })
+
     cy.on('tap', (evt: EventObject) => {
       if (evt.target === cy) {
         onnodeSelect?.(null)
         onedgeSelect?.(null)
+        queueUpdateEdgeVisibility()
       }
     })
 
@@ -1610,6 +1727,7 @@
       if (showDetailedLabels) {
         addedElements.nodes().addClass('detailed')
       }
+      updateEdgeVisibility()
 
       addedElements.nodes().forEach((node) => {
         const isChildless = node.children().length === 0

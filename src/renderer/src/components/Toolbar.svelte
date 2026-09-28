@@ -16,6 +16,8 @@
     showSpringEdges?: boolean
     showDetailedLabels?: boolean
     chronologicalConstraint?: boolean
+    hideEvolutionaryEdges?: boolean
+    hideAllEdges?: boolean
   }
 
   let {
@@ -31,7 +33,9 @@
     onrepairEdges,
     showSpringEdges = $bindable(false),
     showDetailedLabels = $bindable(false),
-    chronologicalConstraint = $bindable(false)
+    chronologicalConstraint = $bindable(false),
+    hideEvolutionaryEdges = $bindable(false),
+    hideAllEdges = $bindable(false)
   }: Props = $props()
 
   let showFileMenu = $state(false)
@@ -85,6 +89,16 @@
   function toggleViewMode(): void {
     const newMode = viewMode === 'batch' ? 'cluster' : 'batch'
     onviewModeChange?.(newMode)
+  }
+
+  function toggleEvolutionaryEdges(): void {
+    hideEvolutionaryEdges = !hideEvolutionaryEdges
+    showUtilitiesMenu = false
+  }
+
+  function toggleAllEdges(): void {
+    hideAllEdges = !hideAllEdges
+    showUtilitiesMenu = false
   }
 
   function toggleSprings(): void {
@@ -302,6 +316,15 @@
             }}
           >
             Repair Edges
+          </button>
+          <div class="dropdown-divider"></div>
+          <button class="dropdown-item" onclick={toggleEvolutionaryEdges}>
+            {hideEvolutionaryEdges
+              ? 'Show Evolutionary Edges'
+              : 'Hide Evolutionary Edges (Show on Select)'}
+          </button>
+          <button class="dropdown-item" onclick={toggleAllEdges}>
+            {hideAllEdges ? 'Show All Edges' : 'Hide All Edges (Show on Select)'}
           </button>
           <button class="dropdown-item" onclick={toggleSprings}>
             {showSpringEdges ? 'Hide Spring Edges' : 'Show Spring Edges'}
