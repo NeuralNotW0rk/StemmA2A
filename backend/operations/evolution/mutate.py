@@ -237,14 +237,18 @@ def mutate_evolution_task(
             if not isinstance(child_genome, LoRAGenome):
                 child_genome = LoRAGenome(list(child_genome))
 
-            genome_state_dict = child_genome.get_state_dict()
-            genome_uid = uid_gen.from_state_dict(genome_state_dict)
-            child_ind_id = f"individual_{genome_uid}"
+            child_ind_id = uid_gen.from_state_dict(child_genome.get_state_dict())
+
+            if child_ind_id in individual_ids:
+                print(
+                    f"[_mutate_evolution_task] Discarding duplicate mutated individual '{child_ind_id}' "
+                    f"already generated in current batch."
+                )
+                continue
 
             output_dir = param_graph.root / "generate"
             os.makedirs(output_dir, exist_ok=True)
             saved_genome_path = output_dir / f"{child_ind_id}.safetensors"
-            child_genome.save(str(saved_genome_path))
 
             child_context = copy.deepcopy(merged_context)
             child_context["baseline_elements"] = baseline_elements
@@ -273,21 +277,32 @@ def mutate_evolution_task(
                 context=child_context
             )
 
-            def _add_child_and_link() -> None:
-                param_graph.add_element(child_node)
+            def _add_child_and_link() -> bool:
+                if not param_graph.add_element(child_node, allow_duplicates=False):
+                    return False
+                child_genome.save(str(saved_genome_path))
                 param_graph.update_element(child_node.id, {"parent": group_id})
                 param_graph.link(model_element, child_node, relation='binds_to')
-                param_graph.link(selected_parent, child_node, relation='parent')
+                if selected_parent.id != child_ind_id:
+                    param_graph.link(selected_parent, child_node, relation='parent')
 
                 mutation_group.member_ids.append(child_ind_id)
                 param_graph.update_element(mutation_group.id, {"member_ids": mutation_group.member_ids})
                 param_graph.save()
+                return True
 
             if graph_lock is not None:
                 with graph_lock:
-                    _add_child_and_link()
+                    added = _add_child_and_link()
             else:
-                _add_child_and_link()
+                added = _add_child_and_link()
+
+            if not added:
+                print(
+                    f"[_mutate_evolution_task] Discarding duplicate mutated individual '{child_ind_id}' "
+                    f"which already exists in the parameter graph."
+                )
+                continue
 
             individual_ids.append(child_ind_id)
 

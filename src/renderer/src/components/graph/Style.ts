@@ -326,16 +326,30 @@ const defaultStyle: CssStyleDeclaration[] = [
       label: (node: NodeSingular): string => {
         const name = (node.data('name') || node.data('id')) as string
         const fitness = node.data('fitness')
+        const isDuplicate =
+          node.data('phenotype_status') === 'duplicate' ||
+          node.data('context')?.phenotype_status === 'duplicate'
+        const dupBadge = isDuplicate ? ' [Duplicate]' : ''
         if (fitness !== undefined && fitness !== null) {
-          return `${name}\n[fit: ${fitness}]`
+          return `${name}${dupBadge}\n[fit: ${fitness}]`
         }
-        return name
+        return `${name}${dupBadge}`
       },
       'text-valign': 'top',
       'text-margin-y': -8,
       'border-width': 2,
-      'border-color': genomeColor,
-      'border-style': 'dashed',
+      'border-color': (node: NodeSingular): string => {
+        const isDuplicate =
+          node.data('phenotype_status') === 'duplicate' ||
+          node.data('context')?.phenotype_status === 'duplicate'
+        return isDuplicate ? '#ffa726' : genomeColor
+      },
+      'border-style': (node: NodeSingular): string => {
+        const isDuplicate =
+          node.data('phenotype_status') === 'duplicate' ||
+          node.data('context')?.phenotype_status === 'duplicate'
+        return isDuplicate ? 'dotted' : 'dashed'
+      },
       'background-color': genomeColor,
       'background-opacity': 0.08,
       'background-image': (node: NodeSingular): string =>
@@ -512,6 +526,17 @@ const defaultStyle: CssStyleDeclaration[] = [
     selector: 'edge[relation="binds_to"]',
     style: {
       'line-style': 'dashed'
+    }
+  },
+  {
+    selector: 'edge[relation="shares_phenotype"]',
+    style: {
+      'line-color': genomeColor,
+      'target-arrow-color': genomeColor,
+      'line-style': 'dotted',
+      'line-dash-pattern': [4, 4],
+      'target-arrow-shape': 'triangle',
+      opacity: 0.85
     }
   },
   {

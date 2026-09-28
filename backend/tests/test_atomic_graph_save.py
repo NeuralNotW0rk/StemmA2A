@@ -99,6 +99,44 @@ class TestAtomicGraphSave(unittest.TestCase):
         finally:
             shutil.rmtree(tmp_dir)
 
+    def test_add_element_allow_duplicates_control(self):
+        tmp_dir = tempfile.mkdtemp()
+        try:
+            from param_graph.elements.artifacts.audio_element import Audio
+            from param_graph.elements.base_elements import Asset
+
+            pg = ParameterGraph(tmp_dir)
+            
+            elem1 = Audio(
+                id="audio_dup_test",
+                name="Audio Original",
+                context={},
+                file=Asset(path="original.wav", uid="audio_dup_test", extension=".wav")
+            )
+            # First add should succeed
+            res1 = pg.add_element(elem1, allow_duplicates=False)
+            self.assertTrue(res1)
+            self.assertEqual(pg.G.nodes["audio_dup_test"]["name"], "Audio Original")
+
+            # Second add with allow_duplicates=False should return False and NOT overwrite
+            elem2 = Audio(
+                id="audio_dup_test",
+                name="Audio Overwrite Attempt",
+                context={},
+                file=Asset(path="overwritten.wav", uid="audio_dup_test", extension=".wav")
+            )
+            res2 = pg.add_element(elem2, allow_duplicates=False)
+            self.assertFalse(res2)
+            self.assertEqual(pg.G.nodes["audio_dup_test"]["name"], "Audio Original")
+
+            # Add with allow_duplicates=True (default) should update the node
+            res3 = pg.add_element(elem2, allow_duplicates=True)
+            self.assertTrue(res3)
+            self.assertEqual(pg.G.nodes["audio_dup_test"]["name"], "Audio Overwrite Attempt")
+        finally:
+            shutil.rmtree(tmp_dir)
+
 
 if __name__ == "__main__":
     unittest.main()
+

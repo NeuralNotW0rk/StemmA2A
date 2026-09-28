@@ -284,8 +284,9 @@ class TestRecombinationAPI(unittest.TestCase):
 
             parent_ids = []
             for i in range(3):
-                gene = LoRAGene(f"layer_{i}", torch.randn(2, 2), torch.randn(2, 2), True)
-                genome = LoRAGenome([gene])
+                gene1 = LoRAGene("layer_1", torch.randn(2, 2) * (i + 1.0), torch.randn(2, 2) * (i + 1.0), True)
+                gene2 = LoRAGene("layer_2", torch.randn(2, 2) * (i + 1.0), torch.randn(2, 2) * (i + 1.0), True)
+                genome = LoRAGenome([gene1, gene2])
                 genome_path = output_dir / f"parent_gen0_{i}.safetensors"
                 genome.save(str(genome_path))
 
@@ -316,7 +317,8 @@ class TestRecombinationAPI(unittest.TestCase):
                 "offspring_size": 4,
                 "selection_type": "tournament",
                 "crossover_type": "blend_crossover",
-                "mutation_rate": 0.05
+                "mutation_rate": 1.0,
+                "lora_noise": 0.05
             }
 
             resp = client.post("/recombine_evolution", json=payload)
@@ -357,6 +359,9 @@ class TestRecombinationAPI(unittest.TestCase):
                 child_node = g_reloaded.get_element(child_id)
                 self.assertEqual(child_node.type, "individual")
                 self.assertEqual(child_node.generation, 1)
+                self.assertFalse(child_id.startswith("individual_"))
+                self.assertEqual(child_node.id, child_node.file.uid)
+                self.assertTrue(child_node.file.uid.endswith(".xxh3_64"))
 
                 # Check safetensors file exists on disk
                 self.assertTrue(os.path.exists(child_node.file.path))
@@ -375,7 +380,7 @@ class TestRecombinationAPI(unittest.TestCase):
                 recombine_ctx = child_node.context.get("recombine_operation", {})
                 self.assertEqual(recombine_ctx.get("crossover_type"), "blend_crossover")
                 self.assertEqual(recombine_ctx.get("selection_type"), "tournament")
-                self.assertEqual(recombine_ctx.get("mutation_rate"), 0.05)
+                self.assertEqual(recombine_ctx.get("mutation_rate"), 1.0)
                 self.assertEqual(recombine_ctx.get("offspring_size"), 4)
 
             # Check that child exemplar sub-jobs complete cleanly without spurious audio-to-audio source edges
@@ -665,6 +670,86 @@ class TestRecombinationAPI(unittest.TestCase):
         finally:
             shutil.rmtree(tmp_dir)
 
+    def test_recombine_duplicate_individual_rejection(self) -> None:
+        """Verify that recombination discards offspring that produce duplicate genome UIDs matching existing nodes."""
+        import app as app_module
+        from param_graph.graph import ParameterGraph
+        from param_graph.elements.models.stylegan_element import StyleGANModel
+        from param_graph.elements.artifacts.individual_element import Individual
+        from param_graph.elements.base_elements import Asset
+        from engine.engine_provider import EngineProvider
+        from operations.evolution.recombine import recombine_evolution_task
+        from utils.uid import XXH3_64
+
+        tmp_dir = tempfile.mkdtemp()
+        try:
+            g = ParameterGraph(tmp_dir)
+            provider = EngineProvider(data_root=tmp_dir)
+            uid_gen = XXH3_64()
+
+            # Add model
+            model_node = StyleGANModel(
+                id="model_dup_test",
+                name="Dup Test Model",
+                context={},
+                checkpoint=Asset(path="mock_path", uid="mock_uid", extension=".pt"),
+                adapter="stylegan2"
+            )
+            g.add_element(model_node)
+
+            # Create parent individual with known fixed weights
+            output_dir = g.root / "generate"
+            os.makedirs(output_dir, exist_ok=True)
+            gene = LoRAGene("layer_fixed", torch.ones((2, 2)), torch.ones((2, 2)), True)
+            genome = LoRAGenome([gene])
+            parent_uid = uid_gen.from_state_dict(genome.get_state_dict())
+            parent_genome_path = output_dir / f"{parent_uid}.safetensors"
+            genome.save(str(parent_genome_path))
+
+            parent_ind = Individual(
+                id=parent_uid,
+                name="Original Gen 0 Parent",
+                file=Asset(path=str(parent_genome_path), uid=parent_uid, extension=".safetensors"),
+                base_model_id="model_dup_test",
+                generation=0,
+                fitness=10.0,
+                context={"model_id": "model_dup_test"}
+            )
+            g.add_element(parent_ind)
+            g.save()
+
+            # Run recombine task with 0 mutation so offspring is identical to parent_uid
+            recombine_evolution_task(
+                parent_job_id="test_dup_recombine",
+                parent_ids=[parent_uid],
+                parent_bundle_id=None,
+                offspring_size=2,
+                selection_cfg={"type": "uniform"},
+                crossover_cfg={"type": "two_point"},
+                mutation_cfg={"mutation_rate": 0.0, "lora_noise": 0.0, "active_flip_prob": 0.0},
+                crossover_prob=0.0,
+                elitism=0,
+                generation_context={},
+                default_fitness=0.0,
+                generate_exemplars=False,
+                param_graph=g,
+                engine_provider=provider,
+                uid_generator=uid_gen,
+            )
+
+            # Verify that parent node attributes were NOT corrupted/overwritten
+            parent_after = g.get_element(parent_uid)
+            self.assertEqual(parent_after.name, "Original Gen 0 Parent")
+            self.assertEqual(parent_after.generation, 0)
+            self.assertIsNone(g.G.nodes[parent_uid].get("parent"))
+
+            # Verify no self-loop edge exists
+            self.assertFalse(g.G.has_edge(parent_uid, parent_uid))
+
+        finally:
+            shutil.rmtree(tmp_dir)
+
 
 if __name__ == "__main__":
     unittest.main()
+

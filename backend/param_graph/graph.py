@@ -187,16 +187,29 @@ class ParameterGraph:
                     C.nodes[node].pop('parent', None)
             return nx.cytoscape.cytoscape_data(C, ident='id')
         
-    def add_element(self, ele: GraphElement):
+    def add_element(self, ele: GraphElement, allow_duplicates: bool = True) -> bool:
+        """
+        Adds an element node to the parameter graph.
+
+        If allow_duplicates is False and a node with the same ID already exists in the graph,
+        the node is NOT added or overwritten, and False is returned.
+
+        Returns:
+            bool: True if the element was added/updated in the graph, False if blocked as duplicate.
+        """
         ele_attrs = ele.to_dict()
+        ele_id = ele_attrs.get('id', None)
+        if not allow_duplicates and ele_id and self.G.has_node(ele_id):
+            return False
+
         if ele_attrs.get('type') == 'model' and not ele_attrs.get('output_type'):
             adapter = ele_attrs.get('adapter')
             if adapter == 'stable_audio_tools':
                 ele_attrs['output_type'] = 'audio'
             elif adapter == 'stylegan2':
                 ele_attrs['output_type'] = 'image'
-        ele_id = ele_attrs.get('id', None)
         self.G.add_node(ele_id, **ele_attrs)
+        return True
 
     def link(self, source: GraphElement, target: GraphElement, **kwargs):
         edge_id = f"{source.id}->{target.id}"

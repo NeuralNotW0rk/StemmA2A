@@ -1020,21 +1020,51 @@ async def get_job_status(job_id):
                     final_artifact = replace(final_artifact, context=merged_context)
                 
                 with graph_lock:
-                    param_graph.add_element(final_artifact)
-
                     parent_id = job_context.get("parent_id")
                     group_id = job_context.get("group_id") or job_context.get("batch_id")
-                    if parent_id:
-                        param_graph.update_element(final_artifact.id, {"parent": parent_id})
-                    elif group_id:
-                        param_graph.update_element(final_artifact.id, {"parent": group_id})
-                        group_node_attrs = param_graph.G.nodes[group_id]
-                        if 'member_ids' not in group_node_attrs or not isinstance(group_node_attrs['member_ids'], list):
-                            group_node_attrs['member_ids'] = []
-                        if final_artifact.id not in group_node_attrs['member_ids']:
-                            group_node_attrs['member_ids'].append(final_artifact.id)
-                            
-                        update_group_labels(group_id)
+
+                    existing_parent = (
+                        param_graph.G.nodes[final_artifact.id].get("parent")
+                        if param_graph.G.has_node(final_artifact.id)
+                        else None
+                    )
+
+                    if parent_id and existing_parent and existing_parent != parent_id:
+                        # Duplicate collision detected!
+                        # The artifact already exists in the graph and is claimed by `existing_parent`.
+                        # Preserve original parent's exemplar and flag the child individual (`parent_id`).
+                        print(
+                            f"[job_status] Phenotypic duplicate detected! "
+                            f"Child individual '{parent_id}' generated exemplar '{final_artifact.id}' "
+                            f"which is already claimed by ancestor '{existing_parent}'. "
+                            f"Preserving original parentage and flagging child."
+                        )
+                        if param_graph.G.has_node(parent_id):
+                            child_node = param_graph.get_element(parent_id)
+                            child_ctx = copy.deepcopy(getattr(child_node, "context", {}) or {})
+                            child_ctx["phenotype_status"] = "duplicate"
+                            child_ctx["phenotype_duplicate_of"] = existing_parent
+                            child_ctx["shared_exemplar_id"] = final_artifact.id
+                            param_graph.update_element(parent_id, {
+                                "context": child_ctx,
+                                "phenotype_status": "duplicate",
+                                "phenotype_duplicate_of": existing_parent,
+                                "shared_exemplar_id": final_artifact.id
+                            })
+                            # Link child individual to the shared exemplar
+                            param_graph.link(child_node, final_artifact, relation="shares_phenotype")
+                    else:
+                        param_graph.add_element(final_artifact)
+                        if parent_id:
+                            param_graph.update_element(final_artifact.id, {"parent": parent_id})
+                        elif group_id:
+                            param_graph.update_element(final_artifact.id, {"parent": group_id})
+                            group_node_attrs = param_graph.G.nodes[group_id]
+                            if 'member_ids' not in group_node_attrs or not isinstance(group_node_attrs['member_ids'], list):
+                                group_node_attrs['member_ids'] = []
+                            if final_artifact.id not in group_node_attrs['member_ids']:
+                                group_node_attrs['member_ids'].append(final_artifact.id)
+                            update_group_labels(group_id)
 
                     for element in job_context.get("linked_elements", []):
                         if parent_id and element.id == parent_id:

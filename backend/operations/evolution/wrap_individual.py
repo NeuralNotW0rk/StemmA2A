@@ -236,7 +236,16 @@ async def wrap_precursor_as_individual(
     # Compute deterministic UID from baseline genome
     genome_state_dict = baseline_genome.get_state_dict()
     genome_uid = uid_gen.from_state_dict(genome_state_dict)
-    individual_id = f"individual_{genome_uid}"
+    individual_id = genome_uid
+
+    if param_graph.G.has_node(individual_id):
+        existing_node = param_graph.get_element(individual_id)
+        return {
+            "success": True,
+            "message": f"Artifact '{precursor_node_id}' already wrapped as Individual '{individual_id}'",
+            "individual": existing_node.to_dict() if hasattr(existing_node, "to_dict") else vars(existing_node),
+            "node_id": individual_id
+        }, 200
 
     output_dir = param_graph.root / "generate"
     os.makedirs(output_dir, exist_ok=True)
@@ -264,13 +273,31 @@ async def wrap_precursor_as_individual(
     )
 
     def _link_and_save() -> None:
-        param_graph.add_element(individual_node)
+        param_graph.add_element(individual_node, allow_duplicates=False)
         param_graph.link(model_element, individual_node, relation='binds_to')
         param_graph.link(precursor_node, individual_node, relation='precursor')
 
         # If the precursor is an audio artifact, set its parent to the individual so it serves as exemplar
         if isinstance(precursor_node, Audio):
-            param_graph.update_element(precursor_node.id, {"parent": individual_id})
+            existing_p = (
+                param_graph.G.nodes[precursor_node.id].get("parent")
+                if param_graph.G.has_node(precursor_node.id)
+                else None
+            )
+            if not existing_p or existing_p == individual_id:
+                param_graph.update_element(precursor_node.id, {"parent": individual_id})
+            else:
+                ind_ctx = copy.deepcopy(getattr(individual_node, "context", {}) or {})
+                ind_ctx["phenotype_status"] = "duplicate"
+                ind_ctx["phenotype_duplicate_of"] = existing_p
+                ind_ctx["shared_exemplar_id"] = precursor_node.id
+                param_graph.update_element(individual_id, {
+                    "context": ind_ctx,
+                    "phenotype_status": "duplicate",
+                    "phenotype_duplicate_of": existing_p,
+                    "shared_exemplar_id": precursor_node.id
+                })
+                param_graph.link(individual_node, precursor_node, relation="shares_phenotype")
 
         param_graph.save()
 

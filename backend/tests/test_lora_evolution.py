@@ -448,6 +448,8 @@ class TestLoRAEvolution(unittest.TestCase):
 
             # 3. Create baseline grating checkpoint and add Grating node
             base_grating = Grating()
+            el = LoRAElement("l1", rank=2, alpha=1.0, in_features=2, out_features=2)
+            base_grating.add_element(el)
             grating_file = os.path.join(tmp_dir, "base_grating.safetensors")
             base_grating.save(grating_file)
 
@@ -482,6 +484,9 @@ class TestLoRAEvolution(unittest.TestCase):
             self.assertEqual(base_ind.type, "individual")
             self.assertEqual(base_ind.generation, 0)
             self.assertIsNone(base_ind.fitness)
+            self.assertFalse(baseline_ind_id.startswith("individual_"))
+            self.assertEqual(base_ind.id, base_ind.file.uid)
+            self.assertTrue(base_ind.file.uid.endswith(".xxh3_64"))
             # Model binds_to individual
             self.assertTrue(g_reloaded.G.has_edge("model_test", baseline_ind_id))
             self.assertEqual(g_reloaded.G.get_edge_data("model_test", baseline_ind_id)["relation"], "binds_to")
@@ -543,6 +548,9 @@ class TestLoRAEvolution(unittest.TestCase):
                 ind_node = g_reloaded.get_element(ind_id)
                 self.assertEqual(ind_node.type, "individual")
                 self.assertEqual(ind_node.generation, 1)
+                self.assertFalse(ind_id.startswith("individual_"))
+                self.assertEqual(ind_node.id, ind_node.file.uid)
+                self.assertTrue(ind_node.file.uid.endswith(".xxh3_64"))
                 # Parent compound must be the Group ID
                 node_attrs = g_reloaded.G.nodes[ind_id]
                 self.assertEqual(node_attrs.get("parent"), res_data["group_id"])
@@ -865,6 +873,79 @@ class TestLoRAEvolution(unittest.TestCase):
             self.assertIn("context_overrides", op)
             self.assertIn("form_config", op)
 
+    def test_mutate_duplicate_individual_rejection(self) -> None:
+        """Verify that mutation discards mutated individuals whose genome UIDs already exist in the graph."""
+        import tempfile
+        import shutil
+        import os
+        from param_graph.graph import ParameterGraph
+        from param_graph.elements.models.stylegan_element import StyleGANModel
+        from param_graph.elements.artifacts.individual_element import Individual
+        from param_graph.elements.base_elements import Asset
+        from operations.evolution.mutate import mutate_evolution_task
+        from utils.uid import XXH3_64
+
+        tmp_dir = tempfile.mkdtemp()
+        try:
+            g = ParameterGraph(tmp_dir)
+            uid_gen = XXH3_64()
+
+            model_node = StyleGANModel(
+                id="model_mut_test",
+                name="Mut Test Model",
+                context={},
+                checkpoint=Asset(path="mock_path", uid="mock_uid", extension=".pt"),
+                adapter="stylegan2"
+            )
+            g.add_element(model_node)
+
+            output_dir = g.root / "generate"
+            os.makedirs(output_dir, exist_ok=True)
+            gene = LoRAGene("layer_fixed", torch.ones((2, 2)), torch.ones((2, 2)), True)
+            genome = LoRAGenome([gene])
+            parent_uid = uid_gen.from_state_dict(genome.get_state_dict())
+            parent_genome_path = output_dir / f"{parent_uid}.safetensors"
+            genome.save(str(parent_genome_path))
+
+            parent_ind = Individual(
+                id=parent_uid,
+                name="Original Gen 0 Parent",
+                file=Asset(path=str(parent_genome_path), uid=parent_uid, extension=".safetensors"),
+                base_model_id="model_mut_test",
+                generation=0,
+                fitness=10.0,
+                context={"model_id": "model_mut_test"}
+            )
+            g.add_element(parent_ind)
+            g.save()
+
+            # Run mutate task with 0 noise and 0 flip prob (yielding identical genome)
+            mutate_evolution_task(
+                parent_job_id="test_dup_mutate",
+                parent_ids=[parent_uid],
+                offspring_size=2,
+                lora_noise=0.0,
+                active_flip_prob=0.0,
+                mutation_rate=0.0,
+                generation_context={},
+                generate_exemplars=False,
+                param_graph=g,
+                uid_generator=uid_gen,
+            )
+
+            # Verify parent node was NOT overwritten
+            parent_after = g.get_element(parent_uid)
+            self.assertEqual(parent_after.name, "Original Gen 0 Parent")
+            self.assertEqual(parent_after.generation, 0)
+            self.assertIsNone(g.G.nodes[parent_uid].get("parent"))
+
+            # Verify no self-loop edge exists
+            self.assertFalse(g.G.has_edge(parent_uid, parent_uid))
+
+        finally:
+            shutil.rmtree(tmp_dir)
+
 
 if __name__ == "__main__":
     unittest.main()
+

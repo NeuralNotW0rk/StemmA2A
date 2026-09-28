@@ -280,7 +280,8 @@ def recombine_evolution_task(
             return (
                 parent_nodes, model_element, model_id, baseline_grating_id,
                 base_grating, next_generation, target_offspring_count, merged_context,
-                operation, node_engine_args, dumped_params, offspring_records, gen_group
+                operation, node_engine_args, dumped_params, offspring_records, gen_group,
+                parent_ns_individuals, selection_strat, crossover_strat, mutation_strat
             )
 
         if graph_lock is not None:
@@ -288,13 +289,15 @@ def recombine_evolution_task(
                 (
                     parent_nodes, model_element, model_id, baseline_grating_id,
                     base_grating, next_generation, target_offspring_count, merged_context,
-                    operation, node_engine_args, dumped_params, offspring_records, gen_group
+                    operation, node_engine_args, dumped_params, offspring_records, gen_group,
+                    parent_ns_individuals, selection_strat, crossover_strat, mutation_strat
                 ) = _setup_recombination()
         else:
             (
                 parent_nodes, model_element, model_id, baseline_grating_id,
                 base_grating, next_generation, target_offspring_count, merged_context,
-                operation, node_engine_args, dumped_params, offspring_records, gen_group
+                operation, node_engine_args, dumped_params, offspring_records, gen_group,
+                parent_ns_individuals, selection_strat, crossover_strat, mutation_strat
             ) = _setup_recombination()
 
         baseline_elements = parent_nodes[0].context.get("baseline_elements")
@@ -307,6 +310,18 @@ def recombine_evolution_task(
         individual_ids: list[str] = []
 
         for i, record in enumerate(offspring_records):
+            child_genome = record.individual.genotype
+            genome_state_dict = child_genome.get_state_dict()
+            genome_uid = uid_gen.from_state_dict(genome_state_dict)
+            child_ind_id = genome_uid
+
+            if child_ind_id in individual_ids:
+                print(
+                    f"[_recombine_evolution_task] Discarding duplicate individual '{child_ind_id}' "
+                    f"already generated in current batch."
+                )
+                continue
+
             if local_jobs is not None and parent_job_id in local_jobs:
                 local_jobs[parent_job_id]["progress"] = {
                     "value": i,
@@ -314,15 +329,9 @@ def recombine_evolution_task(
                     "description": f"Processing offspring {i+1} of {target_offspring_count}..."
                 }
 
-            child_genome = record.individual.genotype
-            genome_state_dict = child_genome.get_state_dict()
-            genome_uid = uid_gen.from_state_dict(genome_state_dict)
-            child_ind_id = f"individual_{genome_uid}"
-
             output_dir = param_graph.root / "generate"
             os.makedirs(output_dir, exist_ok=True)
             child_genome_path = output_dir / f"{child_ind_id}.safetensors"
-            child_genome.save(str(child_genome_path))
 
             child_context = copy.deepcopy(merged_context)
             child_context["baseline_elements"] = baseline_elements
@@ -360,25 +369,35 @@ def recombine_evolution_task(
                 context=child_context
             )
 
-            def _add_child() -> None:
-                param_graph.add_element(child_node)
+            def _add_child() -> bool:
+                if not param_graph.add_element(child_node, allow_duplicates=False):
+                    return False
+                child_genome.save(str(child_genome_path))
                 param_graph.update_element(child_node.id, {"parent": gen_group_id})
                 param_graph.link(model_element, child_node, relation='binds_to')
 
                 for p_id in record.lineage.parent_ids:
-                    if param_graph.G.has_node(p_id):
+                    if p_id != child_ind_id and param_graph.G.has_node(p_id):
                         p_elem = param_graph.get_element(p_id)
                         param_graph.link(p_elem, child_node, relation='parent')
 
                 gen_group.member_ids.append(child_ind_id)
                 param_graph.update_element(gen_group.id, {"member_ids": gen_group.member_ids})
                 param_graph.save()
+                return True
 
             if graph_lock is not None:
                 with graph_lock:
-                    _add_child()
+                    added = _add_child()
             else:
-                _add_child()
+                added = _add_child()
+
+            if not added:
+                print(
+                    f"[_recombine_evolution_task] Discarding duplicate individual '{child_ind_id}' "
+                    f"which already exists in the parameter graph."
+                )
+                continue
 
             individual_ids.append(child_ind_id)
 
