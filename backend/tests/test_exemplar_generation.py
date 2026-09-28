@@ -15,9 +15,11 @@ from param_graph.elements.artifacts.grating_element import Grating
 from param_graph.elements.collections.group_element import Group
 from param_graph.elements.base_elements import Asset
 from evolution.lora_genome import LoRAGene, LoRAGenome
+from operations.evolution.resolution import find_exemplar_audio, resolve_exemplar_context
 from diffracture.topology.grating import Grating as DiffractureGrating
 from engine.engine_provider import EngineProvider
 import app as app_module
+
 
 
 class TestExemplarGeneration(unittest.TestCase):
@@ -405,8 +407,9 @@ class TestExemplarGeneration(unittest.TestCase):
             "offspring_size": 2,
             "generate_exemplars": True,
             "lora_noise": 0.05,
-            "mutation_rate": 0.5
+            "mutation_rate": 1.0
         })
+
         self.assertEqual(resp.status_code, 202)
         job_id = resp.get_json()["job_id"]
 
@@ -632,6 +635,189 @@ class TestExemplarGeneration(unittest.TestCase):
         edge_data = self.graph.G.get_edge_data(new_ind_id, "audio_claimed")
         self.assertIsNotNone(edge_data)
         self.assertEqual(edge_data.get("relation"), "shares_phenotype")
+
+    def test_find_exemplar_audio(self) -> None:
+        """Verify find_exemplar_audio discovers direct parented audio, shared phenotype audio, and precursor audio."""
+        # 1. Direct parented audio
+        ind_1 = Individual(
+            id="ind_direct_ex",
+            name="Direct Individual",
+            file=Asset(path="mock_ind_1", uid="ind_direct_ex", extension=".safetensors"),
+            base_model_id="model_test",
+            generation=1,
+            context={}
+        )
+        self.graph.add_element(ind_1)
+
+        audio_direct = Audio(
+            id="audio_direct_ex",
+            name="Direct Audio Exemplar",
+            file=Asset(path="mock_audio_1.wav", uid="audio_direct_ex", extension=".wav"),
+            context={"prompt": "direct sound"}
+        )
+        self.graph.add_element(audio_direct)
+        self.graph.update_element(audio_direct.id, {"parent": ind_1.id})
+
+        found_audio = find_exemplar_audio(ind_1.id, self.graph)
+        self.assertIsNotNone(found_audio)
+        self.assertEqual(found_audio.id, audio_direct.id)
+
+        # 2. Shared exemplar via shared_exemplar_id / shares_phenotype edge
+        ind_2 = Individual(
+            id="ind_shared_ex",
+            name="Shared Individual",
+            file=Asset(path="mock_ind_2", uid="ind_shared_ex", extension=".safetensors"),
+            base_model_id="model_test",
+            generation=2,
+            context={"shared_exemplar_id": audio_direct.id, "phenotype_status": "duplicate"}
+        )
+        self.graph.add_element(ind_2)
+        self.graph.link(ind_2, audio_direct, relation="shares_phenotype")
+
+        found_shared = find_exemplar_audio(ind_2.id, self.graph)
+        self.assertIsNotNone(found_shared)
+        self.assertEqual(found_shared.id, audio_direct.id)
+
+        # 3. Precursor audio
+        ind_3 = Individual(
+            id="ind_prec_ex",
+            name="Precursor Individual",
+            file=Asset(path="mock_ind_3", uid="ind_prec_ex", extension=".safetensors"),
+            base_model_id="model_test",
+            generation=0,
+            context={"precursor_artifact_id": "audio_precursor_test"}
+        )
+        audio_precursor = Audio(
+            id="audio_precursor_test",
+            name="Precursor Audio",
+            file=Asset(path="mock_prec.wav", uid="audio_precursor_test", extension=".wav"),
+            context={"prompt": "precursor sound"}
+        )
+        self.graph.add_element(audio_precursor)
+        self.graph.add_element(ind_3)
+        self.graph.link(audio_precursor, ind_3, relation="precursor")
+
+        found_prec = find_exemplar_audio(ind_3.id, self.graph)
+        self.assertIsNotNone(found_prec)
+        self.assertEqual(found_prec.id, audio_precursor.id)
+
+    def test_resolve_exemplar_context_hierarchy(self) -> None:
+        """Verify resolve_exemplar_context queries parent and deep ancestor exemplar audio contexts."""
+        # 1. Gen 0 Parent with exemplar audio
+        parent_ind = Individual(
+            id="parent_ind_ctx",
+            name="Parent Gen 0",
+            file=Asset(path="mock_parent.safetensors", uid="parent_ind_ctx", extension=".safetensors"),
+            base_model_id="model_ctx_test",
+            generation=0,
+            context={"baseline_elements": []}
+        )
+        self.graph.add_element(parent_ind)
+
+        parent_audio = Audio(
+            id="parent_audio_ctx",
+            name="Parent Audio",
+            file=Asset(path="mock_parent.wav", uid="parent_audio_ctx", extension=".wav"),
+            context={"prompt": "deep house baseline", "seconds_total": 8.0, "truncation": 0.65}
+        )
+        self.graph.add_element(parent_audio)
+        self.graph.update_element(parent_audio.id, {"parent": parent_ind.id})
+
+        # 2. Gen 1 Child linked via relation='parent' (has NO exemplar yet)
+        child_ind = Individual(
+            id="child_ind_ctx",
+            name="Child Gen 1",
+            file=Asset(path="mock_child.safetensors", uid="child_ind_ctx", extension=".safetensors"),
+            base_model_id="model_ctx_test",
+            generation=1,
+            context={"lineage": {"parent_ids": [parent_ind.id]}}
+        )
+        self.graph.add_element(child_ind)
+        self.graph.link(parent_ind, child_ind, relation="parent")
+
+        # Resolving on child should retrieve parent's exemplar audio context
+        child_context = resolve_exemplar_context(child_ind.id, self.graph)
+        self.assertEqual(child_context.get("prompt"), "deep house baseline")
+        self.assertEqual(child_context.get("seconds_total"), 8.0)
+        self.assertEqual(child_context.get("truncation"), 0.65)
+
+        # 3. Gen 2 Grandchild linked to Gen 1 Child (which still has no exemplar)
+        grandchild_ind = Individual(
+            id="grandchild_ind_ctx",
+            name="Grandchild Gen 2",
+            file=Asset(path="mock_grandchild.safetensors", uid="grandchild_ind_ctx", extension=".safetensors"),
+            base_model_id="model_ctx_test",
+            generation=2,
+            context={"lineage": {"parent_ids": [child_ind.id]}}
+        )
+        self.graph.add_element(grandchild_ind)
+        self.graph.link(child_ind, grandchild_ind, relation="parent")
+
+        # Resolving on grandchild should traverse up to Gen 0 parent's exemplar audio
+        grandchild_context = resolve_exemplar_context(grandchild_ind.id, self.graph)
+        self.assertEqual(grandchild_context.get("prompt"), "deep house baseline")
+        self.assertEqual(grandchild_context.get("seconds_total"), 8.0)
+        self.assertEqual(grandchild_context.get("truncation"), 0.65)
+
+    def test_exemplar_generation_inherits_parent_exemplar_context(self) -> None:
+        """Verify that dispatching generate for an individual inherits parent exemplar parameters and merges overrides."""
+        model_node = StyleGANModel(
+            id="model_inherit_test",
+            name="Inherit Test Model",
+            context={},
+            checkpoint=Asset(path="mock_model_path", uid="mock_model_uid", extension=".pt"),
+            adapter="stylegan2"
+        )
+        self.graph.add_element(model_node)
+
+        parent_ind = Individual(
+            id="ind_parent_for_dispatch",
+            name="Parent Ind For Dispatch",
+            file=Asset(path="mock_parent.safetensors", uid="ind_parent_for_dispatch", extension=".safetensors"),
+            base_model_id="model_inherit_test",
+            generation=0,
+            context={"baseline_elements": []}
+        )
+        self.graph.add_element(parent_ind)
+        self.graph.link(model_node, parent_ind, relation="binds_to")
+
+        parent_audio = Audio(
+            id="audio_parent_dispatch",
+            name="Parent Audio Dispatch",
+            file=Asset(path="mock_parent_audio.wav", uid="audio_parent_dispatch", extension=".wav"),
+            context={"truncation": 0.72}
+        )
+        self.graph.add_element(parent_audio)
+        self.graph.update_element(parent_audio.id, {"parent": parent_ind.id})
+
+        child_ind = Individual(
+            id="ind_child_for_dispatch",
+            name="Child Ind For Dispatch",
+            file=Asset(path="mock_child.safetensors", uid="ind_child_for_dispatch", extension=".safetensors"),
+            base_model_id="model_inherit_test",
+            generation=1,
+            context={"baseline_elements": []}
+        )
+        self.graph.add_element(child_ind)
+        self.graph.link(model_node, child_ind, relation="binds_to")
+        self.graph.link(parent_ind, child_ind, relation="parent")
+        self.graph.save()
+
+        # Trigger generate on child WITHOUT supplying truncation (should inherit 0.72 from parent exemplar)
+        gen_job_id = f"job_inherit_{uuid.uuid4().hex[:8]}"
+        resp = self.client.post("/execute_operation", json={
+            "job_id": gen_job_id,
+            "operation": "generate",
+            "initiator": child_ind.to_dict(),
+            "params": {}
+        })
+        self.assertEqual(resp.status_code, 202)
+
+        # Check that engine was called with inherited truncation=0.72
+        self.mock_engine.execute.assert_called()
+        call_args, call_kwargs = self.mock_engine.execute.call_args
+        self.assertEqual(call_kwargs.get("truncation"), 0.72)
+
 
 
 

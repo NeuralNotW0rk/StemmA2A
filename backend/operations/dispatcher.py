@@ -27,7 +27,9 @@ from .task_manager import task_manager, TaskManager
 from .evolution.wrap_individual import wrap_precursor_as_individual
 from .evolution.mutate import dispatch_mutate_operation
 from .evolution.recombine import dispatch_recombine_operation
+from .evolution.resolution import resolve_exemplar_context
 from .grating.create_grating import dispatch_create_grating_operation
+
 
 
 async def dispatch_operation(
@@ -374,10 +376,20 @@ async def dispatch_operation(
             else:
                 return {"error": f"Adapter '{model_element.adapter}' has no '{operation_name}' configuration"}, 404
 
+        inherited_exemplar_context: dict[str, Any] = {}
+        if target_individual_nodes:
+            inherited_exemplar_context = resolve_exemplar_context(
+                target_individual_nodes[0],
+                param_graph=param_graph,
+                graph_lock=graph_lock
+            )
+
         DynamicArgsModel = create_dynamic_model(form_config)
-        validation_target = params if params else payload
+        raw_user_input = params if params else payload
+        validation_target = {**inherited_exemplar_context, **raw_user_input}
         validated_params = DynamicArgsModel.model_validate(validation_target)
         dumped_params = validated_params.model_dump()
+
 
         node_engine_args: dict[str, Any] = {}
         for field in form_config:

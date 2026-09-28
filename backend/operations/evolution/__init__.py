@@ -31,7 +31,11 @@ from .recombine import (
     dispatch_recombine_operation,
 )
 from .expression import express_individual_to_grating_artifact
-from .resolution import extract_individual_parent_ids
+from .resolution import (
+    extract_individual_parent_ids,
+    find_exemplar_audio,
+    resolve_exemplar_context,
+)
 
 
 def get_evolution_operations() -> list[dict]:
@@ -72,4 +76,7 @@ __all__ = [
     "dispatch_recombine_operation",
     "express_individual_to_grating_artifact",
     "extract_individual_parent_ids",
+    "find_exemplar_audio",
+    "resolve_exemplar_context",
 ]
+

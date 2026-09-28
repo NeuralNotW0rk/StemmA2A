@@ -25,8 +25,9 @@ from utils.uid import XXH3_64
 
 from ..base import Operation
 from ..registry import register
-from .resolution import extract_individual_parent_ids
+from .resolution import extract_individual_parent_ids, resolve_exemplar_context
 from .wrap_individual import wrap_precursor_as_individual
+
 
 
 @dataclass
@@ -161,10 +162,20 @@ def mutate_evolution_task(
                 form_config = asyncio.run(engine.get_adapter_config(model_element.adapter))
                 form_config = form_config.get(operation, []) if isinstance(form_config, dict) else form_config
 
+                # Resolve parent exemplar context
+                parent_exemplar_context = resolve_exemplar_context(
+                    first_parent,
+                    param_graph=param_graph,
+                    graph_lock=None
+                )
+                effective_generation_params = {**parent_exemplar_context, **generation_context}
+
+
                 from utils.form import create_dynamic_model
                 DynamicArgsModel = create_dynamic_model(form_config)
-                validated_params = DynamicArgsModel.model_validate(generation_context)
+                validated_params = DynamicArgsModel.model_validate(effective_generation_params)
                 dumped_params = validated_params.model_dump()
+
 
                 for field in form_config:
                     if field.get("type") == "node":
