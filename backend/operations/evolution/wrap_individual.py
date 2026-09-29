@@ -242,6 +242,7 @@ async def wrap_precursor_as_individual(
         existing_node = param_graph.get_element(individual_id)
         return {
             "success": True,
+            "status": "completed",
             "message": f"Artifact '{precursor_node_id}' already wrapped as Individual '{individual_id}'",
             "individual": existing_node.to_dict() if hasattr(existing_node, "to_dict") else vars(existing_node),
             "node_id": individual_id
@@ -309,6 +310,7 @@ async def wrap_precursor_as_individual(
 
     return {
         "success": True,
+        "status": "completed",
         "message": f"Artifact '{precursor_node_id}' wrapped as Individual '{individual_id}'",
         "individual": individual_node.to_dict(),
         "node_id": individual_id

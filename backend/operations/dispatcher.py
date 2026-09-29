@@ -119,7 +119,11 @@ async def dispatch_operation(
                 for field in form_config:
                     if field.get("type") == "node":
                         field_name = field.get("name")
-                        node_id = validated_params.pop(field_name, None)
+                        node_id = (
+                            validated_params.pop(field_name, None)
+                            or validation_target.get(f"{field_name}_id")
+                            or validation_target.get(field_name)
+                        )
                         if node_id:
                             element = param_graph.get_element(node_id)
                             if element:
@@ -395,7 +399,11 @@ async def dispatch_operation(
         for field in form_config:
             if field.get("type") == "node":
                 field_name = field.get("name")
-                node_id = dumped_params.pop(field_name, None)
+                node_id = (
+                    dumped_params.pop(field_name, None)
+                    or validation_target.get(f"{field_name}_id")
+                    or validation_target.get(field_name)
+                )
                 if node_id:
                     element = param_graph.get_element(node_id)
                     if element:

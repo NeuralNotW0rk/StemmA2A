@@ -61,8 +61,13 @@ class XXH3_64(UIDGenerator):
     
     def from_string(self, data: str) -> str:
         """Generates a hex string UID using XXH3."""
-        h = xxhash.xxh3_64
-        return f"{xxhash.xxh3_64_hexdigest(data)}{self.DELIMITER}{self.get_method_name()}"
+        if isinstance(data, str):
+            data_bytes = data.encode("utf-8")
+        elif isinstance(data, (bytes, bytearray)):
+            data_bytes = bytes(data)
+        else:
+            data_bytes = str(data).encode("utf-8")
+        return f"{xxhash.xxh3_64_hexdigest(data_bytes)}{self.DELIMITER}{self.get_method_name()}"
     
     def from_tensor(self, tensor: Tensor) -> str:
         """
@@ -89,12 +94,18 @@ class XXH3_64(UIDGenerator):
         
         # Sorting keys ensures the UID is identical regardless of internal dict order
         for key in sorted(state_dict.keys()):
-            # .contiguous() is the 'secret sauce'—it ensures the memory layout 
-            # matches the logical data, regardless of previous slices or transposes.
-            tensor = state_dict[key].detach().cpu()
-            if not tensor.is_contiguous():
-                tensor = tensor.contiguous()
-            h.update(memoryview(tensor.numpy()))
+            val = state_dict[key]
+            if isinstance(val, Tensor):
+                tensor = val.detach().cpu()
+                if not tensor.is_contiguous():
+                    tensor = tensor.contiguous()
+                h.update(memoryview(tensor.numpy()))
+            elif isinstance(val, (bytes, bytearray)):
+                h.update(val)
+            elif isinstance(val, str):
+                h.update(val.encode("utf-8"))
+            else:
+                h.update(str(val).encode("utf-8"))
             
         return f"{h.hexdigest()}{self.DELIMITER}{self.get_method_name()}"
 
