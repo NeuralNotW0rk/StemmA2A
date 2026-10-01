@@ -1,15 +1,15 @@
 {
-  "name": "mutate",
-  "description": "Mutate individual(s) to produce variant offspring",
+  "name": "scatter",
+  "description": "Scatter variant offspring across the parameter space",
   "category": "evolution",
   "execution": "queued",
-  "initiator_types": ["individual", "group"],
+  "initiator_types": ["individual", "group", "audio"],
   "context_overrides": {},
   "form_config": [
     {
       "name": "parents",
       "type": "node-list",
-      "label": "Target Individual(s)",
+      "label": "Seed Individual(s)",
       "filter": {
         "type": "individual"
       },
@@ -19,7 +19,7 @@
     {
       "name": "offspring_size",
       "type": "integer",
-      "label": "Mutant Count (N)",
+      "label": "Scatter Count (N)",
       "defaultValue": 10,
       "min": 1,
       "max": 100,
@@ -28,7 +28,7 @@
     {
       "name": "lora_noise",
       "type": "float",
-      "label": "LoRA Perturbation Noise",
+      "label": "Scatter Perturbation Variance (σ)",
       "defaultValue": 0.05,
       "min": 0.0,
       "max": 2.0,

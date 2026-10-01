@@ -269,7 +269,7 @@ async def dispatch_operation(
 
         # Queued Background Host Tasks
         elif op.execution == "queued":
-            if operation_name == "mutate":
+            if operation_name in ("scatter", "mutate"):
                 return await dispatch_mutate_operation(
                     data=payload,
                     param_graph=param_graph,

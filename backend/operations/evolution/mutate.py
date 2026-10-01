@@ -82,8 +82,8 @@ def mutate_evolution_task(
     offspring_size: int,
     lora_noise: float,
     active_flip_prob: float,
-    mutation_rate: float,
-    generation_context: dict,
+    mutation_rate: float = 1.0,
+    generation_context: Optional[dict[str, Any]] = None,
     generate_exemplars: bool = False,
     param_graph: Any = None,
     graph_lock: Optional[threading.Lock] = None,
@@ -471,19 +471,34 @@ async def dispatch_mutate_operation(
     )
     lora_noise = float(
         data.get("lora_noise")
-        or params.get("lora_noise")
-        or data.get("lora_down_noise")
-        or 0.05
+        if data.get("lora_noise") is not None
+        else (
+            params.get("lora_noise")
+            if params.get("lora_noise") is not None
+            else (
+                data.get("lora_down_noise")
+                if data.get("lora_down_noise") is not None
+                else 0.05
+            )
+        )
     )
     active_flip_prob = float(
         data.get("active_flip_prob")
-        or params.get("active_flip_prob")
-        or 0.05
+        if data.get("active_flip_prob") is not None
+        else (
+            params.get("active_flip_prob")
+            if params.get("active_flip_prob") is not None
+            else 0.05
+        )
     )
     mutation_rate = float(
         data.get("mutation_rate")
-        or params.get("mutation_rate")
-        or 1.0
+        if data.get("mutation_rate") is not None
+        else (
+            params.get("mutation_rate")
+            if params.get("mutation_rate") is not None
+            else 1.0
+        )
     )
     generation_context = data.get("generation_context") or params.get("generation_context") or {}
     merged_generation_context = {**params, **generation_context}
@@ -547,14 +562,14 @@ async def dispatch_mutate_operation(
 
 
 @register
-class MutateOperation(Operation):
+class ScatterOperation(Operation):
     @property
     def name(self) -> str:
-        return "mutate"
+        return "scatter"
 
     @property
     def description(self) -> str:
-        return "Mutates parent individuals to produce variant offspring."
+        return "Scatters variant offspring across the parameter space from seed individual(s)."
 
     @property
     def category(self) -> str:
@@ -585,3 +600,22 @@ class MutateOperation(Operation):
             active_jobs=kwargs.get("active_jobs"),
             uid_generator=kwargs.get("uid_generator"),
         )
+
+
+@register
+class MutateOperation(ScatterOperation):
+    @property
+    def name(self) -> str:
+        return "mutate"
+
+    @property
+    def description(self) -> str:
+        return "Mutates parent individuals to produce variant offspring (alias for scatter)."
+
+
+# Scatter Aliases
+scatter_offspring = mutate_offspring
+scatter_evolution_task = mutate_evolution_task
+run_scatter_task = run_mutate_task
+dispatch_scatter_operation = dispatch_mutate_operation
+

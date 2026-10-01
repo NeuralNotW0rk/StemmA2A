@@ -872,6 +872,7 @@ async def wrap_individual():
         return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
 
+@app.route("/scatter_evolution", methods=["POST"])
 @app.route("/mutate_evolution", methods=["POST"])
 @app.route("/start_evolution", methods=["POST"])
 async def mutate_evolution():

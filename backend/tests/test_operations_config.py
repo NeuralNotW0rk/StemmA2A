@@ -51,7 +51,7 @@ class TestOperationsConfig(unittest.TestCase):
 
         op_names = [op["name"] for op in evo_ops]
         self.assertIn("wrap_individual", op_names)
-        self.assertIn("mutate", op_names)
+        self.assertIn("scatter", op_names)
         self.assertIn("recombine", op_names)
 
         for op in evo_ops:

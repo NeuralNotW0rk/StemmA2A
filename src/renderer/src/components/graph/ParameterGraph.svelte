@@ -176,10 +176,10 @@
       }
     }
 
-    // Filter out 'mutate' if target audio node does not have an associated generative model
+    // Filter out 'mutate'/'scatter' if target audio node does not have an associated generative model
     if (targetNode && (initiatorType === 'audio' || targetNode.data('member_type') === 'audio')) {
       if (!hasAssociatedModel(targetNode)) {
-        ops = ops.filter((op) => op.name !== 'mutate')
+        ops = ops.filter((op) => op.name !== 'mutate' && op.name !== 'scatter')
       }
     }
 
@@ -284,7 +284,7 @@
     const nodeData = targetNode ? targetNode.data() : null
     closeOperationsMenu()
     if (onselectOperation && nodeData) {
-      if (op.name === 'recombine' || op.name === 'mutate') {
+      if (op.name === 'recombine' || op.name === 'mutate' || op.name === 'scatter') {
         const individuals = getSelectedIndividuals(targetNode || undefined)
         const isIndividualNode = targetNode && targetNode.isNode() && targetNode.data('type') === 'individual'
         const isGroupNode = targetNode && targetNode.isNode() && targetNode.data('type') === 'group'
@@ -710,7 +710,7 @@
       }
     }
 
-    const PINNED_OPERATIONS = new Set(['generate', 'invert', 'wrap_individual', 'mutate', 'recombine'])
+    const PINNED_OPERATIONS = new Set(['generate', 'invert', 'wrap_individual', 'scatter', 'mutate', 'recombine'])
 
     const getSelectedIndividuals = (clickedEle?: cytoscape.NodeSingular | cytoscape.EdgeSingular): any[] => {
       const selectedEles = cy ? cy.$(':selected') : null
@@ -764,7 +764,7 @@
           return {
             content: toTitleCase(display.name),
             select: () => {
-              if (op.name === 'recombine' || op.name === 'mutate' || op.name === 'generate') {
+              if (op.name === 'recombine' || op.name === 'mutate' || op.name === 'scatter' || op.name === 'generate') {
                 const individuals = getSelectedIndividuals(ele)
                 const isIndividualNode = ele && ele.isNode() && ele.data('type') === 'individual'
                 const isGroupNode = ele && ele.isNode() && ele.data('type') === 'group'
