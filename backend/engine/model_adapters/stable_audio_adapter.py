@@ -613,6 +613,8 @@ class StableAudioAdapter(ModelAdapter):
         # Filter context
         context = {}
         for k, v in kwargs.items():
+            if k in ("job_id", "execution_mode"):
+                continue
             if k.endswith('_element'):
                 context[k.replace('_element', '_id')] = v.id
             elif k.endswith('_elements'):
@@ -916,6 +918,8 @@ class StableAudioAdapter(ModelAdapter):
         # Filter context metadata properties
         context = {}
         for k, v in kwargs.items():
+            if k in ("job_id", "execution_mode"):
+                continue
             if k.endswith('_element'):
                 context[k.replace('_element', '_id')] = v.id
             elif k.endswith('_elements'):

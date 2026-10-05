@@ -62,5 +62,50 @@ class TestStyleGANAdapter(unittest.TestCase):
             pass
 
 
+    def test_register_model_checkpoints(self):
+        import tempfile
+        import pickle
+        from engine.model_adapters.stylegan_adapter import _compute_stylegan_uid, Generator
+
+        adapter = StyleGANAdapter()
+        gen = Generator(size=64, style_dim=512, n_mlp=8, channel_multiplier=1)
+        state_dict = gen.state_dict()
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # 1. Test standard PyTorch .pt / .pth checkpoint
+            pt_path = os.path.join(tmpdir, "model.pt")
+            torch.save({"g_ema": state_dict}, pt_path)
+
+            uid_pt = _compute_stylegan_uid(pt_path, adapter.uid_generator)
+            self.assertTrue(len(uid_pt) > 0)
+            
+            model_info_pt = adapter.register_model(
+                name="PT Model",
+                checkpoint_path=pt_path
+            )
+            self.assertEqual(model_info_pt.checkpoint.uid, uid_pt)
+            self.assertEqual(model_info_pt.config["size"], 64)
+
+            # 2. Test raw pickle (.pkl) checkpoint
+            pkl_path = os.path.join(tmpdir, "model.pkl")
+            with open(pkl_path, "wb") as f:
+                pickle.dump({"g_ema": state_dict}, f)
+
+            uid_pkl = _compute_stylegan_uid(pkl_path, adapter.uid_generator)
+            self.assertEqual(uid_pkl, uid_pt)
+
+            model_info_pkl = adapter.register_model(
+                name="PKL Model",
+                checkpoint_path=pkl_path
+            )
+            self.assertEqual(model_info_pkl.checkpoint.uid, uid_pkl)
+            self.assertEqual(model_info_pkl.config["size"], 64)
+
+            # 3. Load from PKL model
+            adapter.load_model(model_info_pkl)
+            self.assertIsNotNone(adapter.model)
+
+
 if __name__ == "__main__":
     unittest.main()
+

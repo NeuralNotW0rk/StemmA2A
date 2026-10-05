@@ -505,7 +505,7 @@
     const basePayload: Record<string, unknown> = { ...payload }
 
     // Ensure initiator and context are attached to payload
-    if ($initiatorNodeStore) {
+    if ($initiatorNodeStore && !isReplicated) {
       basePayload.initiator = $initiatorNodeStore
       const initiatorId = $initiatorNodeStore.id
       const effectiveType =
@@ -514,12 +514,14 @@
           : $initiatorNodeStore.type
 
       if (effectiveType === 'audio') {
-        if (!basePayload.source_audio && !basePayload.source_audio_id) {
-          basePayload.source_audio = initiatorId
-          basePayload.source_audio_id = initiatorId
-        }
-        if (!basePayload.precursor_audio_id) {
-          basePayload.precursor_audio_id = initiatorId
+        if (op.name !== 'generate') {
+          if (!basePayload.source_audio && !basePayload.source_audio_id) {
+            basePayload.source_audio = initiatorId
+            basePayload.source_audio_id = initiatorId
+          }
+          if (!basePayload.precursor_audio_id) {
+            basePayload.precursor_audio_id = initiatorId
+          }
         }
       } else if (effectiveType === 'bundle') {
         if (!basePayload.parent_bundle_id) {
@@ -551,7 +553,8 @@
       if (
         $contextStore.source_audio_id &&
         !basePayload.source_audio &&
-        !basePayload.source_audio_id
+        !basePayload.source_audio_id &&
+        op.name !== 'generate'
       ) {
         basePayload.source_audio = $contextStore.source_audio_id
         basePayload.source_audio_id = $contextStore.source_audio_id

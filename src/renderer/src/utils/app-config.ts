@@ -9,7 +9,9 @@ export const ELEMENT_INFO_CONFIG = {
     'fy',
     'index',
     'embeddings',
-    'value'
+    'value',
+    'job_id',
+    'execution_mode'
   ]),
   // Attributes to prioritize at the top of the ElementInfoView
   priorityKeys: ['id', 'type', 'name', 'alias']

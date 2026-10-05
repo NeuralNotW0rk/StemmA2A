@@ -418,8 +418,7 @@ class LocalEngine(Engine):
                 
                 func = getattr(self, operation_id)
                 
-                # We need to run the async function in the current thread's event loop
-                op_kwargs['job_id'] = job_id
+                # Run the async operation function in the current thread's event loop
                 result = asyncio.run(func(**op_kwargs))
 
                 self.job_statuses[job_id] = {"status": "completed", "result": result}

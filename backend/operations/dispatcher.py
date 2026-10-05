@@ -323,9 +323,9 @@ async def dispatch_operation(
         return {"error": "Engine could not be initialized"}, 400
 
     try:
-        model_id = payload.get("model_id")
-        job_id = payload.get("job_id")
         params = payload.get("params", {}) or {}
+        model_id = payload.get("model_id") or payload.get("model") or params.get("model_id") or params.get("model")
+        job_id = payload.get("job_id")
 
         initiator = payload.get("initiator") or params.get("initiator") or {}
         initiator_id = initiator.get("id") if isinstance(initiator, dict) else (str(initiator).strip() if initiator else None)
@@ -443,7 +443,7 @@ async def dispatch_operation(
                 node_engine_args["baseline_grating"] = base_grating_elem
 
         source_audio_id = payload.get("source_audio_id") or params.get("source_audio_id")
-        if source_audio_id:
+        if source_audio_id and (operation_name == "invert" or any(f.get("name") == "source_audio" for f in form_config)):
             source_audio_element = param_graph.get_element(source_audio_id)
             if not isinstance(source_audio_element, Audio):
                 return {"error": f"Node '{source_audio_id}' is not a valid audio artifact."}, 400
@@ -506,11 +506,9 @@ async def dispatch_operation(
                                 break
                     param_graph.save()
 
-        returned_job_id = await engine.execute(operation_name, job_id=job_id, **engine_args, **dumped_params)
-        if returned_job_id:
-            job_id = returned_job_id
-
-        v_params = dumped_params
+        v_params = dict(dumped_params)
+        v_params.pop("job_id", None)
+        v_params.pop("execution_mode", None)
         v_params["model_id"] = model_id
         v_params["operation"] = operation_name
         if gratings:
@@ -529,6 +527,12 @@ async def dispatch_operation(
                 "validated_params": v_params,
                 "operation": operation_name
             }
+
+        returned_job_id = await engine.execute(operation_name, job_id=job_id, **engine_args, **dumped_params)
+        if returned_job_id and returned_job_id != job_id:
+            if active_jobs is not None:
+                active_jobs[returned_job_id] = active_jobs.pop(job_id)
+            job_id = returned_job_id
 
         return {
             "message": "Job started successfully.",

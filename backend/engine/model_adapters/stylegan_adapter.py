@@ -56,18 +56,43 @@ class DummyFinder:
 if not any(isinstance(f, DummyFinder) for f in sys.meta_path):
     sys.meta_path.insert(0, DummyFinder())
 
+def is_tensorflow_checkpoint(checkpoint) -> bool:
+    """Detects if the unpickled object represents a legacy TensorFlow StyleGAN checkpoint."""
+    if isinstance(checkpoint, (tuple, list)) and len(checkpoint) >= 3:
+        target = checkpoint[2]
+    elif isinstance(checkpoint, dict) and 'G_ema' in checkpoint:
+        target = checkpoint['G_ema']
+    elif isinstance(checkpoint, dict) and any(isinstance(v, torch.Tensor) for v in checkpoint.values()):
+        return False
+    else:
+        target = checkpoint
+
+    if hasattr(target, 'state_dict') and callable(getattr(target, 'state_dict')):
+        return False
+
+    if hasattr(target, 'variables'):
+        return True
+    
+    components = getattr(target, 'components', None)
+    if components and hasattr(components, 'values'):
+        for comp in components.values():
+            if hasattr(comp, 'variables'):
+                return True
+                
+    return False
+
 def load_stylegan_checkpoint(ckpt_path):
-    """Loads a StyleGAN2 checkpoint, supporting standard PyTorch state_dict and TensorFlow legacy pickle (.pkl)."""
+    """Loads a StyleGAN2 checkpoint, supporting standard PyTorch state_dict, PyTorch pickled objects, and TensorFlow legacy pickle (.pkl)."""
     try:
         # Try loading as a standard PyTorch state_dict
         checkpoint = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-        return checkpoint, False
+        return checkpoint, is_tensorflow_checkpoint(checkpoint)
     except Exception as e:
-        # Try loading as a standard TensorFlow legacy pickle
+        # Try loading as a pickle (for legacy TF .pkl or raw pickled PyTorch models)
         try:
             with open(ckpt_path, "rb") as f:
                 checkpoint = pickle.load(f)
-            return checkpoint, True
+            return checkpoint, is_tensorflow_checkpoint(checkpoint)
         except Exception as p_err:
             raise RuntimeError(f"Failed to load checkpoint as PyTorch ({e}) or legacy Pickle ({p_err})")
 
@@ -620,11 +645,20 @@ def _compute_stylegan_uid(file_path: str, uid_generator) -> str:
     abs_path = os.path.abspath(file_path)
     if not os.path.exists(abs_path):
         raise FileNotFoundError(f"Checkpoint file not found: {abs_path}")
-    checkpoint = torch.load(abs_path, map_location="cpu", weights_only=False)
-    if not isinstance(checkpoint, dict):
-        raise ValueError("Loaded checkpoint is not a dictionary. Ensure it is a valid PyTorch model file.")
+    checkpoint, is_tf = load_stylegan_checkpoint(abs_path)
+    if is_tf:
+        state_dict, _, _, _ = convert_tf_to_pytorch(checkpoint)
+    else:
+        if isinstance(checkpoint, dict):
+            state_dict = checkpoint.get('g_ema') or checkpoint.get('g') or checkpoint
+        elif hasattr(checkpoint, 'state_dict'):
+            state_dict = checkpoint.state_dict()
+        else:
+            state_dict = checkpoint
+            
+    if hasattr(state_dict, 'state_dict'):
+        state_dict = state_dict.state_dict()
         
-    state_dict = checkpoint.get('g_ema') or checkpoint.get('g') or checkpoint
     if not isinstance(state_dict, dict):
         raise ValueError("Checkpoint weights are not serialized as a dictionary.")
         
@@ -676,25 +710,34 @@ class StyleGANAdapter(ModelAdapter):
                     print("Detected legacy TensorFlow .pkl checkpoint on registration. Extracting configuration...")
                     _, size, channel_multiplier, _ = convert_tf_to_pytorch(checkpoint)
                 else:
-                    state_dict = checkpoint.get('g_ema') or checkpoint.get('g') or checkpoint
+                    if isinstance(checkpoint, dict):
+                        state_dict = checkpoint.get('g_ema') or checkpoint.get('g') or checkpoint
+                    elif hasattr(checkpoint, 'state_dict'):
+                        state_dict = checkpoint.state_dict()
+                    else:
+                        state_dict = checkpoint
+
+                    if hasattr(state_dict, 'state_dict'):
+                        state_dict = state_dict.state_dict()
                     
-                    conv_keys = [k for k in state_dict.keys() if k.startswith("convs.")]
-                    if conv_keys:
-                        indices = [int(k.split(".")[1]) for k in conv_keys if k.split(".")[1].isdigit()]
-                        if indices:
-                            max_idx = max(indices)
-                            log_size = (max_idx // 2) + 3
-                            size = 2 ** log_size
-                            
-                            # Detect channel multiplier from a high-resolution block (res >= 64)
-                            for idx in sorted(list(set(indices))):
-                                res = 2 ** ((idx // 2) + 3)
-                                if res >= 64:
-                                    key = f"convs.{idx}.conv.weight"
-                                    if key in state_dict:
-                                        out_channels = state_dict[key].shape[1]
-                                        channel_multiplier = out_channels // (16384 // res)
-                                        break
+                    if isinstance(state_dict, dict):
+                        conv_keys = [k for k in state_dict.keys() if k.startswith("convs.")]
+                        if conv_keys:
+                            indices = [int(k.split(".")[1]) for k in conv_keys if k.split(".")[1].isdigit()]
+                            if indices:
+                                max_idx = max(indices)
+                                log_size = (max_idx // 2) + 3
+                                size = 2 ** log_size
+                                
+                                # Detect channel multiplier from a high-resolution block (res >= 64)
+                                for idx in sorted(list(set(indices))):
+                                    res = 2 ** ((idx // 2) + 3)
+                                    if res >= 64:
+                                        key = f"convs.{idx}.conv.weight"
+                                        if key in state_dict:
+                                            out_channels = state_dict[key].shape[1]
+                                            channel_multiplier = out_channels // (16384 // res)
+                                            break
                 print(f"Registered StyleGAN2 model with auto-detected shape: size={size}, multiplier={channel_multiplier}")
             except Exception as e:
                 print(f"Warning: Failed to inspect checkpoint parameters on registration: {e}. Using defaults.")
@@ -757,12 +800,20 @@ class StyleGANAdapter(ModelAdapter):
                     print("Detected legacy TensorFlow .pkl checkpoint. Converting weights...")
                     loaded_state_dict, size, channel_multiplier, loaded_mean_latent = convert_tf_to_pytorch(checkpoint)
                 else:
-                    if 'g_ema' in checkpoint:
-                        state_dict = checkpoint['g_ema']
-                    elif 'g' in checkpoint:
-                        state_dict = checkpoint['g']
+                    if isinstance(checkpoint, dict):
+                        if 'g_ema' in checkpoint:
+                            state_dict = checkpoint['g_ema']
+                        elif 'g' in checkpoint:
+                            state_dict = checkpoint['g']
+                        else:
+                            state_dict = checkpoint
+                    elif hasattr(checkpoint, 'state_dict'):
+                        state_dict = checkpoint.state_dict()
                     else:
                         state_dict = checkpoint
+                    
+                    if hasattr(state_dict, 'state_dict'):
+                        state_dict = state_dict.state_dict()
                     
                     loaded_state_dict = {k: v for k, v in state_dict.items() if 'manipulation' not in k}
 
@@ -809,7 +860,7 @@ class StyleGANAdapter(ModelAdapter):
                 if unexpected:
                     print(f"Warning: Loaded checkpoint has {len(unexpected)} unexpected keys! First 10: {unexpected[:10]}")
             except Exception as e:
-                print(f"Failed to load weights: {e}. Running with random weights.")
+                raise RuntimeError(f"Failed to load weights into StyleGAN2 model from '{ckpt_path}': {e}")
         else:
             print("No valid checkpoint file. Initializing model with random weights.")
 

@@ -173,7 +173,7 @@
             "name": "noise_level",
             "label": "Noise Level",
             "type": "float",
-            "defaultValue": 0.7,
+            "defaultValue": 5,
             "show_if": {
                 "init_audio": "exists"
             }

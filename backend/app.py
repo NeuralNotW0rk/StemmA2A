@@ -42,7 +42,7 @@ from param_graph.elements.artifacts.audio_element import Audio
 from param_graph.elements.artifacts.image_element import Image
 from param_graph.elements.artifacts.grating_element import Grating
 from param_graph.elements.artifacts.latent_element import Latent
-from param_graph.elements.base_elements import Asset, Artifact
+from param_graph.elements.base_elements import Asset, Artifact, GraphElement
 from param_graph.elements.collections.group_element import Group
 from param_graph.elements.artifacts.bundle_element import Bundle
 from param_graph.elements.collections.directory_element import Directory
@@ -971,6 +971,82 @@ async def get_adapter_config(adapter_name):
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
+DYNAMIC_LABELING_BLACKLIST = {
+    "job_id",
+    "batch_id",
+    "group_id",
+    "parent_id",
+    "execution_mode",
+    "operation",
+    "is_baseline",
+    "phenotype_status",
+    "phenotype_duplicate_of",
+    "shared_exemplar_id",
+    "file",
+    "embeddings",
+}
+
+def link_artifact_dependencies(element: GraphElement, param_graph) -> int:
+    """
+    Deterministically extracts all declared source inputs, model bindings,
+    and context references from an artifact and links them into param_graph.G.
+    Correctly ignores spring edges and avoids phantom/blacklisted links.
+    Returns the number of new edges created.
+    """
+    if param_graph is None or not param_graph.G.has_node(element.id):
+        return 0
+
+    edges_added = 0
+    potential_source_ids: list[tuple[str, str]] = []
+
+    if hasattr(element, 'base_model_id') and element.base_model_id:
+        potential_source_ids.append((element.base_model_id, 'binds_to'))
+
+    if hasattr(element, 'context') and isinstance(element.context, dict):
+        op_name = element.context.get("operation")
+        for key, value in element.context.items():
+            if key in ('job_id', 'group_id', 'batch_id', 'parent_id', 'execution_mode'):
+                continue
+            if key.endswith('_id') and isinstance(value, str):
+                if op_name == "generate" and key in ("source_audio_id", "source_audio"):
+                    continue
+                potential_source_ids.append((value, 'source'))
+            elif key in ('init_audio', 'init_latent', 'init_image') and isinstance(value, str):
+                potential_source_ids.append((value, 'source'))
+            elif key in ('source_audio', 'precursor_audio') and op_name != "generate" and isinstance(value, str):
+                potential_source_ids.append((value, 'source'))
+            elif key == 'gratings' and isinstance(value, list):
+                for grating_item in value:
+                    g_id = grating_item.get('id') if isinstance(grating_item, dict) else grating_item
+                    if g_id and isinstance(g_id, str):
+                        potential_source_ids.append((g_id, 'source'))
+            elif key == 'grating_ids' and isinstance(value, list):
+                for g_id in value:
+                    if g_id and isinstance(g_id, str):
+                        potential_source_ids.append((g_id, 'source'))
+            elif key == 'individuals' and isinstance(value, list):
+                for ind_item in value:
+                    ind_id = ind_item.get('id') if isinstance(ind_item, dict) else ind_item
+                    if ind_id and isinstance(ind_id, str):
+                        potential_source_ids.append((ind_id, 'source'))
+            elif key == 'individual_ids' and isinstance(value, list):
+                for ind_id in value:
+                    if ind_id and isinstance(ind_id, str):
+                        potential_source_ids.append((ind_id, 'source'))
+
+    for source_id, relation in potential_source_ids:
+        if source_id != element.id and param_graph.G.has_node(source_id):
+            edge_exists = any(
+                v == element.id and attrs.get('type') != 'spring'
+                for _, v, attrs in param_graph.G.out_edges(source_id, data=True)
+            )
+            if not edge_exists:
+                source_el = param_graph.get_element(source_id)
+                param_graph.link(source_el, element, relation=relation)
+                edges_added += 1
+
+    return edges_added
+
 @app.route("/job_status/<job_id>", methods=["GET"])
 async def get_job_status(job_id):
     """Gets the status of a generation job and handles final artifact processing."""
@@ -1018,6 +1094,8 @@ async def get_job_status(job_id):
                 if isinstance(final_artifact, Artifact):
                     current_context = final_artifact.context or {}
                     merged_context = {**job_context.get("validated_params", {}), **current_context}
+                    merged_context.pop("job_id", None)
+                    merged_context.pop("execution_mode", None)
                     final_artifact = replace(final_artifact, context=merged_context)
                 
                 with graph_lock:
@@ -1070,8 +1148,17 @@ async def get_job_status(job_id):
                     for element in job_context.get("linked_elements", []):
                         if parent_id and element.id == parent_id:
                             continue
-                        print(f"Linking {element.id} to {final_artifact.id}")
-                        param_graph.link(element, final_artifact, relation='source')
+                        edge_exists = any(
+                            v == final_artifact.id and attrs.get('type') != 'spring'
+                            for _, v, attrs in param_graph.G.out_edges(element.id, data=True)
+                        )
+                        if not edge_exists:
+                            print(f"Linking {element.id} to {final_artifact.id}")
+                            param_graph.link(element, final_artifact, relation='source')
+
+                    # Deterministically ensure all structural dependencies declared in context are linked
+                    link_artifact_dependencies(final_artifact, param_graph)
+
                     param_graph.save()
                 
                 trigger_embedding_update()
@@ -1557,6 +1644,33 @@ def cache_used_audio(audio_id):
         except Exception as e:
             print(f"Failed to cache audio {audio_id}: {e}")
 
+def values_are_equal(v1, v2) -> bool:
+    """Safe deep equality comparison supporting Python primitives, dicts, lists, numpy arrays, and torch tensors."""
+    if v1 is v2:
+        return True
+    if v1 is None or v2 is None:
+        return v1 is v2
+    if isinstance(v1, (int, float)) and isinstance(v2, (int, float)):
+        return v1 == v2
+    if type(v1) != type(v2):
+        return False
+    if isinstance(v1, torch.Tensor) and isinstance(v2, torch.Tensor):
+        return v1.shape == v2.shape and torch.equal(v1, v2)
+    if isinstance(v1, np.ndarray) and isinstance(v2, np.ndarray):
+        return v1.shape == v2.shape and np.array_equal(v1, v2)
+    if isinstance(v1, dict) and isinstance(v2, dict):
+        if set(v1.keys()) != set(v2.keys()):
+            return False
+        return all(values_are_equal(v1[k], v2[k]) for k in v1)
+    if isinstance(v1, (list, tuple)) and isinstance(v2, (list, tuple)):
+        if len(v1) != len(v2):
+            return False
+        return all(values_are_equal(a, b) for a, b in zip(v1, v2))
+    try:
+        return bool(v1 == v2)
+    except Exception:
+        return False
+
 def update_group_labels(group_id: str):
     """
     Recalculates the shared parameters of a group and updates the group's alias,
@@ -1583,52 +1697,83 @@ def update_group_labels(group_id: str):
         try:
             el = param_graph.get_element(m_id)
             ctx = getattr(el, 'context', {})
-            contexts.append(ctx if isinstance(ctx, dict) else {})
+            filtered_ctx = {
+                k: v for k, v in (ctx.items() if isinstance(ctx, dict) else [])
+                if k not in DYNAMIC_LABELING_BLACKLIST
+            }
+            contexts.append(filtered_ctx)
         except Exception:
             contexts.append({})
     
     def diff_recursive(vals: list):
         if not vals:
             return None, []
-        if all(v == vals[0] for v in vals):
+        if len(vals) == 1:
+            return vals[0], [None]
+        if all(values_are_equal(v, vals[0]) for v in vals):
             return vals[0], [None] * len(vals)
             
-        if all(isinstance(v, dict) for v in vals):
+        if all(isinstance(v, dict) for v in vals if v is not None):
             shared_dict = {}
             diff_dicts = [{} for _ in vals]
-            all_keys = set().union(*(d.keys() for d in vals))
+            all_keys = set()
+            for d in vals:
+                if isinstance(d, dict):
+                    all_keys.update(d.keys())
             
             for k in all_keys:
-                if not all(k in d for d in vals):
-                    for idx, d in enumerate(vals):
-                        if k in d:
-                            diff_dicts[idx][k] = d[k]
+                if k in DYNAMIC_LABELING_BLACKLIST:
                     continue
                     
-                k_vals = [d[k] for d in vals]
-                shared_k, diff_k = diff_recursive(k_vals)
+                present_indices = [idx for idx, d in enumerate(vals) if isinstance(d, dict) and k in d]
+                if not present_indices:
+                    continue
+                    
+                k_vals_present = [vals[idx][k] for idx in present_indices]
                 
-                if shared_k is not None or any(dk is not None for dk in diff_k):
+                # If present in all members and completely identical
+                if len(present_indices) == len(vals) and all(values_are_equal(v, k_vals_present[0]) for v in k_vals_present):
+                    shared_dict[k] = k_vals_present[0]
+                    continue
+                    
+                # If all present members have dicts or lists for k, recurse
+                if len(present_indices) == len(vals) and all(isinstance(v, (dict, list)) for v in k_vals_present):
+                    k_vals = [d[k] for d in vals]
+                    shared_k, diff_k = diff_recursive(k_vals)
                     if shared_k is not None:
                         shared_dict[k] = shared_k
-                    for idx, dk in enumerate(diff_k):
-                        if dk is not None:
-                            diff_dicts[idx][k] = dk
-            return (shared_dict if shared_dict else None), (diff_dicts if any(d for d in diff_dicts) else [None]*len(vals))
+                    has_any_diff = any(dk is not None and (not isinstance(dk, (dict, list)) or len(dk) > 0) for dk in diff_k)
+                    if has_any_diff:
+                        for idx, dk in enumerate(diff_k):
+                            if dk is not None and (not isinstance(dk, (dict, list)) or len(dk) > 0):
+                                diff_dicts[idx][k] = dk
+                    continue
+
+                # If all present members share the exact same value for k, treat as shared context
+                if all(values_are_equal(v, k_vals_present[0]) for v in k_vals_present):
+                    shared_dict[k] = k_vals_present[0]
+                    continue
+                    
+                # Values actually differ among members
+                for idx in present_indices:
+                    diff_dicts[idx][k] = vals[idx][k]
+                    
+            has_diff = any(bool(d) for d in diff_dicts)
+            return (shared_dict if shared_dict else None), (diff_dicts if has_diff else [None] * len(vals))
             
-        if all(isinstance(v, list) for v in vals) and all(len(v) == len(vals[0]) for v in vals):
+        if all(isinstance(v, list) for v in vals if v is not None) and all(len(v) == len(vals[0]) for v in vals if isinstance(v, list)):
             shared_list = []
             diff_lists = [[] for _ in vals]
             has_diff = False
             
             for i in range(len(vals[0])):
-                i_vals = [v[i] for v in vals]
+                i_vals = [v[i] if isinstance(v, list) else None for v in vals]
                 shared_i, diff_i = diff_recursive(i_vals)
                 
                 shared_list.append(shared_i)
                 for idx, di in enumerate(diff_i):
                     diff_lists[idx].append(di)
-                if any(di is not None for di in diff_i):
+                if any(di is not None and (not isinstance(di, (dict, list)) or len(di) > 0) for di in diff_i):
                     has_diff = True
                     
             if has_diff:
@@ -1642,13 +1787,15 @@ def update_group_labels(group_id: str):
         if isinstance(val, dict):
             items = []
             for k, v in val.items():
+                if k in DYNAMIC_LABELING_BLACKLIST:
+                    continue
                 new_path = f"{path}.{k}" if path else k
                 items.extend(flatten_diff(v, new_path))
             return items
         elif isinstance(val, list):
             items = []
             for i, v in enumerate(val):
-                if v is not None:
+                if v is not None and (not isinstance(v, (dict, list)) or len(v) > 0):
                     new_path = f"{path}[{i}]"
                     items.extend(flatten_diff(v, new_path))
             return items
@@ -1678,11 +1825,8 @@ def update_group_labels(group_id: str):
         shared_context = shared_res or {}
         member_diffs_list = [d or {} for d in diff_res]
 
-    print(f"Shared context: {shared_context}")
-    print(f"Member diffs list: {member_diffs_list}")
-
     # Generate a label for the group based on the shared prompt/context
-    group_alias = shared_context.get('prompt', "Artifact Group")
+    group_alias = shared_context.get('prompt') or "Artifact Group"
     if len(str(group_alias)) > 30:
         group_alias = str(group_alias)[:27] + "..."
 
@@ -1813,10 +1957,10 @@ def trigger_embedding_update(force_recalculate=False, background=True, job_id=No
                 with graph_lock:
                     if param_graph is None or getattr(param_graph, "G", None) is None:
                         return
-                    # 2. Fast similarity edge rebuild based on cached embeddings
+                    # 2. Fast similarity edge rebuild based on cached embeddings (only remove spring edges)
                     edges_to_remove = [
                         (u, v) for u, v, d in param_graph.G.edges(data=True) 
-                        if d.get('group') == group_type
+                        if d.get('type') == 'spring' and d.get('group') == group_type
                     ]
                     param_graph.G.remove_edges_from(edges_to_remove)
 
@@ -1868,6 +2012,13 @@ def trigger_embedding_update(force_recalculate=False, background=True, job_id=No
                             if i == neighbor_idx:
                                 continue
                                 
+                            target_id = node_ids[neighbor_idx]
+                            # Never overwrite an existing structural (non-spring) edge!
+                            if param_graph.G.has_edge(node_id, target_id):
+                                existing_edge = param_graph.G[node_id][target_id]
+                                if existing_edge.get('type') != 'spring':
+                                    continue
+                                
                             source_label = ""
                             if has_label_bank and group_type == "audio":
                                 emb_B = all_latents[neighbor_idx]
@@ -1879,8 +2030,8 @@ def trigger_embedding_update(force_recalculate=False, background=True, job_id=No
                                 
                             param_graph.G.add_edge(
                                 node_id, 
-                                node_ids[neighbor_idx], 
-                                id=f"edge-{node_id}-near-{node_ids[neighbor_idx]}",
+                                target_id, 
+                                id=f"edge-{node_id}-near-{target_id}",
                                 type='spring', 
                                 spring_type='near',
                                 weight=float(1 - distances[i][j]),
@@ -1895,6 +2046,13 @@ def trigger_embedding_update(force_recalculate=False, background=True, job_id=No
                             if i == neighbor_idx or neighbor_idx in near_indices:
                                 continue  # Prevent overlap on small graphs
                             
+                            target_id = node_ids[neighbor_idx]
+                            # Never overwrite an existing structural (non-spring) edge!
+                            if param_graph.G.has_edge(node_id, target_id):
+                                existing_edge = param_graph.G[node_id][target_id]
+                                if existing_edge.get('type') != 'spring':
+                                    continue
+                                
                             source_label = ""
                             if has_label_bank and group_type == "audio":
                                 emb_B = all_latents[neighbor_idx]
@@ -1906,8 +2064,8 @@ def trigger_embedding_update(force_recalculate=False, background=True, job_id=No
                             
                             param_graph.G.add_edge(
                                 node_id, 
-                                node_ids[neighbor_idx], 
-                                id=f"edge-{node_id}-dist-{node_ids[neighbor_idx]}",
+                                target_id, 
+                                id=f"edge-{node_id}-dist-{target_id}",
                                 type='spring', 
                                 spring_type='distant',
                                 weight=float(1 - full_distances[i][neighbor_idx]),
@@ -1998,37 +2156,11 @@ def repair_edges():
         with graph_lock:
             edges_added = 0
             
-            for node_id, node_data in param_graph.G.nodes(data=True):
+            for node_id in list(param_graph.G.nodes()):
                 element = param_graph.get_element(node_id)
                 if not element:
                     continue
-
-                potential_source_ids = []
-                
-                if hasattr(element, 'base_model_id') and element.base_model_id:
-                    potential_source_ids.append((element.base_model_id, 'binds_to'))
-                    
-                if hasattr(element, 'context') and isinstance(element.context, dict):
-                    for key, value in element.context.items():
-                        if key.endswith('_id') and isinstance(value, str):
-                            potential_source_ids.append((value, 'source'))
-                        elif key == 'gratings' and isinstance(value, list):
-                            for grating_item in value:
-                                g_id = grating_item.get('id')
-                                if g_id:
-                                    potential_source_ids.append((g_id, 'source'))
-                                    
-                for source_id, relation in potential_source_ids:
-                    if param_graph.G.has_node(source_id):
-                        # We check out_edges explicitly to ensure we don't skip structural edges 
-                        # just because a 'spring' edge already exists between the nodes.
-                        edge_exists = any(v == node_id and attrs.get('type') != 'spring' 
-                                          for _, v, attrs in param_graph.G.out_edges(source_id, data=True))
-                        if not edge_exists:
-                            print(f"Restoring missing edge: {source_id} -> {node_id}")
-                            source_el = param_graph.get_element(source_id)
-                            param_graph.link(source_el, element, relation=relation)
-                            edges_added += 1
+                edges_added += link_artifact_dependencies(element, param_graph)
 
             if edges_added > 0:
                 param_graph.save()
