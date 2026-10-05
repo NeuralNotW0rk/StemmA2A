@@ -12,6 +12,17 @@ from param_graph.registry import resolve_element
 from utils.uid import path_from_uid
 
 
+def _format_bytes(num_bytes: int | float) -> str:
+    if num_bytes < 1024:
+        return f"{num_bytes:.0f} B"
+    elif num_bytes < 1024 * 1024:
+        return f"{num_bytes / 1024:.2f} KB"
+    elif num_bytes < 1024 * 1024 * 1024:
+        return f"{num_bytes / (1024 * 1024):.2f} MB"
+    else:
+        return f"{num_bytes / (1024 * 1024 * 1024):.2f} GB"
+
+
 class RemoteEngine(Engine):
     def __init__(self, remote_url: str, timeout: int = 300, data_root: str = None):
         super().__init__(data_root=data_root)
@@ -164,7 +175,26 @@ class RemoteEngine(Engine):
 
                         async with session.get(f"{self.remote_url}/download_asset/{result_element.id}") as file_response:
                             if file_response.status == 200:
-                                file_data = await file_response.read()
+                                total_size = int(file_response.headers.get("Content-Length", 0))
+                                import time
+                                dl_start = time.time()
+                                print(f"[RemoteEngine Download] 📥 Downloading result asset '{result_element.id}'" + (f" ({_format_bytes(total_size)})..." if total_size > 0 else "..."))
+                                
+                                chunks = []
+                                downloaded_bytes = 0
+                                chunk_size = 1024 * 1024  # 1 MB
+                                
+                                async for chunk in file_response.content.iter_chunked(chunk_size):
+                                    chunks.append(chunk)
+                                    downloaded_bytes += len(chunk)
+                                    if total_size > 5 * 1024 * 1024:  # Log progress for larger files
+                                        pct = (downloaded_bytes / total_size) * 100
+                                        print(f"  -> Download progress: {_format_bytes(downloaded_bytes)} / {_format_bytes(total_size)} ({pct:.1f}%)")
+
+                                file_data = b"".join(chunks)
+                                dl_elapsed = max(time.time() - dl_start, 0.001)
+                                dl_speed = (downloaded_bytes / (1024 * 1024)) / dl_elapsed
+                                print(f"[RemoteEngine Download] ✅ Downloaded '{result_element.id}' ({_format_bytes(downloaded_bytes)}) in {dl_elapsed:.2f}s ({dl_speed:.2f} MB/s)")
 
                                 # Save the file to a stable temporary location that won't be auto-deleted.
                                 tmp_root = Path(__file__).parent.parent / "tmp"
@@ -199,15 +229,22 @@ class RemoteEngine(Engine):
         for asset_uid in missing_uids:
             asset_path = local_assets.get(asset_uid)
             if not asset_path:
-                print(f"Warning: could not find path for missing uid {asset_uid}")
+                print(f"[RemoteEngine] ⚠️ Warning: could not find path for missing asset '{asset_uid}'")
                 return False
             paths_to_upload.append((asset_uid, asset_path))
 
+        num_assets = len(paths_to_upload)
+        print(f"\n[RemoteEngine] 🚀 Starting upload of {num_assets} missing asset(s) to remote engine ({self.remote_url})...")
+        
         chunk_size = 10 * 1024 * 1024  # 10 MB
-        for asset_uid, asset_path in paths_to_upload:
+        import time
+        overall_start = time.time()
+        total_uploaded_bytes = 0
+        
+        for asset_idx, (asset_uid, asset_path) in enumerate(paths_to_upload, start=1):
             temp_zip_path = None
             if os.path.isdir(asset_path):
-                print(f"Archiving directory {asset_path} for upload...")
+                print(f"[RemoteEngine Upload] [{asset_idx}/{num_assets}] Archiving directory '{asset_path}' for upload...")
                 import tempfile
                 import shutil
                 # Create a temporary zip archive path
@@ -224,11 +261,19 @@ class RemoteEngine(Engine):
 
             file_size = os.path.getsize(upload_path)
             total_chunks = max(1, (file_size + chunk_size - 1) // chunk_size)
+            asset_start = time.time()
+            uploaded_asset_bytes = 0
+
+            print(f"[RemoteEngine Upload] [{asset_idx}/{num_assets}] Uploading asset '{asset_uid}' ({_format_bytes(file_size)}, {total_chunks} chunk(s))...")
             
             try:
                 with open(upload_path, 'rb') as f:
                     for i in range(total_chunks):
                         chunk_data = f.read(chunk_size)
+                        chunk_len = len(chunk_data)
+                        uploaded_asset_bytes += chunk_len
+                        total_uploaded_bytes += chunk_len
+
                         data = aiohttp.FormData()
                         data.add_field('uid', asset_uid)
                         data.add_field('chunk_index', str(i))
@@ -236,8 +281,18 @@ class RemoteEngine(Engine):
                         data.add_field('total_size', str(file_size))
                         data.add_field('file', chunk_data, filename=asset_uid, content_type='application/octet-stream')
 
+                        chunk_start = time.time()
                         async with session.post(f"{self.remote_url}/upload", data=data) as response:
                             response.raise_for_status()
+                        chunk_duration = max(time.time() - chunk_start, 0.001)
+                        chunk_speed = (chunk_len / (1024 * 1024)) / chunk_duration
+
+                        pct = (uploaded_asset_bytes / file_size) * 100 if file_size > 0 else 100
+                        print(f"  -> [{asset_idx}/{num_assets}] Chunk {i + 1}/{total_chunks} sent: {_format_bytes(uploaded_asset_bytes)} / {_format_bytes(file_size)} ({pct:.1f}%) @ {chunk_speed:.2f} MB/s")
+
+                asset_elapsed = max(time.time() - asset_start, 0.001)
+                asset_speed = (file_size / (1024 * 1024)) / asset_elapsed
+                print(f"[RemoteEngine Upload] [{asset_idx}/{num_assets}] ✅ Uploaded '{asset_uid}' in {asset_elapsed:.2f}s (avg {asset_speed:.2f} MB/s)")
             finally:
                 if temp_zip_path and os.path.exists(temp_zip_path):
                     try:
@@ -245,6 +300,9 @@ class RemoteEngine(Engine):
                     except Exception as e:
                         print(f"Warning: failed to clean up temp zip file {temp_zip_path}: {e}")
         
+        overall_elapsed = max(time.time() - overall_start, 0.001)
+        overall_speed = (total_uploaded_bytes / (1024 * 1024)) / overall_elapsed
+        print(f"[RemoteEngine] ✅ All {num_assets} asset(s) synchronized ({_format_bytes(total_uploaded_bytes)}) in {overall_elapsed:.2f}s (avg {overall_speed:.2f} MB/s).\n")
         return True
 
     async def get_model_layers(self, model_element: GraphElement) -> list[dict]:

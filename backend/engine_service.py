@@ -223,6 +223,17 @@ async def cancel_job(job_id):
         return jsonify({"error": str(e)}), 500
 
 
+def _format_bytes(num_bytes: int | float) -> str:
+    if num_bytes < 1024:
+        return f"{num_bytes:.0f} B"
+    elif num_bytes < 1024 * 1024:
+        return f"{num_bytes / 1024:.2f} KB"
+    elif num_bytes < 1024 * 1024 * 1024:
+        return f"{num_bytes / (1024 * 1024):.2f} MB"
+    else:
+        return f"{num_bytes / (1024 * 1024 * 1024):.2f} GB"
+
+
 @app.route("/download_asset/<asset_id>", methods=["GET"])
 def download_asset(asset_id):
     """Downloads a generated asset file from the content-addressable cache."""
@@ -235,10 +246,14 @@ def download_asset(asset_id):
             # A more robust solution might store extensions or check for common types.
             asset_path = asset_path.with_suffix('.wav')
             if not asset_path.exists():
-                 return jsonify({"error": f"Asset not found for id {asset_id}"}), 404
-            
+                print(f"[Engine Service] ⚠️ [Download] Asset not found: {asset_id}")
+                return jsonify({"error": f"Asset not found for id {asset_id}"}), 404
+        
+        file_size = os.path.getsize(asset_path)
+        print(f"[Engine Service] 📤 [Download] Serving asset '{asset_id}' ({_format_bytes(file_size)}) to client...")
         return send_file(str(asset_path), as_attachment=True)
     except Exception as e:
+        print(f"[Engine Service] ❌ [Download Error] Failed to serve asset '{asset_id}': {e}")
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
@@ -264,18 +279,26 @@ def upload():
         destination = data_cache_root / path_from_uid(uid)
         destination.parent.mkdir(parents=True, exist_ok=True)
         
+        chunk_data = file.read()
+        chunk_len = len(chunk_data)
+        
         mode = 'wb' if chunk_index == 0 else 'ab'
         with open(destination, mode) as f:
-            f.write(file.read())
+            f.write(chunk_data)
             
+        if total_chunks > 1:
+            print(f"[Engine Service] 📥 [Upload] Received chunk {chunk_index + 1}/{total_chunks} for '{uid}' ({_format_bytes(chunk_len)})")
+
         if chunk_index == total_chunks - 1:
             # Verify the fully reassembled file size matches the original
-            if total_size > 0:
-                reconstructed_size = os.path.getsize(destination)
-                if reconstructed_size != total_size:
-                    os.remove(destination)  # Clean up the corrupted file
-                    return jsonify({"error": f"Size mismatch for {uid}. Expected {total_size}, got {reconstructed_size}"}), 400
-                    
+            reconstructed_size = os.path.getsize(destination)
+            if total_size > 0 and reconstructed_size != total_size:
+                os.remove(destination)  # Clean up the corrupted file
+                err_msg = f"Size mismatch for '{uid}'. Expected {_format_bytes(total_size)}, got {_format_bytes(reconstructed_size)}"
+                print(f"[Engine Service] ❌ [Upload Error] {err_msg}")
+                return jsonify({"error": err_msg}), 400
+                
+            print(f"[Engine Service] ✅ [Upload] Completed '{uid}' ({_format_bytes(reconstructed_size)}, {total_chunks} chunk(s)) saved to cache.")
             return jsonify({"message": f"File {uid} uploaded successfully"})
         return jsonify({"message": f"Chunk {chunk_index} of {uid} uploaded"})
 
