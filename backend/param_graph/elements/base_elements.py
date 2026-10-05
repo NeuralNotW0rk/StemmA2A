@@ -41,6 +41,10 @@ class GraphElement:
                 assets[asset_obj.uid] = asset_obj.path
         return assets
 
+    def get_assets(self) -> list[Asset]:
+        """Returns all discovered Asset objects."""
+        return [asset_obj for _, asset_obj in self._iter_assets()]
+
     def get_uids(self) -> list[str]:
         """Automatically derived from all discovered assets."""
         return [asset_obj.uid for _, asset_obj in self._iter_assets()]

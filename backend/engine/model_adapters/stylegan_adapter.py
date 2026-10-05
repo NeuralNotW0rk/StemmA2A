@@ -645,7 +645,17 @@ def _compute_stylegan_uid(file_path: str, uid_generator) -> str:
     abs_path = os.path.abspath(file_path)
     if not os.path.exists(abs_path):
         raise FileNotFoundError(f"Checkpoint file not found: {abs_path}")
-    checkpoint, is_tf = load_stylegan_checkpoint(abs_path)
+    try:
+        checkpoint, is_tf = load_stylegan_checkpoint(abs_path)
+    except Exception as e:
+        is_container = os.environ.get("RUNNING_IN_CONTAINER") == "true"
+        if is_container:
+            try:
+                print(f"Removing corrupt cached checkpoint file: {abs_path}")
+                os.remove(abs_path)
+            except Exception:
+                pass
+        raise
     if is_tf:
         state_dict, _, _, _ = convert_tf_to_pytorch(checkpoint)
     else:
@@ -840,7 +850,14 @@ class StyleGANAdapter(ModelAdapter):
                 info.config["size"] = size
                 info.config["channel_multiplier"] = channel_multiplier
             except Exception as e:
-                print(f"Failed to auto-detect model shape from checkpoint: {e}. Falling back to default/config values.")
+                is_container = os.environ.get("RUNNING_IN_CONTAINER") == "true"
+                if is_container:
+                    try:
+                        print(f"Removing corrupt cached checkpoint file: {ckpt_path}")
+                        os.remove(ckpt_path)
+                    except Exception:
+                        pass
+                raise RuntimeError(f"Failed to load checkpoint into StyleGAN2 model from '{ckpt_path}': {e}")
 
         self.model = Generator(
             size=size,

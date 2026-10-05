@@ -145,11 +145,35 @@ async def execute():
 
         resolved_params = _resolve_and_collect(params)
 
-        required_uids = {uid for element in all_elements.values() for uid in element.get_uids()}
-        missing_uids = [uid for uid in required_uids if not (data_cache_root / path_from_uid(uid)).exists()]
+        required_assets = {}
+        for element in all_elements.values():
+            if hasattr(element, 'get_assets'):
+                for asset in element.get_assets():
+                    required_assets[asset.uid] = asset
+
+        missing_uids = []
+        for uid in {uid for element in all_elements.values() for uid in element.get_uids()}:
+            cache_file = data_cache_root / path_from_uid(uid)
+            asset = required_assets.get(uid)
+            if not cache_file.exists():
+                missing_uids.append(uid)
+            elif asset and asset.size and asset.size > 0 and cache_file.stat().st_size != asset.size:
+                print(f"[Engine Service] ⚠️ Corrupt or incomplete cached asset '{uid}' (expected {asset.size} bytes, found {cache_file.stat().st_size} bytes). Evicting from cache.")
+                try:
+                    cache_file.unlink()
+                except Exception as e:
+                    print(f"Failed to remove corrupt cache file {cache_file}: {e}")
+                missing_uids.append(uid)
+            elif cache_file.stat().st_size == 0:
+                print(f"[Engine Service] ⚠️ Zero-byte cached asset '{uid}'. Evicting from cache.")
+                try:
+                    cache_file.unlink()
+                except Exception as e:
+                    pass
+                missing_uids.append(uid)
         
         if missing_uids:
-            print(f"Missing assets: {missing_uids}")
+            print(f"[Engine Service] 📤 Requesting missing/corrupt assets from client: {missing_uids}")
             return jsonify({"error": "Missing assets", "missing_uids": missing_uids}), 422
         
         def _anchor_elements(val):
