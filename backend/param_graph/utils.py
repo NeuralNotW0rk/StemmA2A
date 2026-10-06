@@ -62,8 +62,8 @@ def save_artifact_asset(
     artifact: T, destination_dir: Path, asset_name: str = "file"
 ) -> T:
     """
-    Moves a specific asset within an artifact from its current temporary
-    location to a permanent one.
+    Copies a specific asset within an artifact from its current temporary or CAS cache
+    location to a permanent project location.
 
     Args:
         artifact: The artifact containing the asset to save.
@@ -95,8 +95,11 @@ def save_artifact_asset(
         # Ensure the destination directory exists
         destination_dir.mkdir(parents=True, exist_ok=True)
 
-        # Move the file
-        shutil.move(str(temp_path), permanent_path)
+        # Copy the file to preserve the CAS cache in tmp/cache
+        if temp_path.exists():
+            shutil.copy2(str(temp_path), permanent_path)
+        else:
+            raise FileNotFoundError(f"Source asset file not found at '{temp_path}'")
 
     # Create a new asset object with the updated path
     updated_asset = replace(asset_to_save, path=str(permanent_path))
@@ -107,8 +110,6 @@ def save_artifact_asset(
     # The temporary directory reference is now stale and can be removed.
     # It's attached to the artifact, so we operate on the new instance.
     if hasattr(updated_artifact, "_temp_dir_ref"):
-        # This is not perfectly clean, as a new temp dir object will be created
-        # for each asset. However, for now, we assume one temp dir per artifact.
         del updated_artifact._temp_dir_ref
 
     return updated_artifact

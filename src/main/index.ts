@@ -53,11 +53,27 @@ function startPythonBackend(): Promise<void> {
         env: spawnEnv
       })
 
-      // Resolve after a delay to allow the launcher to initialize
-      setTimeout((): void => {
-        console.log('Assuming Python backend is ready')
-        resolve()
-      }, 5000)
+      // Actively poll health endpoint until Python server is ready
+      const startTime = Date.now()
+      const pollHealth = async (): Promise<void> => {
+        try {
+          const res = await fetch(`${BACKEND_URL}/health`)
+          if (res.ok) {
+            console.log('Python backend is ready and responding.')
+            resolve()
+            return
+          }
+        } catch (_) {
+          // Not ready yet
+        }
+        if (Date.now() - startTime > 45000) {
+          console.warn('Timed out waiting for Python backend to respond to health check.')
+          resolve()
+          return
+        }
+        setTimeout(pollHealth, 500)
+      }
+      setTimeout(pollHealth, 1000)
     } else {
       // For production or other dev platforms
       const cwd = is.dev ? join(app.getAppPath(), 'backend') : undefined

@@ -1075,9 +1075,13 @@ async def get_job_status(job_id):
         status = status_info.get("status")
 
         if status in ["completed", "failed", "not_found"]:
-            job_context = active_jobs.pop(job_id, {})
+            job_context = active_jobs.pop(job_id, None)
 
             if status == "completed":
+                if job_context is None:
+                    # Job artifact has already been processed and saved into the graph by a prior request
+                    return jsonify(status_info), 200
+
                 print(f"Job {job_id} completed. Processing artifact...")
                 result_dict = status_info.get("result", {})
                 artifact_data = result_dict.get('artifact', result_dict)
@@ -2378,12 +2382,15 @@ def serve_image(image_id):
 
 def simplify_dynamic_label(label: str | None) -> str:
     """
-    Simplifies a dynamic label or alias into a clean, filesystem-safe filename stem.
+    Simplifies a dynamic label or alias into a clean, filesystem-safe filename stem
+    with ultra-compact abbreviations for bending parameters (e.g. c1_f1.5_c3_f-0.5).
     E.g.:
       'seed: 1001' -> 'seed_1001'
       'seed: 1001\ncfg_scale: 7.0' -> 'seed_1001_cfg_scale_7.0'
-      'cluster: 1 (conv1.conv)' -> 'cluster_1_conv1.conv'
+      'cluster: 1 (conv1.conv)' -> 'c1'
+      'cluster: 1 (convs.2.conv)\nfactor: 1.5 (convs.2.conv)\ncluster: 3 (convs.4.conv)\nfactor: -0.5 (convs.4.conv)' -> 'c1_f1.5_c3_f-0.5'
       'prompt: ambient pad...' -> 'prompt_ambient_pad'
+      'strength: 0.8 (layer4)' -> 's0.8'
     """
     if not label or not isinstance(label, str):
         return ""
@@ -2391,21 +2398,63 @@ def simplify_dynamic_label(label: str | None) -> str:
     import re
     # Remove ellipsis
     cleaned = label.replace("...", "")
-    # Normalize colons followed by whitespace or colons alone to underscore
-    cleaned = re.sub(r':\s*', '_', cleaned)
-    # Replace newlines, whitespace, and brackets/parens with underscores
-    cleaned = re.sub(r'[\r\n\t\s\(\)\[\]\{\}]+', '_', cleaned)
-    # Replace any invalid filesystem characters with underscores
-    cleaned = re.sub(r'[<>:"/\\|?*+=,;`~!@#$%^&]', '_', cleaned)
+
+    # Process line-by-line / item-by-item to apply ultra-compact abbreviations
+    lines = [l.strip() for l in cleaned.splitlines() if l.strip()]
+    processed_parts = []
+
+    for line in lines:
+        # Check for bending cluster: e.g. "cluster: 1 (convs.2.conv)" or "cluster: 1"
+        m_cluster = re.match(r'^(?:cluster|c):\s*([^\s\(\)]+)', line, re.IGNORECASE)
+        if m_cluster:
+            processed_parts.append(f"c{m_cluster.group(1)}")
+            continue
+
+        # Check for bending factor: e.g. "factor: 1.5 (convs.2.conv)" or "factor: -0.5"
+        m_factor = re.match(r'^(?:factor|f):\s*([^\s\(\)]+)', line, re.IGNORECASE)
+        if m_factor:
+            processed_parts.append(f"f{m_factor.group(1)}")
+            continue
+
+        # Check for bending strength: e.g. "strength: 0.8 (layer4)"
+        m_strength = re.match(r'^(?:strength|s):\s*([^\s\(\)]+)', line, re.IGNORECASE)
+        if m_strength:
+            processed_parts.append(f"s{m_strength.group(1)}")
+            continue
+
+        # Check for bending bias: e.g. "bias: 0.2 (layer4)"
+        m_bias = re.match(r'^(?:bias|b):\s*([^\s\(\)]+)', line, re.IGNORECASE)
+        if m_bias:
+            processed_parts.append(f"b{m_bias.group(1)}")
+            continue
+
+        # General key-value or text: strip parenthesized addresses/comments
+        line_no_parens = re.sub(r'\s*\([^\)]*\)', '', line)
+        line_clean = re.sub(r':\s*', '_', line_no_parens)
+        line_clean = re.sub(r'[\r\n\t\s\(\)\[\]\{\}]+', '_', line_clean)
+        line_clean = re.sub(r'[<>:"/\\|?*+=,;`~!@#$%^&]', '_', line_clean)
+        line_clean = re.sub(r'_+', '_', line_clean)
+        line_clean = line_clean.strip(' _.-')
+        if line_clean:
+            processed_parts.append(line_clean)
+
+    if not processed_parts:
+        # Fallback if no lines matched
+        res = re.sub(r'\s*\([^\)]*\)', '', cleaned)
+        res = re.sub(r'[\r\n\t\s\(\)\[\]\{\}]+', '_', res)
+        res = re.sub(r'[<>:"/\\|?*+=,;`~!@#$%^&]', '_', res)
+        res = re.sub(r'_+', '_', res)
+        return res.strip(' _.-')
+
+    result = "_".join(processed_parts)
     # Collapse multiple underscores or dots
-    cleaned = re.sub(r'_+', '_', cleaned)
-    cleaned = re.sub(r'\.+', '.', cleaned)
-    # Strip leading/trailing underscores, hyphens, dots, spaces
-    cleaned = cleaned.strip(' _.-')
-    # Limit maximum length for filename safety (up to 220 characters to preserve all info while respecting OS limits)
-    if len(cleaned) > 220:
-        cleaned = cleaned[:220].rstrip(' _.-')
-    return cleaned
+    result = re.sub(r'_+', '_', result)
+    result = re.sub(r'\.+', '.', result)
+    result = result.strip(' _.-')
+    # Limit maximum length for filename safety (up to 220 characters)
+    if len(result) > 220:
+        result = result[:220].rstrip(' _.-')
+    return result
 
 async def _export_audio_task(job_id: str, names: list[str], export_dir_str: str | None) -> None:
     try:

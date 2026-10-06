@@ -166,7 +166,7 @@ class TestGroupDynamicLabeling(unittest.TestCase):
         self.assertEqual(self.graph.G.nodes["b2"].get("alias"), "seed: 2")
 
     def test_simplify_dynamic_label(self):
-        """Verify dynamic label simplification into clean, safe filename stems."""
+        """Verify dynamic label simplification into clean, safe filename stems with ultra-compact abbreviations."""
         from app import simplify_dynamic_label
 
         self.assertEqual(simplify_dynamic_label("seed: 1001"), "seed_1001")
@@ -176,7 +176,13 @@ class TestGroupDynamicLabeling(unittest.TestCase):
         )
         self.assertEqual(
             simplify_dynamic_label("cluster: 1 (conv1.conv)"),
-            "cluster_1_conv1.conv"
+            "c1"
+        )
+        self.assertEqual(
+            simplify_dynamic_label(
+                "cluster: 1 (convs.2.conv)\nfactor: 1.5 (convs.2.conv)\ncluster: 3 (convs.4.conv)\nfactor: -0.5 (convs.4.conv)"
+            ),
+            "c1_f1.5_c3_f-0.5"
         )
         self.assertEqual(
             simplify_dynamic_label("prompt: ambient pad..."),
@@ -184,7 +190,11 @@ class TestGroupDynamicLabeling(unittest.TestCase):
         )
         self.assertEqual(
             simplify_dynamic_label("strength: 0.8 (layer4)"),
-            "strength_0.8_layer4"
+            "s0.8"
+        )
+        self.assertEqual(
+            simplify_dynamic_label("bias: 0.25 (layer4)"),
+            "b0.25"
         )
         self.assertEqual(simplify_dynamic_label(None), "")
         self.assertEqual(simplify_dynamic_label(""), "")

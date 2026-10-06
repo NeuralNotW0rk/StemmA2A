@@ -2,6 +2,8 @@ import aiohttp
 import asyncio
 import os
 import json
+import threading
+import time
 from pathlib import Path
 import tempfile
 from typing import Any
@@ -23,6 +25,13 @@ def _format_bytes(num_bytes: int | float) -> str:
         return f"{num_bytes / (1024 * 1024 * 1024):.2f} GB"
 
 
+class _TransferTracker:
+    """Thread-safe state tracker for an in-flight upload or download transfer."""
+    def __init__(self) -> None:
+        self.done_event = threading.Event()
+        self.success: bool = False
+
+
 class RemoteEngine(Engine):
     def __init__(self, remote_url: str, timeout: int = 300, data_root: str = None):
         super().__init__(data_root=data_root)
@@ -30,21 +39,19 @@ class RemoteEngine(Engine):
         self.timeout = timeout
         self.cf_client_id = os.environ.get("CF_ACCESS_CLIENT_ID")
         self.cf_client_secret = os.environ.get("CF_ACCESS_CLIENT_SECRET")
-        # In-flight transfer tracking to deduplicate concurrent uploads and downloads
-        self._active_uploads: dict[str, asyncio.Task[bool]] = {}
-        self._upload_lock: asyncio.Lock | None = None
-        self._active_downloads: dict[str, asyncio.Task[bool]] = {}
-        self._download_lock: asyncio.Lock | None = None
+        # In-flight transfer tracking to deduplicate concurrent uploads and downloads across threads and event loops
+        self._active_uploads: dict[str, _TransferTracker] = {}
+        self._active_downloads: dict[str, _TransferTracker] = {}
+        self._transfer_lock = threading.Lock()
 
-    def _get_upload_lock(self) -> asyncio.Lock:
-        if self._upload_lock is None:
-            self._upload_lock = asyncio.Lock()
-        return self._upload_lock
-
-    def _get_download_lock(self) -> asyncio.Lock:
-        if self._download_lock is None:
-            self._download_lock = asyncio.Lock()
-        return self._download_lock
+    async def _wait_for_transfer(self, tracker: _TransferTracker, timeout: float = 600.0) -> bool:
+        """Asynchronously waits for an in-flight transfer tracker to complete across any event loop or thread."""
+        start_time = time.time()
+        while not tracker.done_event.is_set():
+            if time.time() - start_time > timeout:
+                return False
+            await asyncio.sleep(0.02)
+        return tracker.success
 
     async def register_model(self, adapter_name: str, **kwargs) -> GraphElement:
         """Register a model by providing absolute paths to its files."""
@@ -170,7 +177,6 @@ class RemoteEngine(Engine):
             async with session.get(f"{self.remote_url}/download_asset/{asset_id}") as file_response:
                 if file_response.status == 200:
                     total_size = int(file_response.headers.get("Content-Length", 0))
-                    import time
                     dl_start = time.time()
                     print(f"[RemoteEngine Download] Downloading result asset '{asset_id}'" + (f" ({_format_bytes(total_size)})..." if total_size > 0 else "..."))
                     
@@ -207,9 +213,6 @@ class RemoteEngine(Engine):
                     local_staging_path.unlink()
                 except Exception:
                     pass
-            async with self._get_download_lock():
-                if self._active_downloads.get(asset_id) is asyncio.current_task():
-                    del self._active_downloads[asset_id]
 
     async def get_job_status(self, job_id: str) -> dict[str, Any]:
         """
@@ -247,15 +250,32 @@ class RemoteEngine(Engine):
 
                         # Download asset if not already cached locally
                         if not (local_path.exists() and local_path.stat().st_size > 0):
-                            async with self._get_download_lock():
-                                if result_element.id in self._active_downloads and not self._active_downloads[result_element.id].done():
-                                    print(f"[RemoteEngine Download] Asset '{result_element.id}' is already being downloaded. Joining in-flight transfer...")
-                                    dl_task = self._active_downloads[result_element.id]
-                                else:
-                                    dl_task = asyncio.create_task(self._download_single_asset(result_element.id, local_path, session))
-                                    self._active_downloads[result_element.id] = dl_task
+                            tracker: _TransferTracker | None = None
+                            is_initiator = False
 
-                            success = await dl_task
+                            with self._transfer_lock:
+                                if result_element.id in self._active_downloads:
+                                    print(f"[RemoteEngine Download] Asset '{result_element.id}' is already being downloaded. Joining in-flight transfer...")
+                                    tracker = self._active_downloads[result_element.id]
+                                    is_initiator = False
+                                else:
+                                    tracker = _TransferTracker()
+                                    self._active_downloads[result_element.id] = tracker
+                                    is_initiator = True
+
+                            if is_initiator:
+                                success = False
+                                try:
+                                    success = await self._download_single_asset(result_element.id, local_path, session)
+                                finally:
+                                    with self._transfer_lock:
+                                        tracker.success = success
+                                        tracker.done_event.set()
+                                        if self._active_downloads.get(result_element.id) is tracker:
+                                            del self._active_downloads[result_element.id]
+                            else:
+                                success = await self._wait_for_transfer(tracker, timeout=float(self.timeout))
+
                             if not success:
                                 error_msg = f"Failed to download asset {result_element.id}."
                                 print(f"Error: {error_msg}")
@@ -279,7 +299,6 @@ class RemoteEngine(Engine):
         try:
             if os.path.isdir(asset_path):
                 print(f"[RemoteEngine Upload] Archiving directory '{asset_path}' for upload...")
-                import tempfile
                 import shutil
                 # Create a temporary zip archive path
                 temp_fd, temp_zip_path = tempfile.mkstemp(suffix=".zip")
@@ -301,7 +320,6 @@ class RemoteEngine(Engine):
             chunk_size = 10 * 1024 * 1024  # 10 MB
             total_chunks = max(1, (file_size + chunk_size - 1) // chunk_size)
             
-            import time
             asset_start = time.time()
             uploaded_asset_bytes = 0
 
@@ -342,13 +360,11 @@ class RemoteEngine(Engine):
                     os.remove(temp_zip_path)
                 except Exception as e:
                     print(f"Warning: failed to clean up temp zip file {temp_zip_path}: {e}")
-            async with self._get_upload_lock():
-                if self._active_uploads.get(asset_uid) is asyncio.current_task():
-                    del self._active_uploads[asset_uid]
 
     async def upload_missing_assets(self, missing_uids: list[str], local_assets: dict[str, str], session: aiohttp.ClientSession) -> bool:
-        """Synchronizes missing assets to the remote engine, deduplicating parallel in-flight uploads."""
-        tasks_to_await: list[tuple[str, asyncio.Task[bool]]] = []
+        """Synchronizes missing assets to the remote engine, deduplicating parallel in-flight uploads across threads and event loops."""
+        initiator_tasks: list[tuple[str, _TransferTracker, str]] = []
+        waiter_trackers: list[tuple[str, _TransferTracker]] = []
         
         for asset_uid in missing_uids:
             asset_path = local_assets.get(asset_uid)
@@ -356,24 +372,38 @@ class RemoteEngine(Engine):
                 print(f"[RemoteEngine] Warning: could not find path for missing asset '{asset_uid}'")
                 return False
             
-            async with self._get_upload_lock():
-                if asset_uid in self._active_uploads and not self._active_uploads[asset_uid].done():
+            with self._transfer_lock:
+                if asset_uid in self._active_uploads:
                     print(f"[RemoteEngine] Asset '{asset_uid}' is already being transferred by another task. Joining in-flight transfer...")
-                    task = self._active_uploads[asset_uid]
+                    tracker = self._active_uploads[asset_uid]
+                    waiter_trackers.append((asset_uid, tracker))
                 else:
-                    task = asyncio.create_task(self._upload_single_asset(asset_uid, asset_path, session))
-                    self._active_uploads[asset_uid] = task
-            
-            tasks_to_await.append((asset_uid, task))
-        
-        all_success = True
-        for asset_uid, task in tasks_to_await:
+                    tracker = _TransferTracker()
+                    self._active_uploads[asset_uid] = tracker
+                    initiator_tasks.append((asset_uid, tracker, asset_path))
+
+        async def _do_upload(asset_uid: str, tracker: _TransferTracker, asset_path: str) -> bool:
+            success = False
             try:
-                success = await task
-                if not success:
-                    all_success = False
+                success = await self._upload_single_asset(asset_uid, asset_path, session)
+                return success
             except Exception as e:
-                print(f"[RemoteEngine] Error waiting for upload of asset '{asset_uid}': {e}")
+                print(f"[RemoteEngine] Error uploading asset '{asset_uid}': {e}")
+                return False
+            finally:
+                with self._transfer_lock:
+                    tracker.success = success
+                    tracker.done_event.set()
+                    if self._active_uploads.get(asset_uid) is tracker:
+                        del self._active_uploads[asset_uid]
+
+        upload_coros = [_do_upload(uid, tr, pth) for uid, tr, pth in initiator_tasks]
+        wait_coros = [self._wait_for_transfer(tr, timeout=float(self.timeout)) for _, tr in waiter_trackers]
+
+        all_success = True
+        if upload_coros or wait_coros:
+            results = await asyncio.gather(*(upload_coros + wait_coros))
+            if not all(results):
                 all_success = False
 
         return all_success

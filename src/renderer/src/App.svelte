@@ -69,15 +69,25 @@
   )
 
   let knownJobIds = new SvelteSet<string>()
+  let refreshGraphTimeout: number | null = null
 
-  $effect(() => {
+  function debouncedRefreshGraphData(delayMs = 350): void {
+    if (refreshGraphTimeout !== null) {
+      window.clearTimeout(refreshGraphTimeout)
+    }
+    refreshGraphTimeout = window.setTimeout((): void => {
+      refreshGraphTimeout = null
+      void refreshGraphData()
+    }, delayMs)
+  }
+
+  $effect((): (() => void) => {
     const unsub = jobStore.subscribe((jobs) => {
       let shouldRefresh = false
 
       for (const job of jobs) {
         if (!knownJobIds.has(job.id)) {
           knownJobIds.add(job.id)
-          shouldRefresh = true
         }
         if (job.status === 'success' && !job.result?.viewed) {
           shouldRefresh = true
@@ -88,10 +98,15 @@
       }
 
       if (shouldRefresh) {
-        refreshGraphData()
+        debouncedRefreshGraphData(350)
       }
     })
-    return unsub
+    return (): void => {
+      unsub()
+      if (refreshGraphTimeout !== null) {
+        window.clearTimeout(refreshGraphTimeout)
+      }
+    }
   })
 
   onMount(async (): Promise<void> => {
