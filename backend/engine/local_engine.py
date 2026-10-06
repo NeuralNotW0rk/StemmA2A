@@ -207,10 +207,29 @@ class LocalEngine(Engine):
         return shared_models_dict
 
     def _resolve_model_element(self, model_element: GraphElement) -> GraphElement:
-        """If the model ID matches a shared model, return the shared model with absolute paths."""
+        """If the model ID or checkpoint/encoder UIDs match a shared model, return the shared model with absolute paths."""
+        # 1. Try exact Model ID match
         shared_model = next((m for m in self.shared_models if m.id == model_element.id), None)
         if shared_model:
             return shared_model
+
+        # 2. Try matching by checkpoint UID and encoder UID
+        model_ckpt = getattr(model_element, "checkpoint", None)
+        model_enc = getattr(model_element, "encoder", None)
+        if model_ckpt and getattr(model_ckpt, "uid", None):
+            for sm in self.shared_models:
+                sm_ckpt = getattr(sm, "checkpoint", None)
+                sm_enc = getattr(sm, "encoder", None)
+                if sm_ckpt and sm_ckpt.uid == model_ckpt.uid:
+                    # If both have encoders, check if encoder UIDs match
+                    if model_enc and sm_enc:
+                        if model_enc.uid == sm_enc.uid:
+                            return sm
+                    elif not model_enc and not sm_enc:
+                        return sm
+                    elif sm_enc and not model_enc:
+                        # Server has encoder configured for this checkpoint, use server's shared model
+                        return sm
         return model_element
 
     async def register_model(self, adapter_name: str, **kwargs) -> GraphElement:

@@ -88,22 +88,39 @@ class StableAudioAdapter(ModelAdapter):
         )
 
         encoder_asset = None
-        if encoder_path:
-            encoder_dir = Path(encoder_path)
-            if encoder_dir.is_dir():
-                if not encoder_uid:
-                    encoder_uid = self.uid_generator.from_directory(encoder_dir)
-                if not encoder_size:
-                    encoder_size = get_path_size(encoder_dir)
+        if encoder_path or encoder_uid:
+            if encoder_path:
+                encoder_path_obj = Path(encoder_path)
+                if encoder_path_obj.is_dir():
+                    if not encoder_uid:
+                        encoder_uid = self.uid_generator.from_directory(encoder_path_obj)
+                    if not encoder_size:
+                        encoder_size = get_path_size(encoder_path_obj)
+                    encoder_asset = Asset(
+                        path=str(encoder_path_obj).replace("\\", "/"),
+                        uid=encoder_uid,
+                        size=encoder_size
+                    )
+                elif encoder_path_obj.is_file():
+                    if not encoder_uid:
+                        encoder_uid = self.uid_generator.from_string(encoder_path)
+                    if not encoder_size:
+                        encoder_size = os.path.getsize(encoder_path_obj)
+                    encoder_asset = Asset(
+                        path=str(encoder_path_obj).replace("\\", "/"),
+                        uid=encoder_uid,
+                        size=encoder_size
+                    )
+            elif encoder_uid:
                 encoder_asset = Asset(
-                    path=str(encoder_dir).replace("\\", "/"),
+                    path="",
                     uid=encoder_uid,
                     size=encoder_size
                 )
-                # Combine checkpoint UID and encoder UID to form the overall Model ID
-                model_id = self.uid_generator.from_uids([checkpoint_uid, encoder_uid])
-            else:
-                model_id = checkpoint_uid
+
+        if encoder_asset and encoder_asset.uid:
+            # Combine checkpoint UID and encoder UID to form the overall Model ID
+            model_id = self.uid_generator.from_uids([checkpoint_uid, encoder_asset.uid])
         else:
             model_id = checkpoint_uid
 
@@ -162,16 +179,19 @@ class StableAudioAdapter(ModelAdapter):
                 checkpoint_uid = info.checkpoint.uid
 
             # 2. Verify Encoder Asset (if present)
-            if encoder_asset and actual_encoder_path and actual_encoder_path.exists():
-                enc_size = get_path_size(actual_encoder_path)
-                if encoder_asset.size == enc_size:
-                    encoder_uid = encoder_asset.uid
+            if encoder_asset:
+                if actual_encoder_path and actual_encoder_path.exists():
+                    enc_size = get_path_size(actual_encoder_path)
+                    if encoder_asset.size == enc_size:
+                        encoder_uid = encoder_asset.uid
+                    else:
+                        print(f"Size mismatch or missing for encoder {actual_encoder_path}. Hashing directory...")
+                        encoder_uid = self.uid_generator.from_directory(actual_encoder_path)
+                    
+                    if encoder_uid != encoder_asset.uid:
+                        raise UIDMismatchError("Model encoder UID mismatch")
                 else:
-                    print(f"Size mismatch or missing for encoder {actual_encoder_path}. Hashing directory...")
-                    encoder_uid = self.uid_generator.from_directory(actual_encoder_path)
-                
-                if encoder_uid != encoder_asset.uid:
-                    raise UIDMismatchError("Model encoder UID mismatch")
+                    encoder_uid = encoder_asset.uid
                 
                 expected_id = self.uid_generator.from_uids([checkpoint_uid, encoder_uid])
             else:
