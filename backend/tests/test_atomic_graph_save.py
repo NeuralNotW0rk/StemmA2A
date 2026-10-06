@@ -136,6 +136,62 @@ class TestAtomicGraphSave(unittest.TestCase):
         finally:
             shutil.rmtree(tmp_dir)
 
+    def test_concurrent_save_artifact_asset_no_collision(self):
+        """Verify that concurrent threads calling save_artifact_asset with identical names produce distinct files without data loss."""
+        import concurrent.futures
+        from param_graph.utils import save_artifact_asset
+        from param_graph.elements.artifacts.image_element import Image
+        from param_graph.elements.base_elements import Asset
+
+        tmp_dir = Path(tempfile.mkdtemp())
+        src_dir = Path(tempfile.mkdtemp())
+        output_dir = tmp_dir / "generate"
+
+        try:
+            num_workers = 16
+            artifacts_to_save = []
+
+            for i in range(num_workers):
+                src_file = src_dir / f"temp_{i}.png"
+                content = f"unique_image_content_{i}".encode("utf-8")
+                src_file.write_bytes(content)
+
+                img = Image(
+                    id=f"img_uid_{i}",
+                    name="stylegan_gen_batch_seed",
+                    context={"factor": i * 0.25},
+                    file=Asset(path=str(src_file), uid=f"img_uid_{i}", extension=".png")
+                )
+                artifacts_to_save.append((img, content))
+
+            saved_artifacts = []
+            with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
+                futures = [
+                    executor.submit(save_artifact_asset, item[0], output_dir, "file")
+                    for item in artifacts_to_save
+                ]
+                for f in concurrent.futures.as_completed(futures):
+                    saved_artifacts.append(f.result())
+
+            # 1. Verify every artifact returned a unique path
+            saved_paths = [a.file.path for a in saved_artifacts]
+            self.assertEqual(len(saved_paths), num_workers)
+            self.assertEqual(len(set(saved_paths)), num_workers, "All saved file paths must be distinct")
+
+            # 2. Verify all files physically exist on disk
+            for path_str in saved_paths:
+                p = Path(path_str)
+                self.assertTrue(p.exists(), f"Saved file {p} must exist on disk")
+
+            # 3. Verify content was not corrupted or overwritten across instances
+            saved_contents = [Path(p).read_bytes() for p in saved_paths]
+            expected_contents = [item[1] for item in artifacts_to_save]
+            self.assertEqual(sorted(saved_contents), sorted(expected_contents), "All unique file contents must be preserved")
+
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            shutil.rmtree(src_dir, ignore_errors=True)
+
 
 if __name__ == "__main__":
     unittest.main()

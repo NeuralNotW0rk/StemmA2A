@@ -154,25 +154,6 @@ async def dispatch_operation(
                 output_dir = param_graph.root / "process"
                 output_dir.mkdir(parents=True, exist_ok=True)
 
-                final_artifacts = []
-                is_batch = len(process_results) > 1
-
-                for artifact_blueprint, raw_data in process_results:
-                    local_path = cache_root / path_from_uid(artifact_blueprint.id)
-                    local_path.parent.mkdir(parents=True, exist_ok=True)
-
-                    if isinstance(artifact_blueprint, Audio):
-                        save_audio(raw_data.cpu(), local_path, artifact_blueprint.sample_rate, format="wav")
-                    elif isinstance(artifact_blueprint, Latent):
-                        torch.save(raw_data.cpu(), local_path)
-                    elif isinstance(artifact_blueprint, Image):
-                        from torchvision.utils import save_image
-                        save_image(raw_data, local_path, format="png", normalize=True, value_range=(-1, 1))
-
-                    artifact_blueprint.file = replace(artifact_blueprint.file, path=str(local_path))
-                    final_artifact = save_artifact_asset(artifact_blueprint, output_dir, asset_name="file")
-                    final_artifacts.append(final_artifact)
-
                 # Integrate into graph
                 collection_dict = None
                 req_group_id = (
@@ -183,6 +164,22 @@ async def dispatch_operation(
                 )
 
                 with graph_lock:
+                    for artifact_blueprint, raw_data in process_results:
+                        local_path = cache_root / path_from_uid(artifact_blueprint.id)
+                        local_path.parent.mkdir(parents=True, exist_ok=True)
+
+                        if isinstance(artifact_blueprint, Audio):
+                            save_audio(raw_data.cpu(), local_path, artifact_blueprint.sample_rate, format="wav")
+                        elif isinstance(artifact_blueprint, Latent):
+                            torch.save(raw_data.cpu(), local_path)
+                        elif isinstance(artifact_blueprint, Image):
+                            from torchvision.utils import save_image
+                            save_image(raw_data, local_path, format="png", normalize=True, value_range=(-1, 1))
+
+                        artifact_blueprint.file = replace(artifact_blueprint.file, path=str(local_path))
+                        final_artifact = save_artifact_asset(artifact_blueprint, output_dir, asset_name="file")
+                        final_artifacts.append(final_artifact)
+
                     for artifact in final_artifacts:
                         param_graph.add_element(artifact)
                         for source_elem in source_elements:

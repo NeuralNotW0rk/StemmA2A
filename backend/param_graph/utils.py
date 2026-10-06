@@ -1,5 +1,6 @@
 # backend/param_graph/utils.py
 import shutil
+import threading
 from pathlib import Path
 from dataclasses import replace
 from typing import Dict, Any, Tuple, List, TYPE_CHECKING, TypeVar
@@ -8,6 +9,7 @@ from .elements.base_elements import GraphElement
 from .registry import resolve_element
 
 T = TypeVar("T", bound=GraphElement)
+_save_asset_lock = threading.Lock()
 
 if TYPE_CHECKING:
     from .graph import ParameterGraph
@@ -79,21 +81,22 @@ def save_artifact_asset(
 
     temp_path = Path(asset_to_save.path)
 
-    # Use artifact's name for a human-readable filename, handling collisions
-    base_name = artifact.name
-    suffix = asset_to_save.extension
-    permanent_path = destination_dir / f"{base_name}{suffix}"
+    with _save_asset_lock:
+        # Use artifact's name for a human-readable filename, handling collisions
+        base_name = artifact.name
+        suffix = asset_to_save.extension
+        permanent_path = destination_dir / f"{base_name}{suffix}"
 
-    counter = 1
-    while permanent_path.exists():
-        permanent_path = destination_dir / f"{base_name}_{counter}{suffix}"
-        counter += 1
+        counter = 1
+        while permanent_path.exists():
+            permanent_path = destination_dir / f"{base_name}_{counter}{suffix}"
+            counter += 1
 
-    # Ensure the destination directory exists
-    destination_dir.mkdir(parents=True, exist_ok=True)
+        # Ensure the destination directory exists
+        destination_dir.mkdir(parents=True, exist_ok=True)
 
-    # Move the file
-    shutil.move(str(temp_path), permanent_path)
+        # Move the file
+        shutil.move(str(temp_path), permanent_path)
 
     # Create a new asset object with the updated path
     updated_asset = replace(asset_to_save, path=str(permanent_path))

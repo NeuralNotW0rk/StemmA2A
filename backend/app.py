@@ -1085,20 +1085,20 @@ async def get_job_status(job_id):
                 if not artifact_data:
                     raise Exception("Completed job did not return a valid artifact.")
 
-                temp_artifact = resolve_element(artifact_data) if isinstance(artifact_data, dict) else artifact_data
-
-                output_dir = param_graph.root / "generate"
-                final_artifact = save_artifact_asset(temp_artifact, output_dir, asset_name="file")
-                
-                # Ensure context is populated for labelling, and merge job-level validated params (like model_id, operation, gratings)
-                if isinstance(final_artifact, Artifact):
-                    current_context = final_artifact.context or {}
-                    merged_context = {**job_context.get("validated_params", {}), **current_context}
-                    merged_context.pop("job_id", None)
-                    merged_context.pop("execution_mode", None)
-                    final_artifact = replace(final_artifact, context=merged_context)
-                
                 with graph_lock:
+                    temp_artifact = resolve_element(artifact_data) if isinstance(artifact_data, dict) else artifact_data
+
+                    output_dir = param_graph.root / "generate"
+                    final_artifact = save_artifact_asset(temp_artifact, output_dir, asset_name="file")
+                    
+                    # Ensure context is populated for labelling, and merge job-level validated params (like model_id, operation, gratings)
+                    if isinstance(final_artifact, Artifact):
+                        current_context = final_artifact.context or {}
+                        merged_context = {**job_context.get("validated_params", {}), **current_context}
+                        merged_context.pop("job_id", None)
+                        merged_context.pop("execution_mode", None)
+                        final_artifact = replace(final_artifact, context=merged_context)
+
                     parent_id = job_context.get("parent_id")
                     group_id = job_context.get("group_id") or job_context.get("batch_id")
 
