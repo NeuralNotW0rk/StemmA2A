@@ -165,6 +165,73 @@ class TestGroupDynamicLabeling(unittest.TestCase):
         self.assertEqual(self.graph.G.nodes["b1"].get("alias"), "seed: 1")
         self.assertEqual(self.graph.G.nodes["b2"].get("alias"), "seed: 2")
 
+    def test_simplify_dynamic_label(self):
+        """Verify dynamic label simplification into clean, safe filename stems."""
+        from app import simplify_dynamic_label
+
+        self.assertEqual(simplify_dynamic_label("seed: 1001"), "seed_1001")
+        self.assertEqual(
+            simplify_dynamic_label("seed: 1001\ncfg_scale: 7.0"),
+            "seed_1001_cfg_scale_7.0"
+        )
+        self.assertEqual(
+            simplify_dynamic_label("cluster: 1 (conv1.conv)"),
+            "cluster_1_conv1.conv"
+        )
+        self.assertEqual(
+            simplify_dynamic_label("prompt: ambient pad..."),
+            "prompt_ambient_pad"
+        )
+        self.assertEqual(
+            simplify_dynamic_label("strength: 0.8 (layer4)"),
+            "strength_0.8_layer4"
+        )
+        self.assertEqual(simplify_dynamic_label(None), "")
+        self.assertEqual(simplify_dynamic_label(""), "")
+        self.assertEqual(simplify_dynamic_label(":::"), "")
+
+    def test_long_label_untruncated_full_alias(self):
+        """Verify that UI alias is truncated with ellipsis while full_alias contains all info."""
+        ctx1 = {
+            'prompt': 'techno heavy kick',
+            'steps': 50,
+            'cfg_scale': 7.5,
+            'seed': 1001,
+            'noise_level': 0.65,
+            'duration_padding_sec': 6.0,
+        }
+        ctx2 = {
+            'prompt': 'techno heavy kick',
+            'steps': 80,
+            'cfg_scale': 9.0,
+            'seed': 2002,
+            'noise_level': 0.85,
+            'duration_padding_sec': 8.0,
+        }
+
+        m1 = Audio(id="long1", name="long1", file=Asset(path="1.wav", uid="long1"), context=ctx1)
+        m2 = Audio(id="long2", name="long2", file=Asset(path="2.wav", uid="long2"), context=ctx2)
+        grp = Group(id="grp_long", member_ids=["long1", "long2"], member_type="audio")
+
+        self.graph.add_element(m1)
+        self.graph.add_element(m2)
+        self.graph.add_element(grp)
+
+        update_group_labels("grp_long")
+
+        ui_alias = self.graph.G.nodes["long1"].get("alias")
+        full_alias = self.graph.G.nodes["long1"].get("full_alias")
+
+        self.assertTrue(ui_alias.endswith("..."))
+        self.assertLessEqual(len(ui_alias), 40)
+        self.assertFalse(full_alias.endswith("..."))
+        self.assertIn("steps: 50", full_alias)
+        self.assertIn("cfg_scale: 7.5", full_alias)
+        self.assertIn("seed: 1001", full_alias)
+        self.assertIn("noise_level: 0.65", full_alias)
+        self.assertIn("duration_padding_sec: 6.0", full_alias)
+
 
 if __name__ == "__main__":
     unittest.main()
+

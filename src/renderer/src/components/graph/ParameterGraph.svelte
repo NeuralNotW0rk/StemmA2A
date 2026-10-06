@@ -26,7 +26,7 @@
     hideAllEdges?: boolean
     operations?: any[]
     onaudioSelect?: (data: any) => void
-    onexport?: (data: { names: string[] }) => void
+    onexport?: (data: { names: string[]; isGroup?: boolean }) => void
     onimportGrating?: (data: any) => void
     onbendModel?: (data: any) => void
     onrescanSource?: (name: string) => void
@@ -286,10 +286,12 @@
     if (onselectOperation && nodeData) {
       if (op.name === 'recombine' || op.name === 'mutate' || op.name === 'scatter') {
         const individuals = getSelectedIndividuals(targetNode || undefined)
-        const isIndividualNode = targetNode && targetNode.isNode() && targetNode.data('type') === 'individual'
+        const isIndividualNode =
+          targetNode && targetNode.isNode() && targetNode.data('type') === 'individual'
         const isGroupNode = targetNode && targetNode.isNode() && targetNode.data('type') === 'group'
         const fallback = isIndividualNode || isGroupNode ? [nodeData] : []
-        const baseInitiator = isIndividualNode || isGroupNode ? nodeData : (individuals[0] || nodeData)
+        const baseInitiator =
+          isIndividualNode || isGroupNode ? nodeData : individuals[0] || nodeData
         const initiatorData = {
           ...baseInitiator,
           selectedNodes: individuals.length > 0 ? individuals : fallback
@@ -390,7 +392,10 @@
     }
   }
 
-  function matchesFilter(node: cytoscape.NodeSingular | cytoscape.EdgeSingular, filter: Record<string, any>): boolean {
+  function matchesFilter(
+    node: cytoscape.NodeSingular | cytoscape.EdgeSingular,
+    filter: Record<string, any>
+  ): boolean {
     if (!node.isNode()) return false
     const data = node.data()
 
@@ -710,12 +715,25 @@
       }
     }
 
-    const PINNED_OPERATIONS = new Set(['generate', 'invert', 'wrap_individual', 'scatter', 'mutate', 'recombine'])
+    const PINNED_OPERATIONS = new Set([
+      'generate',
+      'invert',
+      'wrap_individual',
+      'scatter',
+      'mutate',
+      'recombine'
+    ])
 
-    const getSelectedIndividuals = (clickedEle?: cytoscape.NodeSingular | cytoscape.EdgeSingular): any[] => {
+    const getSelectedIndividuals = (
+      clickedEle?: cytoscape.NodeSingular | cytoscape.EdgeSingular
+    ): any[] => {
       const selectedEles = cy ? cy.$(':selected') : null
       const candidates: any[] = []
-      if (selectedEles && selectedEles.length > 0 && (!clickedEle || selectedEles.contains(clickedEle))) {
+      if (
+        selectedEles &&
+        selectedEles.length > 0 &&
+        (!clickedEle || selectedEles.contains(clickedEle))
+      ) {
         selectedEles.forEach((e) => {
           if (!e.isNode()) return
           const d = e.data()
@@ -764,12 +782,18 @@
           return {
             content: toTitleCase(display.name),
             select: () => {
-              if (op.name === 'recombine' || op.name === 'mutate' || op.name === 'scatter' || op.name === 'generate') {
+              if (
+                op.name === 'recombine' ||
+                op.name === 'mutate' ||
+                op.name === 'scatter' ||
+                op.name === 'generate'
+              ) {
                 const individuals = getSelectedIndividuals(ele)
                 const isIndividualNode = ele && ele.isNode() && ele.data('type') === 'individual'
                 const isGroupNode = ele && ele.isNode() && ele.data('type') === 'group'
                 const fallback = isIndividualNode || isGroupNode ? [ele.data()] : []
-                const baseInitiator = isIndividualNode || isGroupNode ? ele.data() : (individuals[0] || ele.data())
+                const baseInitiator =
+                  isIndividualNode || isGroupNode ? ele.data() : individuals[0] || ele.data()
                 const initiatorData = {
                   ...baseInitiator,
                   selectedNodes: individuals.length > 0 ? individuals : fallback
@@ -901,7 +925,7 @@
 
       specificCommands.push({
         content: 'Export',
-        select: () => onexport?.({ names: [ele.data('name')] })
+        select: () => onexport?.({ names: [ele.data('name') || ele.id()] })
       })
 
       specificCommands.push({
@@ -967,11 +991,12 @@
       {
         content: 'Export Group',
         select: () => {
-          const memberIds = ele.data('member_ids') || []
-          const names = memberIds
-            .map((id: string) => cy!.getElementById(id).data('name'))
-            .filter(Boolean)
-          if (names.length > 0) onexport?.({ names })
+          const memberIds: string[] = ele.data('member_ids') || []
+          if (memberIds.length > 0) {
+            onexport?.({ names: memberIds, isGroup: true })
+          } else {
+            onexport?.({ names: [ele.id()], isGroup: true })
+          }
         }
       },
       {

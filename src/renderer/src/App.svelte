@@ -459,11 +459,12 @@
     actionPanelView = 'grouping'
   }
 
-  async function handleExport(data: { names: string[] }): Promise<void> {
+  async function handleExport(data: { names: string[]; isGroup?: boolean }): Promise<void> {
     try {
       let customPath: string | null = null
-      if (data.names.length === 1) {
-        customPath = await window.api.selectSavePath(`${data.names[0]}.wav`)
+      if (!data.isGroup && data.names.length === 1) {
+        const defaultName = data.names[0].endsWith('.wav') ? data.names[0] : `${data.names[0]}.wav`
+        customPath = await window.api.selectSavePath(defaultName)
       } else {
         customPath = await window.api.selectDirectory()
       }
@@ -487,9 +488,10 @@
         title: 'Export Successful',
         message: `Successfully exported to: ${exportPath}`
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Export failed:', error)
-      errorInInfoPanel = { title: 'Export Failed', message: error.message || String(error) }
+      const message = error instanceof Error ? error.message : String(error)
+      errorInInfoPanel = { title: 'Export Failed', message }
     }
   }
 

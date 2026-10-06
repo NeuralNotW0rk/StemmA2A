@@ -1826,11 +1826,16 @@ def update_group_labels(group_id: str):
         member_diffs_list = [d or {} for d in diff_res]
 
     # Generate a label for the group based on the shared prompt/context
-    group_alias = shared_context.get('prompt') or "Artifact Group"
+    full_group_alias = str(shared_context.get('prompt') or "Artifact Group")
+    group_alias = full_group_alias
     if len(str(group_alias)) > 30:
         group_alias = str(group_alias)[:27] + "..."
 
-    param_graph.update_element(group_id, {"shared_context": shared_context, "alias": group_alias})
+    param_graph.update_element(group_id, {
+        "shared_context": shared_context,
+        "alias": group_alias,
+        "full_alias": full_group_alias
+    })
 
     # Update member aliases
     for member_id, ctx, diff_dict in zip(member_ids, contexts, member_diffs_list):
@@ -1848,11 +1853,15 @@ def update_group_labels(group_id: str):
             else:
                 diff_items.append(f"{cleaned}: {val}")
             
-        diff_label = "\n".join(diff_items) if diff_items else None
+        full_diff_label = "\n".join(diff_items) if diff_items else None
+        diff_label = full_diff_label
         if diff_label and len(diff_label) > 40:
             diff_label = diff_label[:37] + "..."
             
-        param_graph.update_element(member_id, {"alias": diff_label})
+        param_graph.update_element(member_id, {
+            "alias": diff_label,
+            "full_alias": full_diff_label
+        })
 
 def trigger_labeling_update():
     """
@@ -1872,235 +1881,311 @@ def trigger_labeling_update():
         param_graph.save()
     print("Labeling update completed successfully.")
 
-def trigger_embedding_update(force_recalculate=False, background=True, job_id=None):
-    """
-    Background task to compute missing embeddings and recalculate similarity edges.
-    If force_recalculate is True, it will recompute embeddings for all nodes.
-    """
-    if param_graph is None:
+_shared_clap_encoder = None
+_shared_clip_encoder = None
+_shared_interrogator = None
+_shared_encoder_lock = threading.Lock()
+
+def get_shared_clap_encoder() -> CLAPEncoder:
+    global _shared_clap_encoder
+    with _shared_encoder_lock:
+        if _shared_clap_encoder is None:
+            _shared_clap_encoder = CLAPEncoder()
+        return _shared_clap_encoder
+
+def get_shared_clip_encoder() -> CLIPEncoder:
+    global _shared_clip_encoder
+    with _shared_encoder_lock:
+        if _shared_clip_encoder is None:
+            _shared_clip_encoder = CLIPEncoder()
+        return _shared_clip_encoder
+
+def get_shared_interrogator() -> SemanticInterrogator:
+    global _shared_interrogator
+    with _shared_encoder_lock:
+        if _shared_interrogator is None:
+            interrogator = SemanticInterrogator(device_accelerator)
+            bank_path = Path(__file__).parent / "data" / "semantic_transitions_bank.pt"
+            if bank_path.exists():
+                interrogator.load_bank_from_disk(str(bank_path))
+            _shared_interrogator = interrogator
+        return _shared_interrogator
+
+_embedding_worker_lock = threading.Lock()
+_embedding_worker_running = False
+_embedding_update_pending = False
+_force_recalculate_pending = False
+_pending_embedding_job_ids: list[str] = []
+
+def _execute_embedding_pass(force_recalculate=False, job_ids=None):
+    if job_ids is None:
+        job_ids = []
+        
+    if param_graph is None or getattr(param_graph, "G", None) is None:
         return
 
-    def update_embeddings_task():
-        try:
-            if job_id and job_id in local_jobs:
-                local_jobs[job_id]["status"] = "running"
-                local_jobs[job_id]["progress"] = {
+    try:
+        for j_id in job_ids:
+            if j_id in local_jobs:
+                local_jobs[j_id]["status"] = "running"
+                local_jobs[j_id]["progress"] = {
                     "value": 10,
                     "total": 100,
                     "description": "Initializing CLAP/CLIP encoders..."
                 }
 
-            # Instantiate encoders lazily per task run
-            clap_encoder = None
-            clip_encoder = None
-            
-            # Initialize interrogator for semantic edge labels
-            interrogator = SemanticInterrogator(device_accelerator)
-            bank_path = Path(__file__).parent / "data" / "semantic_transitions_bank.pt"
-            has_label_bank = bank_path.exists()
-            if has_label_bank:
-                interrogator.load_bank_from_disk(str(bank_path))
-            
-            group_keys = list(SIMILARITY_GROUPS.items())
-            for g_idx, (group_type, embedding_type) in enumerate(group_keys):
-                if job_id and job_id in local_jobs:
-                    local_jobs[job_id]["progress"] = {
+        interrogator = get_shared_interrogator()
+        bank_path = Path(__file__).parent / "data" / "semantic_transitions_bank.pt"
+        has_label_bank = bank_path.exists()
+
+        group_keys = list(SIMILARITY_GROUPS.items())
+        for g_idx, (group_type, embedding_type) in enumerate(group_keys):
+            for j_id in job_ids:
+                if j_id in local_jobs:
+                    local_jobs[j_id]["progress"] = {
                         "value": int(20 + (g_idx / max(len(group_keys), 1)) * 60),
                         "total": 100,
                         "description": f"Processing {group_type} embeddings..."
                     }
 
-                if group_type == "audio":
-                    if clap_encoder is None:
-                        clap_encoder = CLAPEncoder()
-                    encoder = clap_encoder
-                    resolver = resolve_audio_path
-                elif group_type == "image":
-                    if clip_encoder is None:
-                        clip_encoder = CLIPEncoder()
-                    encoder = clip_encoder
-                    resolver = resolve_image_path
-                else:
-                    print(f"Unknown similarity group type: {group_type}")
+            if group_type == "audio":
+                encoder = get_shared_clap_encoder()
+                resolver = resolve_audio_path
+            elif group_type == "image":
+                encoder = get_shared_clip_encoder()
+                resolver = resolve_image_path
+            else:
+                print(f"Unknown similarity group type: {group_type}")
+                continue
+
+            # 1. Compute embeddings ONLY for nodes that need them
+            with graph_lock:
+                if param_graph is None or getattr(param_graph, "G", None) is None:
+                    return
+                nodes_to_process = []
+                for node in param_graph.G.nodes():
+                    el = param_graph.get_element(node)
+                    if el and getattr(el, 'type', None) == group_type:
+                        emb_copy = getattr(el, 'embeddings', {}).copy()
+                        nodes_to_process.append((node, emb_copy))
+                    
+            for node, embeddings in nodes_to_process:
+                if not force_recalculate and embedding_type in embeddings:
                     continue
 
-                # 1. Compute embeddings ONLY for nodes that need them
-                with graph_lock:
-                    nodes_to_process = []
-                    for node in param_graph.G.nodes():
-                        el = param_graph.get_element(node)
-                        if el and getattr(el, 'type', None) == group_type:
-                            emb_copy = getattr(el, 'embeddings', {}).copy()
-                            nodes_to_process.append((node, emb_copy))
-                        
-                for node, embeddings in nodes_to_process:
-                    if not force_recalculate and embedding_type in embeddings:
+                try:
+                    file_path = resolver(node)
+                    if not file_path:
                         continue
+                        
+                    embedding = encoder.get_embedding(str(file_path))
+                    
+                    with graph_lock:
+                        if param_graph is None or not param_graph.G.has_node(node):
+                            continue
+                        current_data = param_graph.G.nodes[node]
+                        current_embeddings = current_data.get('embeddings', {})
+                        current_embeddings[embedding_type] = embedding.tolist()
+                        param_graph.update_element(node, {'embeddings': current_embeddings})
+                        
+                    print(f"Updated {embedding_type} embedding for node {node}")
+                except Exception as e:
+                    print(f"Could not update {embedding_type} embedding for node {node}. Error: {e}")
 
-                    try:
-                        file_path = resolver(node)
-                        if not file_path:
+            with graph_lock:
+                if param_graph is None or getattr(param_graph, "G", None) is None:
+                    return
+                # 2. Fast similarity edge rebuild based on cached embeddings (only remove spring edges)
+                edges_to_remove = [
+                    (u, v) for u, v, d in param_graph.G.edges(data=True) 
+                    if d.get('type') == 'spring' and d.get('group') == group_type
+                ]
+                param_graph.G.remove_edges_from(edges_to_remove)
+
+                group_nodes = {}
+                for node in param_graph.G.nodes():
+                    el = param_graph.get_element(node)
+                    if el and getattr(el, 'type', None) == group_type:
+                        if embedding_type in getattr(el, 'embeddings', {}):
+                            group_nodes[node] = el.embeddings[embedding_type]
+
+            if len(group_nodes) <= 1:
+                with graph_lock:
+                    if param_graph is not None:
+                        param_graph.save()
+                continue
+
+            node_ids = list(group_nodes.keys())
+            all_latents = np.array(list(group_nodes.values()))
+            
+            # L2 Normalize all latents to project them onto the unit hypersphere
+            norms = np.linalg.norm(all_latents, axis=1, keepdims=True)
+            all_latents = all_latents / np.where(norms == 0, 1e-10, norms)
+            
+            n_nodes = len(node_ids)
+            
+            # Dynamically scale k based on graph size (logarithmic scaling)
+            safe_n = max(n_nodes, 1)
+            k_near = max(2, min(7, int(np.log10(safe_n) * 2.5)))
+            k_far = max(1, min(4, int(np.log10(safe_n) * 1.5)))
+
+            # Build the nearest neighbors model
+            nn = NearestNeighbors(n_neighbors=min(n_nodes, k_near), metric='cosine', algorithm='brute')
+            nn.fit(all_latents)
+
+            # Find neighbors for each node
+            distances, indices = nn.kneighbors(all_latents)
+            
+            # Calculate full distance matrix for distant neighbors
+            full_distances = cosine_distances(all_latents)
+            k_furthest = min(n_nodes - 1, k_far)
+
+            with graph_lock:
+                if param_graph is None or getattr(param_graph, "G", None) is None:
+                    return
+                for i, node_id in enumerate(node_ids):
+                    near_indices = set(indices[i])
+                    emb_A = all_latents[i]
+                    
+                    # 1. Add nearest neighbors (similar nodes)
+                    for j, neighbor_idx in enumerate(indices[i]):
+                        if i == neighbor_idx:
                             continue
                             
-                        embedding = encoder.get_embedding(str(file_path))
-                        
-                        with graph_lock:
-                            current_data = param_graph.G.nodes[node]
-                            current_embeddings = current_data.get('embeddings', {})
-                            current_embeddings[embedding_type] = embedding.tolist()
-                            param_graph.update_element(node, {'embeddings': current_embeddings})
-                            
-                        print(f"Updated {embedding_type} embedding for node {node}")
-                    except Exception as e:
-                        print(f"Could not update {embedding_type} embedding for node {node}. Error: {e}")
-
-                with graph_lock:
-                    if param_graph is None or getattr(param_graph, "G", None) is None:
-                        return
-                    # 2. Fast similarity edge rebuild based on cached embeddings (only remove spring edges)
-                    edges_to_remove = [
-                        (u, v) for u, v, d in param_graph.G.edges(data=True) 
-                        if d.get('type') == 'spring' and d.get('group') == group_type
-                    ]
-                    param_graph.G.remove_edges_from(edges_to_remove)
-
-                    group_nodes = {}
-                    for node in param_graph.G.nodes():
-                        el = param_graph.get_element(node)
-                        if el and getattr(el, 'type', None) == group_type:
-                            if embedding_type in getattr(el, 'embeddings', {}):
-                                group_nodes[node] = el.embeddings[embedding_type]
-
-                if len(group_nodes) <= 1:
-                    with graph_lock:
-                        param_graph.save()
-                    continue
-
-                node_ids = list(group_nodes.keys())
-                all_latents = np.array(list(group_nodes.values()))
-                
-                # L2 Normalize all latents to project them onto the unit hypersphere
-                norms = np.linalg.norm(all_latents, axis=1, keepdims=True)
-                all_latents = all_latents / np.where(norms == 0, 1e-10, norms)
-                
-                n_nodes = len(node_ids)
-                
-                # Dynamically scale k based on graph size (logarithmic scaling)
-                # e.g., 10 nodes -> k_near=2, 100 nodes -> k_near=5, 1000+ nodes -> k_near=7
-                safe_n = max(n_nodes, 1)
-                k_near = max(2, min(7, int(np.log10(safe_n) * 2.5)))
-                k_far = max(1, min(4, int(np.log10(safe_n) * 1.5)))
-
-                # Build the nearest neighbors model
-                nn = NearestNeighbors(n_neighbors=min(n_nodes, k_near), metric='cosine', algorithm='brute')
-                nn.fit(all_latents)
-
-                # Find neighbors for each node
-                distances, indices = nn.kneighbors(all_latents)
-                
-                # Calculate full distance matrix for distant neighbors
-                full_distances = cosine_distances(all_latents)
-                k_furthest = min(n_nodes - 1, k_far)
-
-                with graph_lock:
-                    for i, node_id in enumerate(node_ids):
-                        near_indices = set(indices[i])
-                        emb_A = all_latents[i]
-                        
-                        # 1. Add nearest neighbors (similar nodes)
-                        for j, neighbor_idx in enumerate(indices[i]):
-                            if i == neighbor_idx:
+                        target_id = node_ids[neighbor_idx]
+                        # Never overwrite an existing structural (non-spring) edge!
+                        if param_graph.G.has_edge(node_id, target_id):
+                            existing_edge = param_graph.G[node_id][target_id]
+                            if existing_edge.get('type') != 'spring':
                                 continue
-                                
-                            target_id = node_ids[neighbor_idx]
-                            # Never overwrite an existing structural (non-spring) edge!
-                            if param_graph.G.has_edge(node_id, target_id):
-                                existing_edge = param_graph.G[node_id][target_id]
-                                if existing_edge.get('type') != 'spring':
-                                    continue
-                                
-                            source_label = ""
-                            if has_label_bank and group_type == "audio":
-                                emb_B = all_latents[neighbor_idx]
-                                diff_A_to_B = torch.tensor(emb_B - emb_A, dtype=torch.float32)
-                                
-                                res_A = interrogator.interrogate(diff_A_to_B, k=1)
-                                
-                                source_label = res_A[0][0] if res_A else ""
-                                
-                            param_graph.G.add_edge(
-                                node_id, 
-                                target_id, 
-                                id=f"edge-{node_id}-near-{target_id}",
-                                type='spring', 
-                                spring_type='near',
-                                weight=float(1 - distances[i][j]),
-                                group=group_type,
-                                source_label=source_label
-                            )
                             
-                        # 2. Add furthest neighbors (ghost edges for separation)
-                        furthest_indices = np.argsort(full_distances[i])[-k_furthest:]
+                        source_label = ""
+                        if has_label_bank and group_type == "audio":
+                            emb_B = all_latents[neighbor_idx]
+                            diff_A_to_B = torch.tensor(emb_B - emb_A, dtype=torch.float32)
+                            res_A = interrogator.interrogate(diff_A_to_B, k=1)
+                            source_label = res_A[0][0] if res_A else ""
+                            
+                        param_graph.G.add_edge(
+                            node_id, 
+                            target_id, 
+                            id=f"edge-{node_id}-near-{target_id}",
+                            type='spring', 
+                            spring_type='near',
+                            weight=float(1 - distances[i][j]),
+                            group=group_type,
+                            source_label=source_label
+                        )
                         
-                        for neighbor_idx in furthest_indices:
-                            if i == neighbor_idx or neighbor_idx in near_indices:
-                                continue  # Prevent overlap on small graphs
+                    # 2. Add furthest neighbors (ghost edges for separation)
+                    furthest_indices = np.argsort(full_distances[i])[-k_furthest:]
+                    
+                    for neighbor_idx in furthest_indices:
+                        if i == neighbor_idx or neighbor_idx in near_indices:
+                            continue  # Prevent overlap on small graphs
+                        
+                        target_id = node_ids[neighbor_idx]
+                        # Never overwrite an existing structural (non-spring) edge!
+                        if param_graph.G.has_edge(node_id, target_id):
+                            existing_edge = param_graph.G[node_id][target_id]
+                            if existing_edge.get('type') != 'spring':
+                                continue
                             
-                            target_id = node_ids[neighbor_idx]
-                            # Never overwrite an existing structural (non-spring) edge!
-                            if param_graph.G.has_edge(node_id, target_id):
-                                existing_edge = param_graph.G[node_id][target_id]
-                                if existing_edge.get('type') != 'spring':
-                                    continue
-                                
-                            source_label = ""
-                            if has_label_bank and group_type == "audio":
-                                emb_B = all_latents[neighbor_idx]
-                                diff_A_to_B = torch.tensor(emb_B - emb_A, dtype=torch.float32)
-                                
-                                res_A = interrogator.interrogate(diff_A_to_B, k=1)
-                                
-                                source_label = res_A[0][0] if res_A else ""
-                            
-                            param_graph.G.add_edge(
-                                node_id, 
-                                target_id, 
-                                id=f"edge-{node_id}-dist-{target_id}",
-                                type='spring', 
-                                spring_type='distant',
-                                weight=float(1 - full_distances[i][neighbor_idx]),
-                                group=group_type,
-                                source_label=source_label
-                            )
+                        source_label = ""
+                        if has_label_bank and group_type == "audio":
+                            emb_B = all_latents[neighbor_idx]
+                            diff_A_to_B = torch.tensor(emb_B - emb_A, dtype=torch.float32)
+                            res_A = interrogator.interrogate(diff_A_to_B, k=1)
+                            source_label = res_A[0][0] if res_A else ""
+                        
+                        param_graph.G.add_edge(
+                            node_id, 
+                            target_id, 
+                            id=f"edge-{node_id}-dist-{target_id}",
+                            type='spring', 
+                            spring_type='distant',
+                            weight=float(1 - full_distances[i][neighbor_idx]),
+                            group=group_type,
+                            source_label=source_label
+                        )
 
-                    param_graph.save()
-            print("Embeddings updated and similarity edges created successfully")
-            if job_id and job_id in local_jobs:
-                local_jobs[job_id]["status"] = "completed"
-                local_jobs[job_id]["progress"] = {
+                param_graph.save()
+        print("Embeddings updated and similarity edges created successfully")
+        for j_id in job_ids:
+            if j_id in local_jobs:
+                local_jobs[j_id]["status"] = "completed"
+                local_jobs[j_id]["progress"] = {
                     "value": 100,
                     "total": 100,
                     "description": "Embeddings updated successfully."
                 }
-                local_jobs[job_id]["result"] = {
+                local_jobs[j_id]["result"] = {
                     "message": "Embeddings updated successfully",
                     "success": True
                 }
 
-        except Exception as e:
-            print(f"Failed to update embeddings: {e}")
-            traceback.print_exc()
-            if job_id and job_id in local_jobs:
-                local_jobs[job_id]["status"] = "failed"
-                local_jobs[job_id]["progress"] = None
-                local_jobs[job_id]["error"] = str(e)
-                local_jobs[job_id]["traceback"] = traceback.format_exc()
-            
+    except Exception as e:
+        print(f"Failed to update embeddings: {e}")
+        traceback.print_exc()
+        for j_id in job_ids:
+            if j_id in local_jobs:
+                local_jobs[j_id]["status"] = "failed"
+                local_jobs[j_id]["progress"] = None
+                local_jobs[j_id]["error"] = str(e)
+                local_jobs[j_id]["traceback"] = traceback.format_exc()
+
+
+def _run_embedding_worker_loop():
+    global _embedding_worker_running, _embedding_update_pending, _force_recalculate_pending
+    try:
+        while True:
+            with _embedding_worker_lock:
+                force = _force_recalculate_pending
+                _force_recalculate_pending = False
+                _embedding_update_pending = False
+                current_job_ids = list(_pending_embedding_job_ids)
+                _pending_embedding_job_ids.clear()
+
+            _execute_embedding_pass(force_recalculate=force, job_ids=current_job_ids)
+
+            with _embedding_worker_lock:
+                if not _embedding_update_pending and not _force_recalculate_pending and not _pending_embedding_job_ids:
+                    _embedding_worker_running = False
+                    break
+    except Exception as e:
+        print(f"Error in embedding worker loop: {e}")
+        traceback.print_exc()
+        with _embedding_worker_lock:
+            _embedding_worker_running = False
+
+
+def trigger_embedding_update(force_recalculate=False, background=True, job_id=None):
+    """
+    Thread-safe debounced task to compute missing embeddings and recalculate similarity edges.
+    Coalesces concurrent requests to prevent parallel duplicate model loading and calculations.
+    """
+    global _embedding_worker_running, _embedding_update_pending, _force_recalculate_pending
+    if param_graph is None:
+        return
+
     if background:
-        thread = threading.Thread(target=update_embeddings_task)
-        thread.start()
+        with _embedding_worker_lock:
+            if job_id:
+                _pending_embedding_job_ids.append(job_id)
+            if force_recalculate:
+                _force_recalculate_pending = True
+
+            if _embedding_worker_running:
+                _embedding_update_pending = True
+                return
+
+            _embedding_worker_running = True
+            thread = threading.Thread(target=_run_embedding_worker_loop, daemon=True)
+            thread.start()
     else:
-        update_embeddings_task()
+        # Synchronous execution
+        job_ids = [job_id] if job_id else []
+        _execute_embedding_pass(force_recalculate=force_recalculate, job_ids=job_ids)
 
 @app.route("/update_embeddings", methods=["POST"])
 def update_embeddings():
@@ -2291,6 +2376,37 @@ def serve_image(image_id):
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
+def simplify_dynamic_label(label: str | None) -> str:
+    """
+    Simplifies a dynamic label or alias into a clean, filesystem-safe filename stem.
+    E.g.:
+      'seed: 1001' -> 'seed_1001'
+      'seed: 1001\ncfg_scale: 7.0' -> 'seed_1001_cfg_scale_7.0'
+      'cluster: 1 (conv1.conv)' -> 'cluster_1_conv1.conv'
+      'prompt: ambient pad...' -> 'prompt_ambient_pad'
+    """
+    if not label or not isinstance(label, str):
+        return ""
+
+    import re
+    # Remove ellipsis
+    cleaned = label.replace("...", "")
+    # Normalize colons followed by whitespace or colons alone to underscore
+    cleaned = re.sub(r':\s*', '_', cleaned)
+    # Replace newlines, whitespace, and brackets/parens with underscores
+    cleaned = re.sub(r'[\r\n\t\s\(\)\[\]\{\}]+', '_', cleaned)
+    # Replace any invalid filesystem characters with underscores
+    cleaned = re.sub(r'[<>:"/\\|?*+=,;`~!@#$%^&]', '_', cleaned)
+    # Collapse multiple underscores or dots
+    cleaned = re.sub(r'_+', '_', cleaned)
+    cleaned = re.sub(r'\.+', '.', cleaned)
+    # Strip leading/trailing underscores, hyphens, dots, spaces
+    cleaned = cleaned.strip(' _.-')
+    # Limit maximum length for filename safety (up to 220 characters to preserve all info while respecting OS limits)
+    if len(cleaned) > 220:
+        cleaned = cleaned[:220].rstrip(' _.-')
+    return cleaned
+
 async def _export_audio_task(job_id: str, names: list[str], export_dir_str: str | None) -> None:
     try:
         local_jobs[job_id]["status"] = "running"
@@ -2300,10 +2416,48 @@ async def _export_audio_task(job_id: str, names: list[str], export_dir_str: str 
             "description": "Preparing export directory..."
         }
 
+        # Resolve all elements and expand groups if present
+        elements_to_export: list[tuple[GraphElement, str | None]] = []
+        with graph_lock:
+            for name in names:
+                element = None
+                node_data = None
+                if param_graph.G.has_node(name):
+                    element = param_graph.get_element(name)
+                    node_data = param_graph.G.nodes[name]
+                else:
+                    for node_id, data in param_graph.G.nodes(data=True):
+                        if data.get('name') == name:
+                            element = param_graph.get_element(node_id)
+                            node_data = data
+                            break
+
+                if not element:
+                    raise ValueError(f"Element '{name}' not found")
+
+                # If element is a Group, expand to its members
+                if node_data.get('type') == 'group' or hasattr(element, 'member_ids'):
+                    update_group_labels(element.id)
+                    member_ids = getattr(element, 'member_ids', []) or node_data.get('member_ids', [])
+                    for m_id in member_ids:
+                        if param_graph.G.has_node(m_id):
+                            m_element = param_graph.get_element(m_id)
+                            elements_to_export.append((m_element, element.id))
+                else:
+                    parent_id = node_data.get('parent')
+                    if parent_id and param_graph.G.has_node(parent_id):
+                        p_data = param_graph.G.nodes[parent_id]
+                        if p_data.get('type') == 'group':
+                            update_group_labels(parent_id)
+                    elements_to_export.append((element, parent_id))
+
+        if not elements_to_export:
+            raise ValueError("No elements found to export")
+
         is_file_target = False
         if export_dir_str:
             export_path_obj = Path(export_dir_str)
-            if len(names) == 1 and export_path_obj.suffix:
+            if len(elements_to_export) == 1 and export_path_obj.suffix:
                 export_dir = export_path_obj.parent
                 is_file_target = True
             else:
@@ -2314,36 +2468,56 @@ async def _export_audio_task(job_id: str, names: list[str], export_dir_str: str 
         export_dir.mkdir(parents=True, exist_ok=True)
 
         exported_paths = []
-        total_names = len(names)
+        used_filenames = set()
+        total_items = len(elements_to_export)
 
-        for idx, name in enumerate(names):
+        for idx, (element, parent_id) in enumerate(elements_to_export):
             local_jobs[job_id]["progress"] = {
-                "value": int(10 + (idx / max(total_names, 1)) * 85),
+                "value": int(10 + (idx / max(total_items, 1)) * 85),
                 "total": 100,
-                "description": f"Exporting file {idx + 1} of {total_names}: {name}"
+                "description": f"Exporting file {idx + 1} of {total_items}: {element.name}"
             }
-
-            element = None
-            with graph_lock:
-                if param_graph.G.has_node(name):
-                    element = param_graph.get_element(name)
-                else:
-                    for node_id, node_data in param_graph.G.nodes(data=True):
-                        if node_data.get('name') == name:
-                            element = param_graph.get_element(node_id)
-                            break
-
-            if not element:
-                raise ValueError(f"Element '{name}' not found")
 
             audio_path = resolve_audio_path(element.id)
             if not audio_path or not audio_path.exists():
-                raise ValueError(f"Audio file for element '{name}' not found")
+                raise ValueError(f"Audio file for element '{element.name}' not found")
 
             if is_file_target:
                 dest_path = export_path_obj
             else:
-                dest_filename = element.name if element.name.endswith(audio_path.suffix) else f"{element.name}{audio_path.suffix}"
+                ext = audio_path.suffix if audio_path.suffix else ".wav"
+                
+                # Check for untruncated dynamic label (full_alias) or fallback alias on the node
+                node_alias = None
+                with graph_lock:
+                    if param_graph.G.has_node(element.id):
+                        node_alias = (
+                            param_graph.G.nodes[element.id].get('full_alias')
+                            or param_graph.G.nodes[element.id].get('alias')
+                        )
+
+                if not node_alias and hasattr(element, 'full_alias'):
+                    node_alias = getattr(element, 'full_alias')
+                if not node_alias and hasattr(element, 'alias'):
+                    node_alias = getattr(element, 'alias')
+
+                simplified_alias = simplify_dynamic_label(node_alias) if node_alias else ""
+
+                if simplified_alias:
+                    stem = simplified_alias
+                else:
+                    name_stem = element.name
+                    if name_stem.endswith(ext):
+                        name_stem = name_stem[:-len(ext)]
+                    stem = simplify_dynamic_label(name_stem) or name_stem or element.id
+
+                dest_filename = f"{stem}{ext}"
+                counter = 1
+                while dest_filename in used_filenames or (export_dir / dest_filename).exists():
+                    dest_filename = f"{stem}_{counter}{ext}"
+                    counter += 1
+
+                used_filenames.add(dest_filename)
                 dest_path = export_dir / dest_filename
 
             shutil.copy2(audio_path, dest_path)
