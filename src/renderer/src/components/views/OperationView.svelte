@@ -356,7 +356,7 @@
     untrack(() => {
       const isGenerative =
         op && (op.category === 'generative' || op.name === 'generate' || op.name === 'invert')
-      if (isGenerative && modelNode && baseFields.length <= 1) {
+      if (isGenerative && modelNode) {
         const isObj = typeof modelNode === 'object' && modelNode !== null
         const rawModelId = isObj
           ? String((modelNode as Record<string, unknown>).id || '')
@@ -428,7 +428,8 @@
       await tick()
 
       const config = await window.api.getAdapterConfig(adapterName)
-      const opFields = config?.[opName]
+      const rawOpName = opName.includes(':') ? opName.split(':')[0] : opName
+      const opFields = config?.[rawOpName] || config?.[opName]
       if (opFields && Array.isArray(opFields)) {
         adapterFields = opFields
 
@@ -441,9 +442,6 @@
 
         // Merge fields while keeping existing formData keys intact
         formData = { ...adapterData, ...formData }
-      } else if (baseFields.length > 1) {
-        // Self-contained operation (e.g. mutate) where form fields are defined directly on the operation
-        adapterFields = []
       } else {
         throw new Error(`Adapter "${adapterName}" does not support operation "${opName}".`)
       }
