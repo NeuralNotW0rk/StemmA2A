@@ -5,6 +5,7 @@
   import { selectionStore, cyInstanceStore } from '../utils/stores'
   import type { NodeData, GroupData } from '../utils/forms'
   import type { NodeFilter, NodeListItem } from '../utils/types'
+  import { parseSequence, numericSequenceError } from '../utils/sequence'
 
   let {
     title = 'Items',
@@ -12,11 +13,8 @@
     filter = {},
     items = $bindable([]),
     idPrefix = 'list-item',
-    minItems = 0,
     showStrengths = false,
-    strengthMin = 0.0,
-    strengthMax = 1.0,
-    strengthStep = 0.01,
+    strengthStep = 0.1,
     defaultStrength = 1.0,
     onAdd,
     itemExtra
@@ -28,8 +26,6 @@
     idPrefix?: string
     minItems?: number
     showStrengths?: boolean
-    strengthMin?: number
-    strengthMax?: number
     strengthStep?: number
     defaultStrength?: number
     onAdd?: () => void
@@ -116,6 +112,22 @@
     }
   }
 
+  function toggleStrengthBatch(item: NodeListItem): void {
+    if (item.strengthBatch) {
+      // Leaving sequence mode: keep the first value of the sequence
+      let first: unknown
+      try {
+        first = parseSequence(String(item.strength ?? ''))[0]
+      } catch {
+        first = undefined
+      }
+      item.strength = typeof first === 'number' && isFinite(first) ? first : defaultStrength
+    } else {
+      item.strength = String(item.strength ?? defaultStrength)
+    }
+    item.strengthBatch = !item.strengthBatch
+  }
+
   function handleRemove(id: number | string): void {
     items = items.filter((item) => item.id !== id)
   }
@@ -162,16 +174,36 @@
         {#if showStrengths && items[index].node}
           <div class="strength-control">
             <span class="strength-label">Strength</span>
-            <input
-              type="range"
-              min={strengthMin}
-              max={strengthMax}
-              step={strengthStep}
-              bind:value={items[index].strength}
-              title={`Strength: ${items[index].strength}`}
-            />
-            <span class="strength-value">{Number(items[index].strength).toFixed(2)}</span>
+            {#if items[index].strengthBatch}
+              <input
+                type="text"
+                bind:value={items[index].strength}
+                placeholder="e.g. -1, 0.5, 1..2:0.5"
+                title="Sequence of strengths to sweep"
+              />
+            {:else}
+              <input
+                type="number"
+                step={strengthStep}
+                bind:value={items[index].strength}
+                title="Negative values invert the effect, values above 1 exaggerate it"
+              />
+            {/if}
+            <button
+              type="button"
+              class="batch-toggle"
+              onclick={() => toggleStrengthBatch(items[index])}
+              title="Toggle sequence mode"
+            >
+              {items[index].strengthBatch ? '−' : '+'}
+            </button>
           </div>
+          {#if items[index].strengthBatch}
+            {@const sequenceError = numericSequenceError(String(items[index].strength ?? ''))}
+            {#if sequenceError}
+              <span class="strength-error">{sequenceError}</span>
+            {/if}
+          {/if}
         {/if}
         {#if itemExtra && items[index].node}
           {@render itemExtra(items[index], index)}
@@ -241,15 +273,43 @@
     font-size: 0.85rem;
     color: var(--color-text-muted);
   }
-  .strength-control input[type='range'] {
+  .strength-control input {
     flex-grow: 1;
-    accent-color: var(--color-primary);
+    min-width: 0;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--color-overlay-border-primary, rgba(255, 255, 255, 0.1));
+    color: var(--color-overlay-text);
+    padding: 0.35rem;
+    border-radius: 0.25rem;
+    font-size: 0.8rem;
+    box-sizing: border-box;
   }
-  .strength-value {
-    font-size: 0.85rem;
-    min-width: 2.5rem;
-    text-align: right;
-    color: var(--color-text-muted);
+  .strength-error {
+    padding-left: 0.25rem;
+    font-size: 0.75rem;
+    color: var(--color-error);
+  }
+  .batch-toggle {
+    flex-shrink: 0;
+    background: none;
+    border: 1px solid var(--color-overlay-border-primary, rgba(255, 255, 255, 0.2));
+    color: var(--color-overlay-text);
+    cursor: pointer;
+    width: 20px;
+    height: 20px;
+    min-width: 20px;
+    min-height: 20px;
+    border-radius: 50%;
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    transition: all 0.2s ease;
+  }
+  .batch-toggle:hover {
+    background: rgba(255, 255, 255, 0.1);
+    border-color: var(--color-overlay-text);
   }
   .remove-button {
     flex-shrink: 0;

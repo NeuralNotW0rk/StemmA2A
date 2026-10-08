@@ -8,13 +8,18 @@ export const ELEMENT_INFO_CONFIG = {
     'fx',
     'fy',
     'index',
-    'embeddings',
     'value',
     'job_id',
     'execution_mode'
   ]),
   // Attributes to prioritize at the top of the ElementInfoView
-  priorityKeys: ['id', 'type', 'name', 'alias']
+  priorityKeys: ['id', 'type', 'name', 'alias'],
+  // Fields start collapsed when an array/object has more items than this...
+  collapseItemThreshold: 8,
+  // ...or when a primitive's serialized length exceeds this many characters
+  collapseCharThreshold: 200,
+  // Max characters of a collapsed primitive shown in its header preview
+  previewLength: 60
 } as const
 
 export const GROUPING_CONFIG = {

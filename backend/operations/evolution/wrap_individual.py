@@ -339,10 +339,6 @@ class WrapIndividualOperation(Operation):
     def execution(self) -> str:
         return "immediate"
 
-    @property
-    def initiator_types(self) -> list[str]:
-        return ["audio", "image", "grating", "latent", "individual"]
-
     async def execute_async(self, **kwargs: Any) -> tuple[dict[str, Any], int]:
         return await wrap_precursor_as_individual(
             data=kwargs.get("data", kwargs),

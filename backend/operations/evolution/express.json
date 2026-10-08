@@ -1,0 +1,20 @@
+{
+  "name": "express",
+  "description": "Express this Individual's genotype into a Grating phenotype",
+  "category": "evolution",
+  "execution": "immediate",
+  "initiator_types": ["individual", "group"],
+  "context_overrides": {},
+  "form_config": [
+    {
+      "name": "individuals",
+      "type": "node-list",
+      "label": "Individual(s)",
+      "filter": {
+        "type": "individual"
+      },
+      "required": true,
+      "minItems": 1
+    }
+  ]
+}

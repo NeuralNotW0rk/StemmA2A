@@ -183,6 +183,14 @@
       }
     }
 
+    // Float the node type's pinned operations to the top of the palette
+    const pinned = (initiatorType && PINNED_OPERATIONS[initiatorType]) || []
+    if (pinned.length > 0) {
+      ops = [...ops].sort(
+        (a, b) => Number(pinned.includes(b.name)) - Number(pinned.includes(a.name))
+      )
+    }
+
     if (!searchQuery) return ops
     const q = searchQuery.toLowerCase()
     return ops.filter((op) => {
@@ -230,6 +238,16 @@
       .split(/[\s-_]+/)
       .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
       .join(' ')
+  }
+
+  // Operations surfaced directly on a node type's radial menu. Keep these to the
+  // one primary action per type; everything else is reached via "Operations...".
+  const PINNED_OPERATIONS: Record<string, string[]> = {
+    model: ['generate'],
+    grating: ['generate'],
+    latent: ['generate'],
+    individual: ['mutate'],
+    group: ['recombine']
   }
 
   async function openOperationsMenu(node: any): Promise<void> {
@@ -280,26 +298,63 @@
     }
   }
 
-  function selectOp(op: any): void {
-    const nodeData = targetNode ? targetNode.data() : null
-    closeOperationsMenu()
-    if (onselectOperation && nodeData) {
-      if (op.name === 'recombine' || op.name === 'mutate' || op.name === 'scatter') {
-        const individuals = getSelectedIndividuals(targetNode || undefined)
-        const isIndividualNode =
-          targetNode && targetNode.isNode() && targetNode.data('type') === 'individual'
-        const isGroupNode = targetNode && targetNode.isNode() && targetNode.data('type') === 'group'
-        const fallback = isIndividualNode || isGroupNode ? [nodeData] : []
-        const baseInitiator =
-          isIndividualNode || isGroupNode ? nodeData : individuals[0] || nodeData
-        const initiatorData = {
-          ...baseInitiator,
-          selectedNodes: individuals.length > 0 ? individuals : fallback
-        }
-        onselectOperation(op, initiatorData)
-      } else {
-        onselectOperation(op, nodeData)
+  function getSelectedIndividuals(
+    clickedEle?: cytoscape.NodeSingular | cytoscape.EdgeSingular
+  ): any[] {
+    const selectedEles = cy ? cy.$(':selected') : null
+    const candidates: any[] = []
+    const collect = (d: any): void => {
+      if (d.type === 'individual') {
+        candidates.push(d)
+      } else if (d.type === 'group' && Array.isArray(d.member_ids)) {
+        d.member_ids.forEach((mid: string) => {
+          const m = cy?.getElementById(mid)
+          if (m && m.length > 0 && m.isNode() && m.data('type') === 'individual') {
+            candidates.push(m.data())
+          }
+        })
       }
+    }
+    if (
+      selectedEles &&
+      selectedEles.length > 0 &&
+      (!clickedEle || selectedEles.contains(clickedEle))
+    ) {
+      selectedEles.forEach((e) => {
+        if (e.isNode()) collect(e.data())
+      })
+    } else if (clickedEle && clickedEle.isNode()) {
+      collect(clickedEle.data())
+    }
+    return Array.from(new Map(candidates.map((item) => [item.id, item])).values())
+  }
+
+  const MULTI_INITIATOR_OPERATIONS = new Set([
+    'recombine',
+    'mutate',
+    'scatter',
+    'generate',
+    'express'
+  ])
+
+  function buildInitiatorData(op: any, ele: cytoscape.NodeSingular): any {
+    if (!MULTI_INITIATOR_OPERATIONS.has(op.name)) return ele.data()
+    const individuals = getSelectedIndividuals(ele)
+    const isIndividualOrGroup =
+      ele.isNode() && (ele.data('type') === 'individual' || ele.data('type') === 'group')
+    const fallback = isIndividualOrGroup ? [ele.data()] : []
+    const baseInitiator = isIndividualOrGroup ? ele.data() : individuals[0] || ele.data()
+    return {
+      ...baseInitiator,
+      selectedNodes: individuals.length > 0 ? individuals : fallback
+    }
+  }
+
+  function selectOp(op: any): void {
+    const node = targetNode
+    closeOperationsMenu()
+    if (onselectOperation && node) {
+      onselectOperation(op, buildInitiatorData(op, node))
     }
   }
 
@@ -706,72 +761,15 @@
 
     // --- Command Definitions (Inheritance-style) ---
 
-    async function handleExpressIndividual(individualId: string): Promise<void> {
-      try {
-        await window.api.expressIndividual({ individual_id: individualId })
-        await onrefresh?.()
-      } catch (err: unknown) {
-        console.error('Failed to express individual:', err)
-      }
-    }
-
-    const PINNED_OPERATIONS = new Set([
-      'generate',
-      'invert',
-      'wrap_individual',
-      'scatter',
-      'mutate',
-      'recombine'
-    ])
-
-    const getSelectedIndividuals = (
-      clickedEle?: cytoscape.NodeSingular | cytoscape.EdgeSingular
-    ): any[] => {
-      const selectedEles = cy ? cy.$(':selected') : null
-      const candidates: any[] = []
-      if (
-        selectedEles &&
-        selectedEles.length > 0 &&
-        (!clickedEle || selectedEles.contains(clickedEle))
-      ) {
-        selectedEles.forEach((e) => {
-          if (!e.isNode()) return
-          const d = e.data()
-          if (d.type === 'individual') {
-            candidates.push(d)
-          } else if (d.type === 'group' && Array.isArray(d.member_ids)) {
-            d.member_ids.forEach((mid: string) => {
-              const m = cy?.getElementById(mid)
-              if (m && m.length > 0 && m.isNode() && m.data('type') === 'individual') {
-                candidates.push(m.data())
-              }
-            })
-          }
-        })
-      } else if (clickedEle && clickedEle.isNode()) {
-        const d = clickedEle.data()
-        if (d.type === 'individual') {
-          candidates.push(d)
-        } else if (d.type === 'group' && Array.isArray(d.member_ids)) {
-          d.member_ids.forEach((mid: string) => {
-            const m = cy?.getElementById(mid)
-            if (m && m.length > 0 && m.isNode() && m.data('type') === 'individual') {
-              candidates.push(m.data())
-            }
-          })
-        }
-      }
-      return Array.from(new Map(candidates.map((item) => [item.id, item])).values())
-    }
-
     const getPinnedOperations = (ele: cytoscape.NodeSingular): Command[] => {
       if (!operations) return []
       const type = ele.data('type')
       const memberType = ele.data('member_type')
+      const pinned = PINNED_OPERATIONS[type] ?? []
       return operations
         .filter(
           (op) =>
-            PINNED_OPERATIONS.has(op.name) &&
+            pinned.includes(op.name) &&
             op.initiator_types &&
             (op.initiator_types.includes(type) ||
               (type === 'group' && memberType && op.initiator_types.includes(memberType)))
@@ -781,28 +779,7 @@
           const display = getOpDisplayProps(op, effectiveType)
           return {
             content: toTitleCase(display.name),
-            select: () => {
-              if (
-                op.name === 'recombine' ||
-                op.name === 'mutate' ||
-                op.name === 'scatter' ||
-                op.name === 'generate'
-              ) {
-                const individuals = getSelectedIndividuals(ele)
-                const isIndividualNode = ele && ele.isNode() && ele.data('type') === 'individual'
-                const isGroupNode = ele && ele.isNode() && ele.data('type') === 'group'
-                const fallback = isIndividualNode || isGroupNode ? [ele.data()] : []
-                const baseInitiator =
-                  isIndividualNode || isGroupNode ? ele.data() : individuals[0] || ele.data()
-                const initiatorData = {
-                  ...baseInitiator,
-                  selectedNodes: individuals.length > 0 ? individuals : fallback
-                }
-                onselectOperation?.(op, initiatorData)
-              } else {
-                onselectOperation?.(op, ele.data())
-              }
-            }
+            select: () => onselectOperation?.(op, buildInitiatorData(op, ele))
           }
         })
     }
@@ -869,19 +846,23 @@
         content: 'Import Grating',
         select: () => onimportGrating?.(ele.data())
       },
+      {
+        content: 'Operations...',
+        select: () => openOperationsMenu(ele)
+      },
       ...nodeCommands(ele)
     ]
 
     const gratingNodeCommands = (ele: cytoscape.NodeSingular): Command[] => [
       ...getPinnedOperations(ele),
+      {
+        content: 'Operations...',
+        select: () => openOperationsMenu(ele)
+      },
       ...nodeCommands(ele)
     ]
 
     const individualNodeCommands = (ele: cytoscape.NodeSingular): Command[] => [
-      {
-        content: 'Express',
-        select: () => handleExpressIndividual(ele.id())
-      },
       {
         content: 'Score',
         select: () => openScorePopper(ele)
@@ -901,6 +882,10 @@
         specificCommands.push(replicateCmd)
       }
       specificCommands.push(...getPinnedOperations(ele))
+      specificCommands.push({
+        content: 'Operations...',
+        select: () => openOperationsMenu(ele)
+      })
       return [...specificCommands, ...nodeCommands(ele)]
     }
 
@@ -1466,9 +1451,21 @@
     })
   }
 
-  function isGeneratedArtifact(node: cytoscape.NodeSingular): boolean {
-    const type = node.data('type')
-    if (type !== 'audio' && type !== 'latent') {
+  const ARTIFACT_TYPES = new Set([
+    'audio',
+    'latent',
+    'image',
+    'individual',
+    'bundle',
+    'grating'
+  ])
+
+  // Artifacts respect the chronological constraint unless they were imported from disk.
+  // Models are deliberately excluded: model modification is represented by gratings.
+  // Compound artifacts (e.g. an individual with an exemplar) are excluded by the leaf filter
+  // and get ordered via their children instead.
+  function isChronologicalArtifact(node: cytoscape.NodeSingular): boolean {
+    if (!ARTIFACT_TYPES.has(node.data('type'))) {
       return false
     }
     const parentId = node.data('parent')
@@ -1492,7 +1489,7 @@
     if (!cy) return []
     const leafNodes = cy.nodes().filter((node) => node.children().length === 0)
     const sortedNodes = (leafNodes.toArray() as cytoscape.NodeSingular[])
-      .filter((node) => node.data('created') !== undefined && isGeneratedArtifact(node))
+      .filter((node) => node.data('created') !== undefined && isChronologicalArtifact(node))
       .sort((a, b) => {
         const timeA = a.data('created') || 0
         const timeB = b.data('created') || 0
@@ -1863,7 +1860,7 @@
           type="text"
           bind:value={searchQuery}
           onkeydown={handleKeyDown}
-          placeholder="Search audio operations..."
+          placeholder="Search operations..."
         />
       </div>
 

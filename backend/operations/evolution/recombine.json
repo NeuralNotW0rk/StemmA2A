@@ -3,7 +3,7 @@
   "description": "Recombine selected individuals into a new generation of variants",
   "category": "evolution",
   "execution": "queued",
-  "initiator_types": ["group", "individual"],
+  "initiator_types": ["group", "individual", "bundle"],
   "context_overrides": {},
   "form_config": [
     {

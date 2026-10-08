@@ -6,7 +6,8 @@ interface API {
   getProjects: () => Promise<string[]>
   getModels: () => Promise<string[]>
   openProject: () => Promise<string | null>
-  newProject: () => Promise<string | null>
+  newProject: (defaultPath?: string) => Promise<string | null>
+  getDefaultProjectLocation: () => Promise<string>
   selectDirectory: () => Promise<string | null>
   selectSavePath: (defaultName?: string) => Promise<string | null>
   getRecentProjects: () => Promise<string[]>

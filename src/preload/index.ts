@@ -5,7 +5,9 @@ import { electronAPI } from '@electron-toolkit/preload'
 const api = {
   getHealth: (): Promise<any> => ipcRenderer.invoke('getHealth'),
   openProject: (): Promise<string | null> => ipcRenderer.invoke('dialog:openProject'),
-  newProject: (): Promise<string | null> => ipcRenderer.invoke('dialog:newProject'),
+  newProject: (defaultPath?: string): Promise<string | null> =>
+    ipcRenderer.invoke('dialog:newProject', defaultPath),
+  getDefaultProjectLocation: (): Promise<string> => ipcRenderer.invoke('getDefaultProjectLocation'),
   selectDirectory: (): Promise<string | null> => ipcRenderer.invoke('dialog:selectDirectory'),
   selectSavePath: (defaultName?: string): Promise<string | null> =>
     ipcRenderer.invoke('dialog:selectSavePath', defaultName),

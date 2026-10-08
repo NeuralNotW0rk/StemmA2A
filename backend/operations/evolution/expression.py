@@ -104,3 +104,92 @@ def express_individual_to_grating_artifact(
             return _execute_expression()
     else:
         return _execute_expression()
+
+
+async def express_individuals(
+    data: dict[str, Any],
+    param_graph: Any,
+    graph_lock: Optional[threading.Lock] = None,
+    uid_generator: Optional[Any] = None,
+) -> tuple[dict[str, Any], int]:
+    """
+    Expresses one or more Individuals (or groups of Individuals) to Grating artifacts.
+
+    Args:
+        data: Request payload containing the individuals to express.
+        param_graph: The active ParameterGraph instance.
+        graph_lock: Optional threading.Lock for graph concurrency.
+        uid_generator: Optional UID generator (defaults to XXH3_64).
+
+    Returns:
+        A tuple of (response_dict, status_code).
+    """
+    if param_graph is None:
+        return {"error": "No project loaded"}, 400
+
+    params = data.get("params", {}) or {}
+    initiator = data.get("initiator") or params.get("initiator")
+    individual_input = (
+        data.get("individuals")
+        or params.get("individuals")
+        or data.get("individual_id")
+        or data.get("parent_ids")
+        or data.get("parent_group_id")
+        or initiator
+    )
+    individual_ids = extract_individual_parent_ids(individual_input, param_graph, graph_lock)
+    if not individual_ids:
+        return {"error": "At least one Individual is required to express."}, 400
+
+    gratings: list[dict[str, Any]] = []
+    for individual_id in individual_ids:
+        resp, code = express_individual_to_grating_artifact(
+            individual_id=individual_id,
+            param_graph=param_graph,
+            graph_lock=graph_lock,
+            uid_generator=uid_generator,
+        )
+        if code != 200:
+            return resp, code
+        gratings.append(resp["grating"])
+
+    return {
+        "success": True,
+        "status": "completed",
+        "message": f"Expressed {len(gratings)} individual(s) to gratings",
+        "artifact": gratings[0],
+        "artifacts": gratings,
+        "node_id": gratings[0]["id"],
+    }, 200
+
+
+from ..base import Operation
+from ..registry import register
+from .resolution import extract_individual_parent_ids
+
+
+@register
+class ExpressOperation(Operation):
+    @property
+    def name(self) -> str:
+        return "express"
+
+    @property
+    def description(self) -> str:
+        return "Expresses an Individual's genotype into a Grating phenotype."
+
+    @property
+    def category(self) -> str:
+        return "evolution"
+
+    @property
+    def execution(self) -> str:
+        return "immediate"
+
+    async def execute_async(self, **kwargs: Any) -> tuple[dict[str, Any], int]:
+        return await express_individuals(
+            data=kwargs.get("data", kwargs),
+            param_graph=kwargs.get("param_graph"),
+            graph_lock=kwargs.get("graph_lock"),
+            uid_generator=kwargs.get("uid_generator"),
+        )

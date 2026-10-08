@@ -70,23 +70,18 @@
   })
 
   let lastConfigProcessed: FormConfig | null = null
-  let previousConditionValues: Record<string, any> = {}
+  let previousConditionValues: Record<string, unknown> = {}
 
   $effect(() => {
     // Collect all condition target keys from config's conditionalDefaults
-    const targetKeys = new Set<string>()
-    for (const field of config) {
-      if (field.conditionalDefaults) {
-        for (const condDefault of field.conditionalDefaults) {
-          for (const key in condDefault.show_if) {
-            targetKeys.add(key)
-          }
-        }
-      }
-    }
+    const targetKeys = new Set<string>(
+      config.flatMap((field) =>
+        (field.conditionalDefaults ?? []).flatMap((condDefault) => Object.keys(condDefault.show_if))
+      )
+    )
 
     // Touch condition keys to establish reactive dependencies
-    const currentConditionValues: Record<string, any> = {}
+    const currentConditionValues: Record<string, unknown> = {}
     for (const key of targetKeys) {
       const val =
         formData[key] !== undefined ? formData[key] : contextData ? contextData[key] : null
@@ -117,7 +112,7 @@
       untrack(() => {
         for (const field of config) {
           if (field.conditionalDefaults) {
-            let matchedDefaultValue: any = undefined
+            let matchedDefaultValue: unknown = undefined
             let conditionsMet = false
 
             for (const condDefault of field.conditionalDefaults) {
@@ -157,7 +152,7 @@
   $effect(() => {
     isFormValid = visibleFields.every((f) => {
       if (f.type === 'node-list') {
-        const items = formData[f.name] as any[]
+        const items = formData[f.name] as unknown[]
         const minCount = f.minItems ?? (f.validation?.required ? 1 : 0)
         return Array.isArray(items) && items.length >= minCount
       }
@@ -180,7 +175,7 @@
           payload[fieldName] = value.id
         } else if (field.type === 'node-list' && Array.isArray(value)) {
           payload[fieldName] = value
-            .map((item: any) =>
+            .map((item: NodeListItem) =>
               typeof item.node === 'object' && item.node && 'id' in item.node
                 ? item.node.id
                 : item.node
@@ -217,27 +212,18 @@
   }
   const visibleFields = $derived.by(() => {
     // Collect all condition target keys from config's show_if
-    const targetKeys = new Set<string>()
-    for (const field of config) {
-      if (field.show_if) {
-        if (Array.isArray(field.show_if)) {
-          for (const condSet of field.show_if) {
-            for (const key in condSet) {
-              targetKeys.add(key)
-            }
-          }
-        } else {
-          for (const key in field.show_if) {
-            targetKeys.add(key)
-          }
-        }
-      }
-    }
+    const targetKeys = new Set<string>(
+      config.flatMap((field) => {
+        if (!field.show_if) return []
+        const condSets = Array.isArray(field.show_if) ? field.show_if : [field.show_if]
+        return condSets.flatMap((condSet) => Object.keys(condSet))
+      })
+    )
 
     // Touch condition keys to establish reactive dependencies
     for (const key of targetKeys) {
-      const _dummy1 = formData[key]
-      const _dummy2 = contextData ? contextData[key] : null
+      void formData[key]
+      void contextData?.[key]
     }
 
     return config.filter((field: FormField) => {
@@ -305,7 +291,7 @@
               type="text"
               bind:value={formData[field.name]}
               id={field.name}
-              placeholder="e.g. 1, 2, 5-10:2"
+              placeholder="e.g. 1, 2, 5..10:2"
             />
           {:else}
             <input
@@ -376,7 +362,7 @@
               type="text"
               bind:value={formData[field.name]}
               id={field.name}
-              placeholder="e.g. 0.5, 1.2, 2.0-3.0:0.5"
+              placeholder="e.g. -0.5, 1.2, 2.0..3.0:0.5"
             />
           {:else}
             <input

@@ -1,5 +1,5 @@
 import { app, shell, BrowserWindow, ipcMain, dialog, protocol } from 'electron'
-import { join, extname } from 'path'
+import { join, extname, dirname, basename } from 'path'
 import { promises as fs } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
@@ -191,30 +191,46 @@ app.whenReady().then(async (): Promise<void> => {
     }
   })
 
-  ipcMain.handle('dialog:newProject', async () => {
-    const { canceled, filePath } = await dialog.showSaveDialog({
-      title: 'Create New Project',
-      defaultPath: 'New Project',
-      buttonLabel: 'Create',
-      properties: ['createDirectory', 'showOverwriteConfirmation']
-    })
-    if (canceled) {
-      return null
-    } else {
-      return filePath
-    }
-  })
-
-  ipcMain.handle('dialog:openProject', async () => {
+  // Picks the parent folder a new project folder will be created inside
+  ipcMain.handle('dialog:newProject', async (_event, defaultPath?: string) => {
     const { canceled, filePaths } = await dialog.showOpenDialog({
-      properties: ['openDirectory'],
-      defaultPath: app.getPath('documents')
+      title: 'Choose Project Location',
+      buttonLabel: 'Select Folder',
+      defaultPath: defaultPath || app.getPath('documents'),
+      properties: ['openDirectory', 'createDirectory']
     })
     if (canceled) {
       return null
     } else {
       return filePaths[0]
     }
+  })
+
+  ipcMain.handle('getDefaultProjectLocation', async () => {
+    return store.get('lastProjectLocation', app.getPath('documents')) as string
+  })
+
+  ipcMain.handle('dialog:openProject', async () => {
+    const { canceled, filePaths } = await dialog.showOpenDialog({
+      title: 'Open Project (select graph.json)',
+      buttonLabel: 'Open Project',
+      properties: ['openFile'],
+      filters: [{ name: 'Project Graph', extensions: ['json'] }],
+      defaultPath: app.getPath('documents')
+    })
+    if (canceled) {
+      return null
+    }
+    if (basename(filePaths[0]).toLowerCase() !== 'graph.json') {
+      await dialog.showMessageBox({
+        type: 'warning',
+        title: 'Not a project file',
+        message: 'Please select a project graph.json file.'
+      })
+      return null
+    }
+    // The project root is the directory containing graph.json
+    return dirname(filePaths[0])
   })
 
   ipcMain.handle('dialog:selectDirectory', async () => {
@@ -724,7 +740,18 @@ app.whenReady().then(async (): Promise<void> => {
     async (_event, projectData: { project_path?: string; project_name?: string }) => {
       // In local mode, we might still want to create the directory from the electron app
       if (projectData.project_path) {
+        const graphFile = join(projectData.project_path, 'graph.json')
+        const exists = await fs
+          .access(graphFile)
+          .then(() => true)
+          .catch(() => false)
+        if (exists) {
+          throw new Error(
+            `A project already exists at ${projectData.project_path}. Use Open Project instead.`
+          )
+        }
         await fs.mkdir(projectData.project_path, { recursive: true })
+        store.set('lastProjectLocation', dirname(projectData.project_path))
       }
 
       const payload: { project_path?: string; project_name?: string } = { ...projectData }

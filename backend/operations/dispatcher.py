@@ -3,6 +3,7 @@
 from typing import Any, Optional, Callable
 from pathlib import Path
 from dataclasses import replace
+import math
 import uuid
 import traceback
 import torch
@@ -25,6 +26,7 @@ from utils.uid import XXH3_64, path_from_uid
 from .registry import operation_registry
 from .task_manager import task_manager, TaskManager
 from .evolution.wrap_individual import wrap_precursor_as_individual
+from .evolution.expression import express_individuals
 from .evolution.mutate import dispatch_mutate_operation
 from .evolution.recombine import dispatch_recombine_operation
 from .evolution.resolution import resolve_exemplar_context
@@ -100,6 +102,14 @@ async def dispatch_operation(
                     data=payload,
                     param_graph=param_graph,
                     engine_provider=engine_provider,
+                    graph_lock=graph_lock,
+                    uid_generator=uid_gen,
+                )
+
+            if operation_name == "express":
+                return await express_individuals(
+                    data=payload,
+                    param_graph=param_graph,
                     graph_lock=graph_lock,
                     uid_generator=uid_gen,
                 )
@@ -417,7 +427,15 @@ async def dispatch_operation(
                 if not isinstance(g_element, Grating):
                     return {"error": f"Node '{g_id}' is not a valid grating."}, 400
                 grating_elements.append(g_element)
-                grating_strengths.append(float(g_conf.get("strength", 1.0)) if isinstance(g_conf, dict) else 1.0)
+                # Strength is unbounded: negative values invert the bend, values above 1 exaggerate it
+                raw_strength = g_conf.get("strength", 1.0) if isinstance(g_conf, dict) else 1.0
+                try:
+                    strength = float(raw_strength)
+                except (TypeError, ValueError):
+                    strength = float("nan")
+                if not math.isfinite(strength):
+                    return {"error": f"Invalid strength '{raw_strength}' for grating '{g_id}'."}, 400
+                grating_strengths.append(strength)
             node_engine_args["grating_elements"] = grating_elements
 
         # Individuals and Baseline Grating

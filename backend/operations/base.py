@@ -42,7 +42,13 @@ class Operation(ABC):
 
     @property
     def initiator_types(self) -> list[str]:
-        """Supported initiator node types. If empty, the operation is unrestricted."""
+        """
+        Supported initiator node types. If empty, the operation is unrestricted.
+        By default, read from the "initiator_types" key of the colocated JSON config.
+        """
+        config = self._load_config_file()
+        if isinstance(config, dict):
+            return list(config.get("initiator_types", []))
         return []
 
     @property
@@ -50,30 +56,38 @@ class Operation(ABC):
         """Metadata context overrides injected into downstream artifacts."""
         return {}
 
+    def _load_config_file(self) -> Any:
+        """
+        Loads the colocated <name>.json or <module_name>.json config, if present.
+        Returns either a list (form fields only) or a dict (full operation config).
+        """
+        try:
+            cls_file = inspect.getfile(self.__class__)
+            dir_name = os.path.dirname(cls_file)
+
+            candidates = [
+                os.path.join(dir_name, f"{self.name}.json"),
+                os.path.join(dir_name, f"{os.path.splitext(os.path.basename(cls_file))[0]}.json"),
+            ]
+
+            for candidate in candidates:
+                if os.path.exists(candidate):
+                    with open(candidate, "r", encoding="utf-8") as f:
+                        return json.load(f)
+        except Exception as e:
+            print(f"Error loading config for operation '{self.name}': {e}")
+        return None
+
     def get_form_config(self) -> list[dict[str, Any]]:
         """
         Returns UI dynamic form configuration schema (list of field definitions).
         By default, attempts to load colocated <name>.json or <module_name>.json.
         """
-        try:
-            cls_file = inspect.getfile(self.__class__)
-            dir_name = os.path.dirname(cls_file)
-            
-            candidates = [
-                os.path.join(dir_name, f"{self.name}.json"),
-                os.path.join(dir_name, f"{os.path.splitext(os.path.basename(cls_file))[0]}.json"),
-            ]
-            
-            for candidate in candidates:
-                if os.path.exists(candidate):
-                    with open(candidate, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                        if isinstance(data, list):
-                            return data
-                        elif isinstance(data, dict):
-                            return data.get("form_config", data.get("fields", []))
-        except Exception as e:
-            print(f"Error loading form config for operation '{self.name}': {e}")
+        config = self._load_config_file()
+        if isinstance(config, list):
+            return config
+        if isinstance(config, dict):
+            return config.get("form_config", config.get("fields", []))
         return []
 
     def execute(self, **kwargs: Any) -> list[tuple[GraphElement, Any]] | dict[str, Any]:

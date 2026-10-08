@@ -74,7 +74,7 @@
       cy.on('pan zoom resize', update)
 
       return () => {
-        if (targetNode) targetNode.off('position', update)
+        if (targetNode) targetNode.off('position', undefined, update)
         if (cy) cy.off('pan zoom resize', update)
         if (popperInstance) {
           popperInstance.destroy()

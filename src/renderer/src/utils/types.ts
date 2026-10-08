@@ -36,7 +36,9 @@ export type ErrorInfo = { title: string; message: string }
 export interface NodeListItem {
   id: number | string
   node: NodeData | string | null
-  strength?: number
+  // A number normally; a sequence string (e.g. "-1, 0.5, 1..2:0.5") when strengthBatch is on
+  strength?: number | string
+  strengthBatch?: boolean
   [key: string]: unknown
 }
 

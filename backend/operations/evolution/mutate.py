@@ -579,10 +579,6 @@ class ScatterOperation(Operation):
     def execution(self) -> str:
         return "queued"
 
-    @property
-    def initiator_types(self) -> list[str]:
-        return ["individual", "group", "audio"]
-
     def execute_task(self, job_id: str, **kwargs: Any) -> None:
         mutate_evolution_task(
             parent_job_id=job_id,

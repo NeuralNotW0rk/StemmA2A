@@ -16,6 +16,7 @@
     cyInstanceStore
   } from '../../utils/stores'
   import { startExecution } from '../../utils/execution'
+  import { parseSequence, numericSequenceError } from '../../utils/sequence'
   import DynamicForm from '../DynamicForm.svelte'
   import NodeSelectorList from '../NodeSelectorList.svelte'
   import type { ErrorInfo, NodeListItem, GratingOverride, GratingListItem } from '../../utils/types'
@@ -454,42 +455,53 @@
     }
   }
 
-  function parseSequence(str: string): (string | number)[] {
-    const parts = str.split(',').map((p) => p.trim())
-    const result: (string | number)[] = []
-
-    for (const part of parts) {
-      const rangeMatch = part.match(/^(-?\d+\.?\d*)-(-?\d+\.?\d*):(-?\d+\.?\d*)$/)
-      if (rangeMatch) {
-        const [, start, end, step] = rangeMatch.map(Number)
-        for (let i = start; i <= end; i += step) {
-          result.push(i)
-        }
-        continue
-      }
-
-      const simpleRangeMatch = part.match(/^(-?\d+\.?\d*)-(-?\d+\.?\d*)$/)
-      if (simpleRangeMatch) {
-        const [, start, end] = simpleRangeMatch.map(Number)
-        for (let i = start; i <= end; i++) {
-          result.push(i)
-        }
-        continue
-      }
-
-      if (!isNaN(Number(part))) {
-        result.push(Number(part))
-        continue
-      }
-
-      result.push(part)
-    }
-
-    return result
-  }
-
   function cartesian<T>(...arrays: T[][]): T[][] {
     return arrays.reduce((a, b) => a.flatMap((x) => b.map((y) => [...x, y])), [[]] as T[][])
+  }
+
+  function parseIndices(text: string): number[] {
+    return text
+      .split(',')
+      .map((s) => parseInt(s.trim()))
+      .filter((n) => !isNaN(n))
+  }
+
+  function isValidStrength(item: GratingListItem): boolean {
+    if (item.strengthBatch) {
+      return numericSequenceError(String(item.strength ?? '')) === null
+    }
+    return typeof item.strength === 'number' && isFinite(item.strength)
+  }
+
+  let validGratings = $derived(selectedGratings.filter((l) => l.node))
+  let gratingStrengthsValid = $derived(validGratings.every(isValidStrength))
+
+  // Serializes the selected gratings for the payload. Batched values are left out
+  // here and filled in per combination of the cartesian product.
+  function serializeGratings(items: GratingListItem[]): Array<{
+    id: string
+    strength: number
+    overrides: Array<{ address: string; metadata: Record<string, unknown> }>
+  }> {
+    return items.map((l) => {
+      const id = typeof l.node === 'string' ? l.node : (l.node as GratingData).id
+      const overrides = (l.overrides ?? []).map((o) => {
+        const metadata: Record<string, unknown> = {
+          indices:
+            o.targetType === 'indices' && !o.batchFields?.indicesText
+              ? parseIndices(o.indicesText)
+              : [],
+          cluster: o.targetType === 'cluster' && !o.batchFields?.cluster ? o.cluster : null
+        }
+        for (const paramKey in o.params) {
+          if (!o.batchFields?.[paramKey]) {
+            metadata[paramKey] = o.params[paramKey]
+          }
+        }
+        return { address: o.address, metadata }
+      })
+      return { id, strength: l.strengthBatch ? 1.0 : Number(l.strength ?? 1.0), overrides }
+    })
   }
 
   function execute(): void {
@@ -561,71 +573,40 @@
     }
 
     // Map Gratings if the operation supports them
-    if (op.name === 'generate') {
-      const validGratings = selectedGratings.filter((l) => l.node)
-      const gratings = validGratings.map((l) => {
-        const id = typeof l.node === 'string' ? l.node : (l.node as GratingData)?.id
-        const strength = l.strength ?? 1.0
-
-        const overrides: Array<{ address: string; metadata: Record<string, unknown> }> = []
-        if (l.overrides) {
-          for (const o of l.overrides) {
-            let indices: number[] = []
-            if (o.targetType === 'indices' && o.indicesText.trim() !== '') {
-              indices = o.indicesText
-                .split(',')
-                .map((s) => parseInt(s.trim()))
-                .filter((n) => !isNaN(n))
-            }
-
-            const metaOverride: Record<string, unknown> = {
-              indices: o.targetType === 'indices' ? indices : [],
-              cluster: o.targetType === 'cluster' ? o.cluster : null,
-              ...o.params
-            }
-
-            overrides.push({
-              address: o.address,
-              metadata: metaOverride
-            })
-          }
-        }
-
-        return {
-          id,
-          strength,
-          overrides
-        }
-      })
-      if (gratings.length > 0) {
-        basePayload.gratings = gratings
-      }
+    const gratings = op.name === 'generate' ? serializeGratings(validGratings) : []
+    if (gratings.length > 0) {
+      basePayload.gratings = gratings
     }
 
-    // Collect batch fields from grating overrides
+    // Collect batched grating values. Indices refer to positions in `gratings`
+    // (keys: grating_strength__<g>, grating__<g>__<o>__<field>)
     const gratingBatchParams: Record<string, (string | number)[]> = {}
-    selectedGratings.forEach((l, gIdx) => {
-      if (l.overrides) {
-        l.overrides.forEach((o, oIdx) => {
-          if (o.batchFields) {
-            for (const key in o.batchFields) {
-              if (o.batchFields[key]) {
-                const tempKey = `grating__${gIdx}__${oIdx}__${key}`
-                let rawVal = ''
-                if (key === 'cluster') {
-                  rawVal = String(o.cluster)
-                } else if (key === 'indicesText') {
-                  rawVal = String(o.indicesText)
-                } else {
-                  rawVal = String(o.params[key])
-                }
-                gratingBatchParams[tempKey] = parseSequence(rawVal)
-              }
-            }
+    try {
+      // `gratings` is empty for non-generate operations, in which case nothing is swept
+      validGratings.slice(0, gratings.length).forEach((l, gIdx) => {
+        if (l.strengthBatch) {
+          gratingBatchParams[`grating_strength__${gIdx}`] = parseSequence(String(l.strength ?? ''))
+        }
+        l.overrides?.forEach((o, oIdx) => {
+          for (const key in o.batchFields ?? {}) {
+            if (!o.batchFields?.[key]) continue
+            // Targeting fields only sweep when their target mode is the active one
+            if (key === 'indicesText' && o.targetType !== 'indices') continue
+            if (key === 'cluster' && o.targetType !== 'cluster') continue
+            const rawVal =
+              key === 'cluster'
+                ? String(o.cluster)
+                : key === 'indicesText'
+                  ? String(o.indicesText)
+                  : String(o.params[key])
+            gratingBatchParams[`grating__${gIdx}__${oIdx}__${key}`] = parseSequence(rawVal)
           }
         })
-      }
-    })
+      })
+    } catch (e: unknown) {
+      onError({ title: 'Invalid Sequence', message: e instanceof Error ? e.message : String(e) })
+      return
+    }
 
     const hasBatch = batchFields.size > 0 || Object.keys(gratingBatchParams).length > 0
 
@@ -662,55 +643,15 @@
         }
       }
 
-      // Construct a clean representation of gratings with non-batched parameters
-      const staticGratings = selectedGratings
-        .filter((l) => l.node)
-        .map((l) => {
-          const id = typeof l.node === 'string' ? l.node : (l.node as GratingData)?.id
-          const strength = l.strength ?? 1.0
-
-          const overrides: Array<{ address: string; metadata: Record<string, unknown> }> = []
-          if (l.overrides) {
-            for (const o of l.overrides) {
-              let indices: number[] = []
-              if (
-                o.targetType === 'indices' &&
-                !o.batchFields?.indicesText &&
-                o.indicesText.trim() !== ''
-              ) {
-                indices = o.indicesText
-                  .split(',')
-                  .map((s) => parseInt(s.trim()))
-                  .filter((n) => !isNaN(n))
-              }
-
-              const metaOverride: Record<string, unknown> = {
-                indices: o.targetType === 'indices' && !o.batchFields?.indicesText ? indices : [],
-                cluster: o.targetType === 'cluster' && !o.batchFields?.cluster ? o.cluster : null
-              }
-
-              for (const paramKey in o.params) {
-                if (!o.batchFields?.[paramKey]) {
-                  metaOverride[paramKey] = o.params[paramKey]
-                }
-              }
-
-              overrides.push({
-                address: o.address,
-                metadata: metaOverride
-              })
-            }
-          }
-
-          return {
-            id,
-            strength,
-            overrides
-          }
-        })
+      // `gratings` is the payload grating list with batched values left out
+      delete staticParams.gratings
 
       const paramNames = Object.keys(batchParams)
       const paramValues = Object.values(batchParams)
+      const emptyParam = paramNames.find((name) => batchParams[name].length === 0)
+      if (emptyParam) {
+        throw new Error(`Sequence for "${emptyParam}" has no values.`)
+      }
       const combinations = cartesian(...paramValues)
 
       console.log(`Starting batch execution with ${combinations.length} combinations.`)
@@ -721,13 +662,16 @@
           : `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
 
       combinations.forEach((combination) => {
-        // Deep clone static gratings so each combination gets its own overrides
-        const combinationGratings = JSON.parse(JSON.stringify(staticGratings))
+        // Deep clone gratings so each combination gets its own strengths and overrides
+        const combinationGratings = JSON.parse(JSON.stringify(gratings))
         const batchPayload: Record<string, unknown> = { ...staticParams }
 
         combination.forEach((value, index) => {
           const paramName = paramNames[index]
-          if (paramName.startsWith('grating__')) {
+          if (paramName.startsWith('grating_strength__')) {
+            const gIdx = parseInt(paramName.split('__')[1])
+            combinationGratings[gIdx].strength = value
+          } else if (paramName.startsWith('grating__')) {
             const [, gIdxStr, oIdxStr, key] = paramName.split('__')
             const gIdx = parseInt(gIdxStr)
             const oIdx = parseInt(oIdxStr)
@@ -823,7 +767,7 @@
               </div>
               <div class="sub-input-row">
                 {#if ov.batchFields?.radius}
-                  <input type="text" bind:value={ov.params.radius} placeholder="e.g. 1, 2, 3-5" />
+                  <input type="text" bind:value={ov.params.radius} placeholder="e.g. 1, 2, 3..5" />
                 {:else}
                   <input type="range" min="1" max="15" step="1" bind:value={ov.params.radius} />
                 {/if}
@@ -845,7 +789,7 @@
                   <input
                     type="text"
                     bind:value={ov.params.scale_factor}
-                    placeholder="e.g. 0.5, 1.0, 1.2-2.0:0.2"
+                    placeholder="e.g. 0.5, 1.0, 1.2..2.0:0.2"
                   />
                 {:else}
                   <input type="number" step="0.1" bind:value={ov.params.scale_factor} />
@@ -868,7 +812,7 @@
                   <input
                     type="text"
                     bind:value={ov.params.angle}
-                    placeholder="e.g. 0, 90, 180-360:90"
+                    placeholder="e.g. 0, 45, 90..360:90"
                   />
                 {:else}
                   <input type="number" step="1.0" bind:value={ov.params.angle} />
@@ -942,7 +886,7 @@
                   <input
                     type="text"
                     bind:value={ov.params.factor}
-                    placeholder="e.g. 0.5, 1.0, 1.5-3.0:0.5"
+                    placeholder="e.g. -1, 0.5, 1.5..3.0:0.5"
                   />
                 {:else}
                   <input type="number" step="0.1" bind:value={ov.params.factor} />
@@ -1098,7 +1042,7 @@
               <span class="sub-label">Target Cluster ID (0 to {maxClusterId})</span>
               <div class="sub-input-row">
                 {#if ov.batchFields?.cluster}
-                  <input type="text" bind:value={ov.cluster} placeholder="e.g. 0, 1, 2, 0-4" />
+                  <input type="text" bind:value={ov.cluster} placeholder="e.g. 0, 2, 4..6" />
                 {:else}
                   <input type="number" min="0" max={maxClusterId} bind:value={ov.cluster} />
                 {/if}
@@ -1189,6 +1133,7 @@
       disabled={isLoading ||
         !$selectedOperation ||
         (fieldsConfig?.length > 0 && !isFormValid) ||
+        !gratingStrengthsValid ||
         isRunning}
     >
       {#if isRunning}
