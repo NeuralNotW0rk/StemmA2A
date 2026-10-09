@@ -16,7 +16,7 @@ from tqdm import tqdm
 from k_diffusion.sampling import get_sigmas_karras
 
 from .base_adapter import ModelAdapter, operation
-from param_graph.elements.base_elements import Asset
+from param_graph.elements.base_elements import Asset, GraphElement
 from param_graph.elements.artifacts.audio_element import Audio
 from param_graph.elements.artifacts.latent_element import Latent
 from param_graph.elements.models.stable_audio_element import StableAudioModel
@@ -639,6 +639,9 @@ class StableAudioAdapter(ModelAdapter):
                 context[k.replace('_element', '_id')] = v.id
             elif k.endswith('_elements'):
                 context[k.replace('_elements', '_ids')] = [el.id for el in v]
+            elif isinstance(v, GraphElement):
+                # Other element arguments (e.g. baseline_grating) are referenced by ID, not serialized whole
+                context[f"{k}_id"] = v.id
             else:
                 context[k] = v
 
@@ -944,6 +947,9 @@ class StableAudioAdapter(ModelAdapter):
                 context[k.replace('_element', '_id')] = v.id
             elif k.endswith('_elements'):
                 context[k.replace('_elements', '_ids')] = [el.id for el in v]
+            elif isinstance(v, GraphElement):
+                # Other element arguments (e.g. baseline_grating) are referenced by ID, not serialized whole
+                context[f"{k}_id"] = v.id
             else:
                 context[k] = v
 

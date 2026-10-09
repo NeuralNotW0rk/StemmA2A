@@ -319,8 +319,6 @@ def recombine_evolution_task(
         else:
             gen_group = _create_group()
 
-        baseline_elements = parent_nodes[0].context.get("baseline_elements")
-        baseline_file_path = parent_nodes[0].context.get("baseline_file_path")
         gen_group_id = gen_group.id
         parent_id_list = [p.id for p in parent_nodes]
 
@@ -352,8 +350,6 @@ def recombine_evolution_task(
             child_genome_path = output_dir / f"{child_ind_id}.safetensors"
 
             child_context = copy.deepcopy(merged_context)
-            child_context["baseline_elements"] = baseline_elements
-            child_context["baseline_file_path"] = str(baseline_file_path) if baseline_file_path else None
             child_context["recombine_operation"] = {
                 "crossover_type": crossover_cfg.get("type", "hierarchical") if isinstance(crossover_cfg, dict) else str(crossover_cfg),
                 "selection_type": selection_cfg.get("type", "tournament") if isinstance(selection_cfg, dict) else str(selection_cfg),

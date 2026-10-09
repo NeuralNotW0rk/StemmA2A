@@ -1,6 +1,5 @@
 import os
 import json
-import shutil
 import uuid
 from pathlib import Path
 from time import time
@@ -61,6 +60,8 @@ class ParameterGraph:
         self.backend = backend
         self.G = nx.DiGraph()
         self.project_name = None
+        # Embeddings as of the last sidecar read/write, used to skip unchanged rewrites
+        self._saved_embeddings = None
 
     # IO functions
     def load(self) -> bool:
@@ -122,7 +123,64 @@ class ParameterGraph:
                         d['output_type'] = 'audio'
                     elif adapter == 'stylegan2':
                         d['output_type'] = 'image'
+
+        self._load_embeddings()
         return True
+
+    def _load_embeddings(self) -> None:
+        """
+        Merges node embeddings from the sidecar file back into the in-memory graph. Embeddings still
+        stored inline in graph.json (legacy projects) are kept, and move to the sidecar on next save.
+        """
+        self._saved_embeddings = None
+        sidecar_path = self.root / EMBEDDINGS_FILE
+        if not sidecar_path.exists():
+            return
+
+        from safetensors.numpy import load_file
+        try:
+            tensors = load_file(str(sidecar_path))
+        except Exception as e:
+            print(f"[ParameterGraph] Warning: Could not read embeddings file '{sidecar_path}': {e}")
+            return
+
+        for key, arr in tensors.items():
+            node_id, _, embedding_type = key.rpartition(EMBEDDING_KEY_SEPARATOR)
+            if self.G.has_node(node_id):
+                node_embeddings = self.G.nodes[node_id].get('embeddings')
+                if not isinstance(node_embeddings, dict):
+                    node_embeddings = self.G.nodes[node_id]['embeddings'] = {}
+                node_embeddings[embedding_type] = arr.tolist()
+        self._saved_embeddings = self._collect_embeddings()
+
+    def _collect_embeddings(self) -> dict[str, dict]:
+        """Returns a {node_id: {embedding_type: vector}} snapshot of all numeric node embeddings."""
+        collected = {}
+        for node, d in self.G.nodes(data=True):
+            embeddings = d.get('embeddings')
+            if isinstance(embeddings, dict) and embeddings:
+                collected[node] = dict(embeddings)
+        return collected
+
+    def _save_embeddings(self, embeddings: dict[str, dict]) -> None:
+        """Writes node embeddings to the sidecar file as float32 vectors, skipping the write if unchanged."""
+        sidecar_path = self.root / EMBEDDINGS_FILE
+        if embeddings == self._saved_embeddings or (not embeddings and not sidecar_path.exists()):
+            self._saved_embeddings = embeddings
+            return
+
+        import numpy as np
+        from safetensors.numpy import save_file
+
+        tensors = {
+            f"{node}{EMBEDDING_KEY_SEPARATOR}{embedding_type}": np.ascontiguousarray(vector, dtype=np.float32)
+            for node, node_embeddings in embeddings.items()
+            for embedding_type, vector in node_embeddings.items()
+        }
+        temp_path = self.root / f"{EMBEDDINGS_FILE}.{uuid.uuid4().hex[:8]}.tmp"
+        save_file(tensors, str(temp_path))
+        os.replace(str(temp_path), str(sidecar_path))
+        self._saved_embeddings = embeddings
 
     def save(self):
         check_dir(self.root)
@@ -130,24 +188,32 @@ class ParameterGraph:
         temp_path = self.root / f"{DICT_FILE}.{uuid.uuid4().hex[:8]}.tmp"
         bak_path = self.root / f"{DICT_FILE}.bak"
 
+        graph_data = nx.cytoscape.cytoscape_data(self.G, ident='id')
+        # Embeddings live in a binary sidecar file; cytoscape_data copies each node's dict, so this
+        # leaves the in-memory graph untouched
+        for node in graph_data['elements']['nodes']:
+            if 'embeddings' in node['data']:
+                node['data']['embeddings'] = {}
         data = {
             'project_name': self.project_name or self.root.name,
-            'graph': nx.cytoscape.cytoscape_data(self.G, ident='id'),
+            'graph': graph_data,
         }
 
         # 1. Serialize in-memory FIRST. If this fails, the file on disk is untouched.
-        json_str = json.dumps(data, indent=4, default=_safe_json_default)
+        json_str = json.dumps(data, separators=(',', ':'), default=_safe_json_default)
 
-        # 2. Write to temporary file with explicit flush and fsync
+        # 2. Write the embeddings sidecar, then the graph to a temporary file with explicit flush and fsync
+        self._save_embeddings(self._collect_embeddings())
         with open(temp_path, 'w', encoding='utf-8') as df:
             df.write(json_str)
             df.flush()
             os.fsync(df.fileno())
 
-        # 3. Create rolling backup if target file currently exists and is non-empty
+        # 3. Rotate the current file into the rolling backup (a rename, not a copy). load() falls back
+        # to the backup if the process stops before the swap below
         if data_path.exists() and data_path.stat().st_size > 0:
             try:
-                shutil.copy2(str(data_path), str(bak_path))
+                os.replace(str(data_path), str(bak_path))
             except Exception as e:
                 print(f"[ParameterGraph] Warning: Failed to create backup {bak_path}: {e}")
 
@@ -177,15 +243,24 @@ class ParameterGraph:
                 raise final_err
 
     def to_json(self, mode='batch'):
+        """Returns the graph in Cytoscape format for the frontend, without node embedding vectors."""
         if mode == 'batch':
-            return nx.cytoscape.cytoscape_data(self.G, ident='id')
+            graph_data = nx.cytoscape.cytoscape_data(self.G, ident='id')
         elif mode == 'cluster':
             C = nx.DiGraph()
             for node, data in self.G.nodes(data=True):
                 if data['type'] == 'audio':
                     C.add_node(node, **data)
                     C.nodes[node].pop('parent', None)
-            return nx.cytoscape.cytoscape_data(C, ident='id')
+            graph_data = nx.cytoscape.cytoscape_data(C, ident='id')
+        else:
+            return None
+
+        # cytoscape_data copies each node's dict, so this leaves the graph untouched
+        for node in graph_data['elements']['nodes']:
+            if 'embeddings' in node['data']:
+                node['data']['embeddings'] = {}
+        return graph_data
         
     def add_element(self, ele: GraphElement, allow_duplicates: bool = True) -> bool:
         """

@@ -221,8 +221,6 @@ def mutate_evolution_task(
                 node_engine_args, dumped_params, mutation_group
             ) = _resolve_parents_and_group()
 
-        baseline_elements = parent_nodes[0].context.get("baseline_elements")
-        baseline_file_path = parent_nodes[0].context.get("baseline_file_path")
         group_id = mutation_group.id
 
         mutation_strategy = get_lora_mutation_strategy(
@@ -269,8 +267,6 @@ def mutate_evolution_task(
             saved_genome_path = output_dir / f"{child_ind_id}.safetensors"
 
             child_context = copy.deepcopy(merged_context)
-            child_context["baseline_elements"] = baseline_elements
-            child_context["baseline_file_path"] = str(baseline_file_path) if baseline_file_path else None
             child_context["mutation_operation"] = {
                 "lora_noise": lora_noise,
                 "active_flip_prob": active_flip_prob,

@@ -62,6 +62,38 @@ class TestAtomicGraphSave(unittest.TestCase):
         finally:
             shutil.rmtree(tmp_dir)
 
+    def test_embeddings_saved_to_sidecar(self):
+        tmp_dir = tempfile.mkdtemp()
+
+        try:
+            clap = np.random.rand(512).astype(np.float32).tolist()
+            pg = ParameterGraph(tmp_dir)
+            pg.project_name = "EmbeddingSidecarTest"
+            pg.G.add_node("audio_1", type="audio", embeddings={"clap": clap})
+            pg.G.add_node("audio_2", type="audio", embeddings={})
+            pg.save()
+
+            # Embeddings are kept out of graph.json and the frontend payload, but stay in memory
+            with open(Path(tmp_dir) / "graph.json", "r", encoding="utf-8") as f:
+                saved_nodes = {n["data"]["id"]: n["data"] for n in json.load(f)["graph"]["elements"]["nodes"]}
+            self.assertEqual(saved_nodes["audio_1"]["embeddings"], {})
+            self.assertTrue((Path(tmp_dir) / "embeddings.safetensors").exists())
+            self.assertEqual(pg.to_json()["elements"]["nodes"][0]["data"]["embeddings"], {})
+            self.assertEqual(pg.G.nodes["audio_1"]["embeddings"]["clap"], clap)
+
+            pg_loaded = ParameterGraph(tmp_dir)
+            self.assertTrue(pg_loaded.load())
+            self.assertEqual(pg_loaded.G.nodes["audio_1"]["embeddings"]["clap"], clap)
+
+            # Updated embeddings are rewritten on the next save
+            pg_loaded.G.nodes["audio_2"]["embeddings"]["clap"] = clap
+            pg_loaded.save()
+            pg_reloaded = ParameterGraph(tmp_dir)
+            pg_reloaded.load()
+            self.assertEqual(pg_reloaded.G.nodes["audio_2"]["embeddings"]["clap"], clap)
+        finally:
+            shutil.rmtree(tmp_dir)
+
     def test_safe_json_serialization(self):
         tmp_dir = tempfile.mkdtemp()
         

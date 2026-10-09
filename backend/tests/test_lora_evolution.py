@@ -695,18 +695,22 @@ class TestLoRAEvolution(unittest.TestCase):
             self.assertIsNotNone(completed_data, "Job did not complete in time")
             res_data = completed_data
 
-            # 5. Verify no baseline grating node was added to the graph database
+            # 5. Verify the baseline grating was added once, as a hidden node referenced by ID
             g_reloaded = ParameterGraph(tmp_dir)
             g_reloaded.load()
-            
-            # Verify the individual nodes contain the baseline elements and baseline path in context
+
             individual_id = res_data["individual_ids"][0]
             ind_node = g_reloaded.get_element(individual_id)
             self.assertEqual(ind_node.type, "individual")
-            self.assertIn("baseline_elements", ind_node.context)
-            self.assertIn("baseline_file_path", ind_node.context)
+            self.assertNotIn("baseline_elements", ind_node.context)
+            self.assertNotIn("baseline_file_path", ind_node.context)
 
-            # 6. Verify /express_individual works on this individual using its self-contained context blueprint
+            baseline_node = g_reloaded.get_element(ind_node.baseline_grating_id)
+            self.assertEqual(baseline_node.type, "grating")
+            self.assertTrue(baseline_node.context.get("is_baseline"))
+            self.assertEqual(g_reloaded.get_element(baseline_ind_id).baseline_grating_id, baseline_node.id)
+
+            # 6. Verify /express_individual works on this individual through its baseline grating
             express_payload = {
                 "individual_id": individual_id
             }

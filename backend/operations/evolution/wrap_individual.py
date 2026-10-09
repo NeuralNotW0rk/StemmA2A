@@ -169,6 +169,9 @@ async def wrap_precursor_as_individual(
     if err_dict is not None:
         return err_dict, err_code  # type: ignore
 
+    # Baseline grating created below for this precursor, added to the graph alongside the individual
+    new_baseline_grating = None
+
     # If grating node exists
     if baseline_grating_id:
         if graph_lock is not None:
@@ -177,7 +180,6 @@ async def wrap_precursor_as_individual(
                 if not isinstance(baseline_grating, Grating):
                     return {"error": f"Node '{baseline_grating_id}' is not a valid grating."}, 400
                 base_grating_path = baseline_grating.file.path
-                baseline_elements = baseline_grating.elements
                 baseline_name = baseline_grating.name
                 diff_base_grating = DiffractureGrating.load(base_grating_path)
         else:
@@ -185,12 +187,10 @@ async def wrap_precursor_as_individual(
             if not isinstance(baseline_grating, Grating):
                 return {"error": f"Node '{baseline_grating_id}' is not a valid grating."}, 400
             base_grating_path = baseline_grating.file.path
-            baseline_elements = baseline_grating.elements
             baseline_name = baseline_grating.name
             diff_base_grating = DiffractureGrating.load(base_grating_path)
     elif isinstance(precursor_node, Grating):
         base_grating_path = precursor_node.file.path
-        baseline_elements = precursor_node.elements
         baseline_name = precursor_node.name
         diff_base_grating = DiffractureGrating.load(base_grating_path)
         baseline_grating_id = precursor_node.id
@@ -224,9 +224,11 @@ async def wrap_precursor_as_individual(
 
         engine = engine_provider.get_engine()
         grating_name = f"baseline_{uuid.uuid4().hex[:8]}"
-        baseline_grating = await engine.create_grating(model_element, grating_name, elements_input)
-        base_grating_path = baseline_grating.file.path
-        baseline_elements = baseline_grating.elements
+        new_baseline_grating = await engine.create_grating(model_element, grating_name, elements_input)
+        # is_baseline hides the node in the graph view; individuals reference it by baseline_grating_id
+        new_baseline_grating.context = {"is_baseline": True}
+        baseline_grating_id = new_baseline_grating.id
+        base_grating_path = new_baseline_grating.file.path
         baseline_name = precursor_node.name or precursor_node.alias or "Artifact"
         diff_base_grating = DiffractureGrating.load(base_grating_path)
 
@@ -256,9 +258,10 @@ async def wrap_precursor_as_individual(
     # Prepare context
     ind_context = copy.deepcopy(getattr(precursor_node, "context", {}) or {})
     ind_context["model_id"] = model_id
-    ind_context["baseline_elements"] = baseline_elements
-    ind_context["baseline_file_path"] = str(base_grating_path)
     ind_context["precursor_artifact_id"] = precursor_node_id
+    # The baseline is referenced by baseline_grating_id; drop any copies inherited from the precursor
+    for key in ("baseline_elements", "baseline_file_path", "baseline_grating"):
+        ind_context.pop(key, None)
 
     slug = generate_slug(2)
     custom_name = data.get("name") or params.get("name") or f"{baseline_name} - Baseline ({slug})"
@@ -274,6 +277,9 @@ async def wrap_precursor_as_individual(
     )
 
     def _link_and_save() -> None:
+        if new_baseline_grating is not None:
+            param_graph.add_element(new_baseline_grating)
+            param_graph.link(model_element, new_baseline_grating, relation='binds_to')
         param_graph.add_element(individual_node, allow_duplicates=False)
         param_graph.link(model_element, individual_node, relation='binds_to')
         param_graph.link(precursor_node, individual_node, relation='precursor')

@@ -1005,7 +1005,8 @@ def link_artifact_dependencies(element: GraphElement, param_graph) -> int:
     if hasattr(element, 'context') and isinstance(element.context, dict):
         op_name = element.context.get("operation")
         for key, value in element.context.items():
-            if key in ('job_id', 'group_id', 'batch_id', 'parent_id', 'execution_mode'):
+            # The baseline grating is reached through the individual, so it is not a direct source
+            if key in ('job_id', 'group_id', 'batch_id', 'parent_id', 'execution_mode', 'baseline_grating_id'):
                 continue
             if key.endswith('_id') and isinstance(value, str):
                 if op_name == "generate" and key in ("source_audio_id", "source_audio"):
