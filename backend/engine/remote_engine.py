@@ -13,6 +13,24 @@ from .engine import Engine
 from param_graph.registry import resolve_element
 from utils.uid import path_from_uid
 
+# The engine service sits behind a proxy (Cloudflare) that drops any single request still running after
+# about 100 s. Assets are therefore sent in small chunks, a few assets at a time, so each request gets
+# enough of the upload bandwidth to finish quickly however many jobs are queued at once.
+UPLOAD_CHUNK_SIZE = 4 * 1024 * 1024
+MAX_CONCURRENT_UPLOADS = int(os.environ.get("REMOTE_ENGINE_MAX_UPLOADS", 2))
+# Attempts per asset; a failed asset is re-sent from its first chunk, which restarts it on the server
+UPLOAD_ATTEMPTS = 3
+# Rounds of uploading missing assets before giving up on an /execute request
+MAX_UPLOAD_ROUNDS = 3
+
+
+def _request_error(e: Exception) -> Exception:
+    """Describes a failed engine service request, telling an unreachable server apart from a failed request."""
+    if isinstance(e, aiohttp.ClientResponseError):
+        hint = " (timed out in transit through the proxy)" if e.status == 524 else ""
+        return Exception(f"Engine service request to {e.request_info.url} failed: {e.status} {e.message}{hint}")
+    return Exception("Cannot reach engine service. Please verify that the remote server is running.")
+
 
 def _format_bytes(num_bytes: int | float) -> str:
     if num_bytes < 1024:
@@ -43,12 +61,17 @@ class RemoteEngine(Engine):
         self._active_uploads: dict[str, _TransferTracker] = {}
         self._active_downloads: dict[str, _TransferTracker] = {}
         self._transfer_lock = threading.Lock()
+        # Upload slots shared by every thread and event loop (see MAX_CONCURRENT_UPLOADS)
+        self._upload_slots = threading.BoundedSemaphore(MAX_CONCURRENT_UPLOADS)
 
-    async def _wait_for_transfer(self, tracker: _TransferTracker, timeout: float = 600.0) -> bool:
-        """Asynchronously waits for an in-flight transfer tracker to complete across any event loop or thread."""
+    async def _wait_for_transfer(self, tracker: _TransferTracker, timeout: float | None = 600.0) -> bool:
+        """
+        Asynchronously waits for an in-flight transfer tracker to complete across any event loop or thread.
+        A timeout of None waits until the transfer finishes.
+        """
         start_time = time.time()
         while not tracker.done_event.is_set():
-            if time.time() - start_time > timeout:
+            if timeout is not None and time.time() - start_time > timeout:
                 return False
             await asyncio.sleep(0.02)
         return tracker.success
@@ -128,6 +151,7 @@ class RemoteEngine(Engine):
 
         try:
             async with aiohttp.ClientSession(headers=auth_headers, timeout=timeout) as session:
+                upload_rounds = 0
                 while True:
                     async with session.post(f"{self.remote_url}/execute", data=json.dumps(payload),
                                              headers={'Content-Type': 'application/json'}) as response:
@@ -136,10 +160,18 @@ class RemoteEngine(Engine):
                             missing_uids = error_details.get("missing_uids", [])
                             if not missing_uids:
                                 response.raise_for_status()
-                            
-                            can_retry = await self.upload_missing_assets(missing_uids, local_assets, session)
-                            if not can_retry:
-                                response.raise_for_status()
+                            if upload_rounds >= MAX_UPLOAD_ROUNDS:
+                                raise Exception(
+                                    f"Engine service still reports missing assets after {upload_rounds} upload "
+                                    f"rounds: {', '.join(missing_uids)}"
+                                )
+
+                            upload_rounds += 1
+                            if not await self.upload_missing_assets(missing_uids, local_assets, session):
+                                raise Exception(
+                                    f"Could not upload asset(s) required by the engine service "
+                                    f"({', '.join(missing_uids)}); see the backend log for details."
+                                )
                             continue
                         
                         response.raise_for_status()
@@ -152,7 +184,7 @@ class RemoteEngine(Engine):
                             
                         return job_id
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-            raise Exception("Cannot reach engine service. Please verify that the remote server is running.") from e
+            raise _request_error(e) from e
 
     async def cancel_job(self, job_id: str) -> None:
         """Sends a cancellation request to the remote engine."""
@@ -291,7 +323,7 @@ class RemoteEngine(Engine):
 
                     return status_info
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-            raise Exception("Cannot reach engine service. Please verify that the remote server is running.") from e
+            raise _request_error(e) from e
 
     async def _upload_single_asset(self, asset_uid: str, asset_path: str, session: aiohttp.ClientSession) -> bool:
         """Uploads a single asset file or directory archive to the remote engine."""
@@ -317,40 +349,23 @@ class RemoteEngine(Engine):
                 return False
 
             file_size = os.path.getsize(upload_path)
-            chunk_size = 10 * 1024 * 1024  # 10 MB
-            total_chunks = max(1, (file_size + chunk_size - 1) // chunk_size)
-            
-            asset_start = time.time()
-            uploaded_asset_bytes = 0
+            total_chunks = max(1, (file_size + UPLOAD_CHUNK_SIZE - 1) // UPLOAD_CHUNK_SIZE)
 
-            print(f"[RemoteEngine Upload] Uploading asset '{asset_uid}' ({_format_bytes(file_size)}, {total_chunks} chunk(s))...")
-            
-            with open(upload_path, 'rb') as f:
-                for i in range(total_chunks):
-                    chunk_data = f.read(chunk_size)
-                    chunk_len = len(chunk_data)
-                    uploaded_asset_bytes += chunk_len
-
-                    data = aiohttp.FormData()
-                    data.add_field('uid', asset_uid)
-                    data.add_field('chunk_index', str(i))
-                    data.add_field('total_chunks', str(total_chunks))
-                    data.add_field('total_size', str(file_size))
-                    data.add_field('file', chunk_data, filename=asset_uid, content_type='application/octet-stream')
-
-                    chunk_start = time.time()
-                    async with session.post(f"{self.remote_url}/upload", data=data) as response:
-                        response.raise_for_status()
-                    chunk_duration = max(time.time() - chunk_start, 0.001)
-                    chunk_speed = (chunk_len / (1024 * 1024)) / chunk_duration
-
-                    pct = (uploaded_asset_bytes / file_size) * 100 if file_size > 0 else 100
-                    print(f"  -> Chunk {i + 1}/{total_chunks} sent: {_format_bytes(uploaded_asset_bytes)} / {_format_bytes(file_size)} ({pct:.1f}%) @ {chunk_speed:.2f} MB/s")
-
-            asset_elapsed = max(time.time() - asset_start, 0.001)
-            asset_speed = (file_size / (1024 * 1024)) / asset_elapsed
-            print(f"[RemoteEngine Upload] Uploaded '{asset_uid}' in {asset_elapsed:.2f}s (avg {asset_speed:.2f} MB/s)")
-            return True
+            # Wait for an upload slot without blocking this event loop
+            while not self._upload_slots.acquire(blocking=False):
+                await asyncio.sleep(0.05)
+            try:
+                for attempt in range(1, UPLOAD_ATTEMPTS + 1):
+                    try:
+                        await self._send_asset_chunks(asset_uid, upload_path, file_size, total_chunks, session)
+                        return True
+                    except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                        if attempt == UPLOAD_ATTEMPTS:
+                            raise
+                        print(f"[RemoteEngine Upload] Attempt {attempt}/{UPLOAD_ATTEMPTS} for '{asset_uid}' failed ({e}); retrying...")
+                        await asyncio.sleep(2 * attempt)
+            finally:
+                self._upload_slots.release()
         except Exception as e:
             print(f"[RemoteEngine Upload] Error uploading asset '{asset_uid}': {e}")
             return False
@@ -360,6 +375,46 @@ class RemoteEngine(Engine):
                     os.remove(temp_zip_path)
                 except Exception as e:
                     print(f"Warning: failed to clean up temp zip file {temp_zip_path}: {e}")
+
+    async def _send_asset_chunks(
+        self,
+        asset_uid: str,
+        upload_path: str,
+        file_size: int,
+        total_chunks: int,
+        session: aiohttp.ClientSession,
+    ) -> None:
+        """Sends a file to the engine service chunk by chunk, starting from the first chunk."""
+        asset_start = time.time()
+        uploaded_asset_bytes = 0
+
+        print(f"[RemoteEngine Upload] Uploading asset '{asset_uid}' ({_format_bytes(file_size)}, {total_chunks} chunk(s))...")
+
+        with open(upload_path, 'rb') as f:
+            for i in range(total_chunks):
+                chunk_data = f.read(UPLOAD_CHUNK_SIZE)
+                chunk_len = len(chunk_data)
+                uploaded_asset_bytes += chunk_len
+
+                data = aiohttp.FormData()
+                data.add_field('uid', asset_uid)
+                data.add_field('chunk_index', str(i))
+                data.add_field('total_chunks', str(total_chunks))
+                data.add_field('total_size', str(file_size))
+                data.add_field('file', chunk_data, filename=asset_uid, content_type='application/octet-stream')
+
+                chunk_start = time.time()
+                async with session.post(f"{self.remote_url}/upload", data=data) as response:
+                    response.raise_for_status()
+                chunk_duration = max(time.time() - chunk_start, 0.001)
+                chunk_speed = (chunk_len / (1024 * 1024)) / chunk_duration
+
+                pct = (uploaded_asset_bytes / file_size) * 100 if file_size > 0 else 100
+                print(f"  -> Chunk {i + 1}/{total_chunks} sent: {_format_bytes(uploaded_asset_bytes)} / {_format_bytes(file_size)} ({pct:.1f}%) @ {chunk_speed:.2f} MB/s")
+
+        asset_elapsed = max(time.time() - asset_start, 0.001)
+        asset_speed = (file_size / (1024 * 1024)) / asset_elapsed
+        print(f"[RemoteEngine Upload] Uploaded '{asset_uid}' in {asset_elapsed:.2f}s (avg {asset_speed:.2f} MB/s)")
 
     async def upload_missing_assets(self, missing_uids: list[str], local_assets: dict[str, str], session: aiohttp.ClientSession) -> bool:
         """Synchronizes missing assets to the remote engine, deduplicating parallel in-flight uploads across threads and event loops."""
@@ -398,7 +453,9 @@ class RemoteEngine(Engine):
                         del self._active_uploads[asset_uid]
 
         upload_coros = [_do_upload(uid, tr, pth) for uid, tr, pth in initiator_tasks]
-        wait_coros = [self._wait_for_transfer(tr, timeout=float(self.timeout)) for _, tr in waiter_trackers]
+        # The uploading task always settles its tracker (its requests time out and retries are bounded),
+        # so waiters follow it rather than timing out while it is queued for an upload slot
+        wait_coros = [self._wait_for_transfer(tr, timeout=None) for _, tr in waiter_trackers]
 
         all_success = True
         if upload_coros or wait_coros:
