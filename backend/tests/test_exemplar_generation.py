@@ -15,7 +15,7 @@ from param_graph.elements.artifacts.grating_element import Grating
 from param_graph.elements.collections.group_element import Group
 from param_graph.elements.base_elements import Asset
 from evolution.lora_genome import LoRAGene, LoRAGenome
-from operations.evolution.resolution import find_exemplar_audio, resolve_exemplar_context
+from operations.evolution.resolution import find_exemplar_audio, resolve_exemplar_context, collect_exemplar_presets
 from diffracture.topology.grating import Grating as DiffractureGrating
 from engine.engine_provider import EngineProvider
 import app as app_module
@@ -758,6 +758,55 @@ class TestExemplarGeneration(unittest.TestCase):
         self.assertEqual(grandchild_context.get("prompt"), "deep house baseline")
         self.assertEqual(grandchild_context.get("seconds_total"), 8.0)
         self.assertEqual(grandchild_context.get("truncation"), 0.65)
+
+    def test_collect_exemplar_presets(self) -> None:
+        """Verify lineage exemplars are merged into distinct presets with per-target coverage."""
+        form_config = [
+            {"name": "prompt", "type": "textarea", "defaultValue": "default prompt"},
+            {"name": "seed", "type": "integer", "defaultValue": 0},
+            {"name": "init_audio", "type": "node", "filter": {"type": "audio"}},
+        ]
+
+        def add_individual(ind_id: str, generation: int, parent: Individual | None = None) -> Individual:
+            context = {"precursor_artifact_id": "precursor_audio"}
+            if parent:
+                context["lineage"] = {"parent_ids": [parent.id]}
+            ind = Individual(
+                id=ind_id, name=ind_id, generation=generation, base_model_id="model_test", context=context,
+                file=Asset(path=f"{ind_id}.safetensors", uid=ind_id, extension=".safetensors"),
+            )
+            self.graph.add_element(ind)
+            if parent:
+                self.graph.link(parent, ind, relation="parent")
+            return ind
+
+        def add_exemplar(audio_id: str, owner: Individual, context: dict) -> None:
+            audio = Audio(id=audio_id, name=audio_id, context=context,
+                          file=Asset(path=f"{audio_id}.wav", uid=audio_id, extension=".wav"))
+            self.graph.add_element(audio)
+            self.graph.update_element(audio_id, {"parent": owner.id})
+
+        root = add_individual("root", 0)
+        add_exemplar("precursor_audio", root, {"prompt": "kick", "seed": 1, "individual_ids": ["root"]})
+        add_exemplar("root_snare", root, {"prompt": "snare", "init_audio_id": "some_audio"})
+        child_a = add_individual("child_a", 1, root)
+        child_b = add_individual("child_b", 1, root)
+        # Same parameters as the root's kick exemplar, generated on child_a
+        add_exemplar("child_a_kick", child_a, {"prompt": "kick", "seed": 1, "individual_ids": ["child_a"]})
+
+        presets = collect_exemplar_presets([child_a.id, child_b.id], self.graph, form_config)
+
+        self.assertEqual(len(presets), 2)
+        kick, snare = presets
+        self.assertEqual(kick["params"], {"prompt": "kick", "seed": 1, "init_audio_id": None})
+        self.assertEqual(kick["covered_ids"], ["child_a"])
+        self.assertEqual([(s["audio_id"], s["distance"]) for s in kick["sources"]],
+                         [("child_a_kick", 0), ("precursor_audio", 1)])
+        # Missing seed falls back to the field default; node inputs are kept by ID
+        self.assertEqual(snare["params"], {"prompt": "snare", "seed": 0, "init_audio_id": "some_audio"})
+        self.assertEqual(snare["covered_ids"], [])
+        # Descendants inherit precursor_artifact_id in context, but the precursor stays the root's exemplar
+        self.assertEqual(collect_exemplar_presets([child_b.id], self.graph, form_config)[0]["covered_ids"], [])
 
     def test_exemplar_generation_inherits_parent_exemplar_context(self) -> None:
         """Verify that dispatching generate for an individual inherits parent exemplar parameters and merges overrides."""

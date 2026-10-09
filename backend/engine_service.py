@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from engine.engine_provider import EngineProvider
 from utils.uid import path_from_uid
 from utils.migrations import run_global_migrations
+from utils.log_capture import start_log_capture
 from param_graph.registry import resolve_element
 
 
@@ -363,6 +364,8 @@ def upload():
 # --------------------
 
 if __name__ == "__main__":
+    # Started here rather than at import so test runs do not write to the service log
+    start_log_capture(data_cache_root / "logs", "engine_service")
     print(f"Starting StemmA2A Engine Service on device: {device_accelerator}")
     app.run(
         host="0.0.0.0",

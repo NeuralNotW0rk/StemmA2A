@@ -587,6 +587,21 @@ app.whenReady().then(async (): Promise<void> => {
     return await response.json()
   })
 
+  ipcMain.handle('getExemplarPresets', async (_event, individualIds: string[]) => {
+    const response = await fetchWithAuth(`${BACKEND_URL}/exemplar_presets`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ individual_ids: individualIds })
+    })
+    if (!response.ok) {
+      const errorBody = await response.text()
+      throw new Error(
+        `Failed to get exemplar presets. Status: ${response.status}. Error: ${errorBody}`
+      )
+    }
+    return await response.json()
+  })
+
   async function _getAdapterConfig(adapterName: string): Promise<any> {
     try {
       const response = await fetchWithAuth(`${BACKEND_URL}/adapter_config/${adapterName}`)

@@ -19,7 +19,14 @@
   import { parseSequence, numericSequenceError } from '../../utils/sequence'
   import DynamicForm from '../DynamicForm.svelte'
   import NodeSelectorList from '../NodeSelectorList.svelte'
-  import type { ErrorInfo, NodeListItem, GratingOverride, GratingListItem } from '../../utils/types'
+  import ExemplarPresetList from '../ExemplarPresetList.svelte'
+  import type {
+    ErrorInfo,
+    NodeListItem,
+    GratingOverride,
+    GratingListItem,
+    ExemplarPreset
+  } from '../../utils/types'
 
   let { onClose, onError } = $props<{
     onClose: () => void
@@ -174,6 +181,104 @@
   let isReplicated = $derived(!!$contextStore)
   let addToSameGroup = $state(true)
 
+  // Generating exemplars for individuals first offers to repeat the generations of exemplars
+  // across their lineages; "Add New Exemplar" falls through to the standard generate form
+  let isExemplarGeneration = $derived.by(() => {
+    const node = $initiatorNodeStore
+    if ($selectedOperation?.name !== 'generate' || isReplicated || !node) return false
+    const type = node.type === 'group' ? node.member_type : node.type
+    return type === 'individual'
+  })
+  let exemplarView = $state<'presets' | 'form'>('presets')
+  let exemplarPresets = $state<ExemplarPreset[]>([])
+  // Individuals the exemplars are generated for (groups expanded by the backend)
+  let exemplarTargetIds = $state<string[]>([])
+  let selectedPresetKeys = $state<string[]>([])
+  let presetsLoading = $state(false)
+  let presetsRequest = 0
+
+  let presetJobCount = $derived(
+    exemplarPresets
+      .filter((preset) => selectedPresetKeys.includes(preset.key))
+      .reduce(
+        (count, preset) =>
+          count + exemplarTargetIds.filter((id) => !preset.covered_ids.includes(id)).length,
+        0
+      )
+  )
+
+  $effect(() => {
+    if (!isExemplarGeneration) return
+    const node = $initiatorNodeStore
+    const selected: string[] = Array.isArray(node?.selectedNodes)
+      ? node.selectedNodes
+          .filter((n: NodeData) => n?.type === 'individual')
+          .map((n: NodeData) => n.id)
+      : []
+    untrack(() => loadExemplarPresets(selected.length > 0 ? selected : [node.id]))
+  })
+
+  async function loadExemplarPresets(ids: string[]): Promise<void> {
+    const request = ++presetsRequest
+    presetsLoading = true
+    exemplarView = 'presets'
+    exemplarPresets = []
+    selectedPresetKeys = []
+    exemplarTargetIds = ids
+    try {
+      const res = await window.api.getExemplarPresets(ids)
+      if (request !== presetsRequest) return
+      if (Array.isArray(res?.individual_ids) && res.individual_ids.length > 0) {
+        exemplarTargetIds = res.individual_ids
+      }
+      exemplarPresets = res?.presets || []
+      // Preselect every preset that some target individual is still missing
+      selectedPresetKeys = exemplarPresets
+        .filter((preset) => exemplarTargetIds.some((id) => !preset.covered_ids.includes(id)))
+        .map((preset) => preset.key)
+    } catch (e: unknown) {
+      if (request !== presetsRequest) return
+      console.error('Failed to load exemplar presets:', e)
+      exemplarPresets = []
+    } finally {
+      if (request === presetsRequest) {
+        presetsLoading = false
+        if (exemplarPresets.length === 0) exemplarView = 'form'
+      }
+    }
+  }
+
+  // Switches to the generate form, starting from the nearest lineage exemplar's settings
+  function addNewExemplar(): void {
+    const nearest = exemplarPresets[0]
+    if (nearest) {
+      const prefill: Record<string, unknown> = {}
+      for (const [key, value] of Object.entries(nearest.params)) {
+        const nodeField = key.endsWith('_id')
+          ? fieldsConfig.find((f) => f.type === 'node' && f.name === key.slice(0, -3))
+          : undefined
+        if (nodeField) {
+          if (value) prefill[nodeField.name] = value
+        } else if (key !== 'gratings') {
+          prefill[key] = value
+        }
+      }
+      formData = { ...formData, ...prefill }
+    }
+    exemplarView = 'form'
+  }
+
+  function runExemplarPresets(): void {
+    for (const preset of exemplarPresets) {
+      if (!selectedPresetKeys.includes(preset.key)) continue
+      for (const id of exemplarTargetIds) {
+        if (preset.covered_ids.includes(id)) continue
+        startJob('GENERATE EXEMPLAR', { ...preset.params, individual_id: id }, 'generate')
+      }
+    }
+    onClose()
+  }
+
   onDestroy(() => {
     // Clear state on destroy
     selectedOperation.set(null)
@@ -225,7 +330,8 @@
         if (memberIds.length > 0) {
           const firstMember = $cyInstanceStore.getElementById(memberIds[0])
           if (firstMember && firstMember.length > 0) {
-            modelId = firstMember.data('base_model_id') || firstMember.data('context')?.model_id || null
+            modelId =
+              firstMember.data('base_model_id') || firstMember.data('context')?.model_id || null
           }
         }
       }
@@ -728,6 +834,17 @@
   }
 
   function runJob(jobName: string, payload: unknown, opName: string): void {
+    // A new exemplar from the form is generated for every target individual
+    if (isExemplarGeneration && exemplarTargetIds.length > 0) {
+      for (const id of exemplarTargetIds) {
+        startJob(jobName, { ...(payload as Record<string, unknown>), individual_id: id }, opName)
+      }
+      return
+    }
+    startJob(jobName, payload, opName)
+  }
+
+  function startJob(jobName: string, payload: unknown, opName: string): void {
     startExecution(jobName, payload, opName).catch((err: unknown) => {
       console.error('Execution failed:', err)
       onError({
@@ -1067,14 +1184,40 @@
 
 <div class="view-container">
   <div class="view-content">
-    {#if isLoading}
+    {#if isExemplarGeneration && exemplarView === 'presets'}
+      <p class="op-description">
+        Repeat the generations of exemplars from this lineage on the selected
+        {exemplarTargetIds.length > 1 ? `${exemplarTargetIds.length} individuals` : 'individual'},
+        or add a new exemplar.
+      </p>
+      {#if presetsLoading}
+        <p class="centered-text">Finding lineage exemplars...</p>
+      {:else}
+        <ExemplarPresetList
+          presets={exemplarPresets}
+          targetIds={exemplarTargetIds}
+          bind:selectedKeys={selectedPresetKeys}
+          onAddNew={addNewExemplar}
+        />
+      {/if}
+    {:else if isLoading}
       <p class="centered-text">Loading configuration...</p>
     {:else if error}
       <div class="error-message">
         <p>Error: {error}</p>
       </div>
     {:else if $selectedOperation}
+      {#if isExemplarGeneration && exemplarPresets.length > 0}
+        <button class="back-btn" onclick={() => (exemplarView = 'presets')}>
+          ← Lineage exemplars
+        </button>
+      {/if}
       <p class="op-description">{activeDescription || 'No description available.'}</p>
+      {#if isExemplarGeneration && exemplarTargetIds.length > 1}
+        <p class="op-description">
+          The new exemplar will be generated for each of the {exemplarTargetIds.length} selected individuals.
+        </p>
+      {/if}
 
       {#if fieldsConfig && fieldsConfig.length > 0}
         <DynamicForm
@@ -1127,21 +1270,31 @@
   <div class="panel-actions">
     <button onclick={onClose} disabled={isRunning}>Cancel</button>
 
-    <button
-      class="primary"
-      onclick={execute}
-      disabled={isLoading ||
-        !$selectedOperation ||
-        (fieldsConfig?.length > 0 && !isFormValid) ||
-        !gratingStrengthsValid ||
-        isRunning}
-    >
-      {#if isRunning}
-        Running...
-      {:else}
-        Run
-      {/if}
-    </button>
+    {#if isExemplarGeneration && exemplarView === 'presets'}
+      <button
+        class="primary"
+        onclick={runExemplarPresets}
+        disabled={presetsLoading || presetJobCount === 0}
+      >
+        {presetJobCount === 1 ? 'Generate 1 Exemplar' : `Generate ${presetJobCount} Exemplars`}
+      </button>
+    {:else}
+      <button
+        class="primary"
+        onclick={execute}
+        disabled={isLoading ||
+          !$selectedOperation ||
+          (fieldsConfig?.length > 0 && !isFormValid) ||
+          !gratingStrengthsValid ||
+          isRunning}
+      >
+        {#if isRunning}
+          Running...
+        {:else}
+          Run
+        {/if}
+      </button>
+    {/if}
   </div>
 </div>
 
@@ -1161,6 +1314,20 @@
     font-size: 0.9rem;
     margin-bottom: 1.5rem;
     line-height: 1.4;
+  }
+  .back-btn {
+    min-width: 0;
+    min-height: 0;
+    padding: 0.25rem 0.5rem;
+    margin-bottom: 0.75rem;
+    font-size: 0.85rem;
+    background: none;
+    border: none;
+    color: var(--color-text-muted, #aaa);
+    cursor: pointer;
+  }
+  .back-btn:hover {
+    color: var(--color-overlay-text);
   }
   .centered-text {
     text-align: center;

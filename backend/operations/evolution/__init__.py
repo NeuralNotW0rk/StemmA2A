@@ -39,7 +39,11 @@ from .expression import express_individual_to_grating_artifact
 from .resolution import (
     extract_individual_parent_ids,
     find_exemplar_audio,
+    find_exemplar_audios,
+    iter_lineage,
     resolve_exemplar_context,
+    exemplar_generation_params,
+    collect_exemplar_presets,
 )
 
 
@@ -91,7 +95,11 @@ __all__ = [
     "express_individual_to_grating_artifact",
     "extract_individual_parent_ids",
     "find_exemplar_audio",
+    "find_exemplar_audios",
+    "iter_lineage",
     "resolve_exemplar_context",
+    "exemplar_generation_params",
+    "collect_exemplar_presets",
 ]
 
 

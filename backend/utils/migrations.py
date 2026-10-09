@@ -156,7 +156,18 @@ def migrate_baseline_references(project_path: Path) -> None:
             grating_by_path[key] = grating_id
         return grating_by_path[key]
 
+    def referenced_baseline(ctx):
+        """Returns the baseline grating of the first individual an artifact context was generated from."""
+        individual_ids = list(ctx.get("individual_ids") or [])
+        individual_ids += [i.get("id") for i in ctx.get("individuals") or [] if isinstance(i, dict)]
+        for ind_id in individual_ids:
+            grating_id = (node_data.get(ind_id) or {}).get("baseline_grating_id")
+            if grating_id in node_data:
+                return grating_id
+        return None
+
     modified = False
+    # Individuals (and copies of their contexts) first, so artifacts can then follow them to their baseline
     for d in list(node_data.values()):
         ctx = d.get("context")
         if not isinstance(ctx, dict):
@@ -179,16 +190,18 @@ def migrate_baseline_references(project_path: Path) -> None:
                     d["baseline_grating_id"] = grating_id
                 modified = True
 
-        serialized = ctx.get("baseline_grating")
+    for d in list(node_data.values()):
+        ctx = d.get("context")
+        serialized = ctx.get("baseline_grating") if isinstance(ctx, dict) else None
         if isinstance(serialized, dict):
+            # Serialized copies may carry paths anchored on a remote engine, so they are matched to
+            # an existing grating (by ID, source individual, or local path) and never create one
             grating_id = serialized.get("id")
             if grating_id not in node_data:
+                grating_id = referenced_baseline(ctx)
+            if grating_id is None:
                 file_info = serialized.get("file") if isinstance(serialized.get("file"), dict) else {}
-                grating_id = resolve_baseline(
-                    file_info.get("path"),
-                    serialized.get("elements"),
-                    serialized.get("base_model_id"),
-                )
+                grating_id = grating_by_path.get(normalize(file_info["path"])) if file_info.get("path") else None
             del ctx["baseline_grating"]
             if grating_id:
                 ctx["baseline_grating_id"] = grating_id

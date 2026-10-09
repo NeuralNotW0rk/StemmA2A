@@ -55,6 +55,7 @@ from utils.audio import load_audio, save_audio_to_buffer, save_audio
 from utils.form import create_dynamic_model
 from utils.uid import XXH3_64, path_from_uid
 from utils.migrations import run_global_migrations, run_project_migrations
+from utils.log_capture import start_log_capture
 from utils.semantic_interrogation import SemanticInterrogator
 
 from operations import (
@@ -80,6 +81,8 @@ from operations.evolution import (
     express_individual_to_grating_artifact,
     dispatch_mutate_operation,
     dispatch_recombine_operation,
+    extract_individual_parent_ids,
+    collect_exemplar_presets,
 )
 from operations.grating import dispatch_create_grating_operation
 
@@ -955,6 +958,41 @@ async def express_individual():
         return jsonify(resp), code
     except Exception as e:
         print(f"Failed to express individual: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+@app.route("/exemplar_presets", methods=["POST"])
+async def get_exemplar_presets():
+    """
+    Lists the distinct generation settings of the exemplars across the given individuals and their
+    ancestors, so the same generations can be repeated on those individuals.
+    Accepts individual and group IDs; groups are expanded to their member individuals.
+    """
+    if param_graph is None or engine_provider is None:
+        return jsonify({"error": "No project loaded"}), 400
+
+    try:
+        data = request.get_json() or {}
+        individual_ids = extract_individual_parent_ids(
+            data.get("individual_ids") or [], param_graph=param_graph, graph_lock=graph_lock
+        )
+        if not individual_ids:
+            return jsonify({"success": True, "individual_ids": [], "presets": []})
+
+        with graph_lock:
+            first_individual = param_graph.get_element(individual_ids[0])
+            model_element = param_graph.get_element(first_individual.base_model_id)
+        if not isinstance(model_element, Model):
+            return jsonify({"error": f"Individual '{first_individual.id}' has no valid base model."}), 400
+
+        engine = engine_provider.get_engine()
+        adapter_config = await engine.get_adapter_config(model_element.adapter)
+        form_config = adapter_config.get("generate", []) if isinstance(adapter_config, dict) else adapter_config
+
+        presets = collect_exemplar_presets(individual_ids, param_graph, form_config, graph_lock=graph_lock)
+        return jsonify({"success": True, "individual_ids": individual_ids, "presets": presets})
+    except Exception as e:
+        print(f"Failed to collect exemplar presets: {e}")
         traceback.print_exc()
         return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
@@ -2799,6 +2837,8 @@ def internal_error(error):
 # --------------------
 
 if __name__ == "__main__":
+    # Started here rather than at import so test runs do not write to the backend log
+    start_log_capture(data_cache_root / "logs", "backend")
     print(f"Starting StemmA2A backend on device: {device_accelerator}")
     app.run(
         host="127.0.0.1",

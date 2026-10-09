@@ -101,6 +101,10 @@ class TestMigrations(unittest.TestCase):
                               "base_model_id": "model_1", "context": dict(ind_context)}},
                     {"data": {"id": "audio_1", "type": "audio",
                               "context": {"prompt": "drums", "baseline_grating": serialized_grating}}},
+                    # Serialized on a remote engine: its path only exists there
+                    {"data": {"id": "audio_2", "type": "audio", "context": {"individual_ids": ["ind_2"],
+                              "baseline_grating": {**serialized_grating, "id": "grating_remote",
+                                                   "file": {"path": "/app/data/cache/gr/grating_remote"}}}}},
                 ],
                 "edges": [],
             }}}
@@ -128,6 +132,8 @@ class TestMigrations(unittest.TestCase):
             self.assertNotIn("baseline_grating", nodes["audio_1"]["context"])
             self.assertEqual(nodes["audio_1"]["context"]["baseline_grating_id"], baseline["id"])
             self.assertEqual(nodes["audio_1"]["context"]["prompt"], "drums")
+            self.assertEqual(nodes["audio_2"]["context"]["baseline_grating_id"], baseline["id"])
+            self.assertNotIn("baseline_grating", nodes["audio_2"]["context"])
             edge = migrated["graph"]["elements"]["edges"][0]["data"]
             self.assertEqual((edge["source"], edge["target"], edge["relation"]), ("model_1", baseline["id"], "binds_to"))
 

@@ -36,6 +36,7 @@ interface API {
   exportAudio: (names: string[], exportDir?: string) => Promise<any>
   getOperations: () => Promise<any>
   executeOperation: (data: any) => Promise<any>
+  getExemplarPresets: (individualIds: string[]) => Promise<any>
   removeElement: (elementId: string, keepChildren?: boolean) => Promise<any>
   removeElements: (elementIds: string[], keepChildren?: boolean) => Promise<any>
   logMessage: (message: string) => Promise<any>

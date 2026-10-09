@@ -43,6 +43,8 @@ const api = {
   expressIndividual: (data: unknown) => ipcRenderer.invoke('expressIndividual', data),
   getOperations: (): Promise<any> => ipcRenderer.invoke('getOperations'),
   executeOperation: (data: unknown): Promise<any> => ipcRenderer.invoke('executeOperation', data),
+  getExemplarPresets: (individualIds: string[]): Promise<any> =>
+    ipcRenderer.invoke('getExemplarPresets', individualIds),
   removeElement: (elementId: string, keepChildren?: boolean): Promise<any> =>
     ipcRenderer.invoke('removeElement', elementId, keepChildren),
   removeElements: (elementIds: string[], keepChildren?: boolean): Promise<any> =>

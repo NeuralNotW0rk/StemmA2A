@@ -56,3 +56,22 @@ export interface GratingListItem extends NodeListItem {
   loadedNodeId?: string
   overrides?: GratingOverride[]
 }
+
+// An exemplar in a target individual's lineage that a preset was found on
+export interface ExemplarPresetSource {
+  audio_id: string
+  audio_name: string
+  individual_id: string
+  individual_name: string
+  // Generations between the exemplar's individual and the nearest target (0 = the target itself)
+  distance: number
+}
+
+// A distinct set of generation parameters used by exemplars across the target individuals' lineages
+export interface ExemplarPreset {
+  key: string
+  params: Record<string, unknown>
+  sources: ExemplarPresetSource[]
+  // Target individuals that already have an exemplar generated with these parameters
+  covered_ids: string[]
+}
