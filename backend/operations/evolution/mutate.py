@@ -233,6 +233,7 @@ def mutate_evolution_task(
 
         job_ids: list[str] = []
         individual_ids: list[str] = []
+        parent_genomes: dict[str, LoRAGenome] = {}
 
         for i in range(offspring_size):
             if local_jobs is not None and parent_job_id in local_jobs:
@@ -244,11 +245,13 @@ def mutate_evolution_task(
 
             # Select parent (round-robin across supplied parent individuals)
             selected_parent = parent_nodes[i % len(parent_nodes)]
-            genome_path = param_graph.get_path_from_id(selected_parent.id) or selected_parent.file.path
-            parent_genome = LoRAGenome.load(genome_path)
+            parent_genome = parent_genomes.get(selected_parent.id)
+            if parent_genome is None:
+                genome_path = param_graph.get_path_from_id(selected_parent.id) or selected_parent.file.path
+                parent_genome = parent_genomes[selected_parent.id] = LoRAGenome.load(genome_path)
 
-            child_genome = copy.deepcopy(parent_genome)
-            child_genome = mutate(child_genome, mutation_strategy)
+            # Mutation builds a new genome and never modifies the parent's tensors in place
+            child_genome = mutate(parent_genome, mutation_strategy)
             if not isinstance(child_genome, LoRAGenome):
                 child_genome = LoRAGenome(list(child_genome))
 
@@ -303,7 +306,6 @@ def mutate_evolution_task(
 
                 mutation_group.member_ids.append(child_ind_id)
                 param_graph.update_element(mutation_group.id, {"member_ids": mutation_group.member_ids})
-                param_graph.save()
                 return True
 
             if graph_lock is not None:
@@ -354,6 +356,13 @@ def mutate_evolution_task(
                 except Exception as ex:
                     print(f"[_mutate_evolution_task] Warning: Failed to queue exemplar generation for individual {child_ind_id}: {ex}")
                     traceback.print_exc()
+
+        # Persist the whole batch in one write, since every save re-serializes the entire graph
+        if graph_lock is not None:
+            with graph_lock:
+                param_graph.save()
+        else:
+            param_graph.save()
 
         if local_jobs is not None and parent_job_id in local_jobs:
             local_jobs[parent_job_id]["status"] = "completed"

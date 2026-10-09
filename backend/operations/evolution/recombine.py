@@ -143,7 +143,7 @@ def recombine_evolution_task(
 
         def _setup_recombination() -> tuple[
             list[Individual], Any, str, Any, Any, int, int, dict[str, Any], str,
-            dict[str, Any], dict[str, Any], list[RecombinedOffspring], Group
+            dict[str, Any], dict[str, Any], list[str]
         ]:
             parent_nodes: list[Individual] = []
             if parent_ids:
@@ -234,69 +234,16 @@ def recombine_evolution_task(
                             if element:
                                 node_engine_args[f"{field_name}_element"] = element
 
-            # Construct NeutralSelection Population
-            parent_ns_individuals: list[NSIndividual] = []
-            parent_id_list: list[str] = []
-
-            for p_node in parent_nodes:
-                gpath = param_graph.get_path_from_id(p_node.id) or p_node.file.path
-                genome = LoRAGenome.load(gpath)
-                fit_val = p_node.fitness if p_node.fitness is not None else default_fitness
-
-                ns_ind = NSIndividual(
-                    genotype=genome,
-                    fitness=float(fit_val),
-                    lineage=Lineage(parent_ids=[p_node.id]),
-                    metadata={"id": p_node.id, "name": p_node.name}
-                )
-                parent_ns_individuals.append(ns_ind)
-                parent_id_list.append(p_node.id)
-
-            selection_strat = build_selection_strategy(selection_cfg)
-            crossover_type = crossover_cfg.get("type", "two_point") if isinstance(crossover_cfg, dict) else str(crossover_cfg)
-            crossover_strat = get_lora_crossover_strategy(
-                strategy_type=crossover_type,
-                num_cut_points=int(crossover_cfg.get("num_cut_points", 1)) if isinstance(crossover_cfg, dict) else 1,
-                swap_prob=float(crossover_cfg.get("swap_prob", 0.5)) if isinstance(crossover_cfg, dict) else 0.5,
-                blend_factor=float(crossover_cfg.get("blend_factor", 0.5)) if isinstance(crossover_cfg, dict) else 0.5,
-            )
-
-            lora_noise = float(mutation_cfg.get("lora_noise", merged_context.get("lora_noise", 0.05)))
-            active_flip_prob = float(mutation_cfg.get("active_flip_prob", merged_context.get("active_flip_prob", 0.05)))
-            mutation_rate = float(mutation_cfg.get("mutation_rate", 0.1))
-            mutation_strat = get_lora_mutation_strategy(
-                lora_noise=lora_noise,
-                active_flip_prob=active_flip_prob,
-                mutation_rate=mutation_rate
-            )
-
-            offspring_records: list[RecombinedOffspring] = recombine_offspring(
-                parents=parent_ns_individuals,
-                offspring_count=target_offspring_count,
-                selection_strategy=selection_strat,
-                crossover_strategy=crossover_strat,
-                mutation_strategy=mutation_strat,
-                crossover_prob=crossover_prob,
-                elitism=elitism,
-                parent_ids=parent_id_list,
-            )
-
-            gen_group_id = f"group_{uid_gen.from_string(str(uuid.uuid4()))}"
-            gen_group = Group(
-                id=gen_group_id,
-                member_ids=[],
-                member_type='individual'
-            )
-
-            param_graph.add_element(gen_group)
-            param_graph.update_element(gen_group.id, {"alias": f"Recombination (Gen {next_generation})"})
-            param_graph.save()
+            # Genome files are loaded outside the graph lock; only resolve their paths here
+            parent_genome_paths = [
+                param_graph.get_path_from_id(p_node.id) or p_node.file.path
+                for p_node in parent_nodes
+            ]
 
             return (
                 parent_nodes, model_element, model_id, baseline_grating_id,
                 base_grating, next_generation, target_offspring_count, merged_context,
-                operation, node_engine_args, dumped_params, offspring_records, gen_group,
-                parent_ns_individuals, selection_strat, crossover_strat, mutation_strat
+                operation, node_engine_args, dumped_params, parent_genome_paths
             )
 
         if graph_lock is not None:
@@ -304,22 +251,78 @@ def recombine_evolution_task(
                 (
                     parent_nodes, model_element, model_id, baseline_grating_id,
                     base_grating, next_generation, target_offspring_count, merged_context,
-                    operation, node_engine_args, dumped_params, offspring_records, gen_group,
-                    parent_ns_individuals, selection_strat, crossover_strat, mutation_strat
+                    operation, node_engine_args, dumped_params, parent_genome_paths
                 ) = _setup_recombination()
         else:
             (
                 parent_nodes, model_element, model_id, baseline_grating_id,
                 base_grating, next_generation, target_offspring_count, merged_context,
-                operation, node_engine_args, dumped_params, offspring_records, gen_group,
-                parent_ns_individuals, selection_strat, crossover_strat, mutation_strat
+                operation, node_engine_args, dumped_params, parent_genome_paths
             ) = _setup_recombination()
+
+        # Construct NeutralSelection Population and breed without holding the graph lock
+        parent_ns_individuals: list[NSIndividual] = []
+        for p_node, gpath in zip(parent_nodes, parent_genome_paths):
+            genome = LoRAGenome.load(gpath)
+            fit_val = p_node.fitness if p_node.fitness is not None else default_fitness
+
+            ns_ind = NSIndividual(
+                genotype=genome,
+                fitness=float(fit_val),
+                lineage=Lineage(parent_ids=[p_node.id]),
+                metadata={"id": p_node.id, "name": p_node.name}
+            )
+            parent_ns_individuals.append(ns_ind)
+
+        selection_strat = build_selection_strategy(selection_cfg)
+        crossover_type = crossover_cfg.get("type", "two_point") if isinstance(crossover_cfg, dict) else str(crossover_cfg)
+        crossover_strat = get_lora_crossover_strategy(
+            strategy_type=crossover_type,
+            num_cut_points=int(crossover_cfg.get("num_cut_points", 1)) if isinstance(crossover_cfg, dict) else 1,
+            swap_prob=float(crossover_cfg.get("swap_prob", 0.5)) if isinstance(crossover_cfg, dict) else 0.5,
+            blend_factor=float(crossover_cfg.get("blend_factor", 0.5)) if isinstance(crossover_cfg, dict) else 0.5,
+        )
+
+        lora_noise = float(mutation_cfg.get("lora_noise", merged_context.get("lora_noise", 0.05)))
+        active_flip_prob = float(mutation_cfg.get("active_flip_prob", merged_context.get("active_flip_prob", 0.05)))
+        mutation_rate = float(mutation_cfg.get("mutation_rate", 0.1))
+        mutation_strat = get_lora_mutation_strategy(
+            lora_noise=lora_noise,
+            active_flip_prob=active_flip_prob,
+            mutation_rate=mutation_rate
+        )
+
+        offspring_records: list[RecombinedOffspring] = recombine_offspring(
+            parents=parent_ns_individuals,
+            offspring_count=target_offspring_count,
+            selection_strategy=selection_strat,
+            crossover_strategy=crossover_strat,
+            mutation_strategy=mutation_strat,
+            crossover_prob=crossover_prob,
+            elitism=elitism,
+            parent_ids=[p.id for p in parent_nodes],
+        )
+
+        def _create_group() -> Group:
+            group = Group(
+                id=f"group_{uid_gen.from_string(str(uuid.uuid4()))}",
+                member_ids=[],
+                member_type='individual'
+            )
+            param_graph.add_element(group)
+            param_graph.update_element(group.id, {"alias": f"Recombination (Gen {next_generation})"})
+            return group
+
+        if graph_lock is not None:
+            with graph_lock:
+                gen_group = _create_group()
+        else:
+            gen_group = _create_group()
 
         baseline_elements = parent_nodes[0].context.get("baseline_elements")
         baseline_file_path = parent_nodes[0].context.get("baseline_file_path")
         gen_group_id = gen_group.id
         parent_id_list = [p.id for p in parent_nodes]
-        mutation_rate = float(mutation_cfg.get("mutation_rate", 0.1))
 
         job_ids: list[str] = []
         individual_ids: list[str] = []
@@ -398,7 +401,6 @@ def recombine_evolution_task(
 
                 gen_group.member_ids.append(child_ind_id)
                 param_graph.update_element(gen_group.id, {"member_ids": gen_group.member_ids})
-                param_graph.save()
                 return True
 
             if graph_lock is not None:
@@ -448,6 +450,13 @@ def recombine_evolution_task(
                 except Exception as ex:
                     print(f"[_recombine_evolution_task] Warning: Failed to queue exemplar generation for individual {child_ind_id}: {ex}")
                     traceback.print_exc()
+
+        # Persist the whole batch in one write, since every save re-serializes the entire graph
+        if graph_lock is not None:
+            with graph_lock:
+                param_graph.save()
+        else:
+            param_graph.save()
 
         if local_jobs is not None and parent_job_id in local_jobs:
             local_jobs[parent_job_id]["status"] = "completed"

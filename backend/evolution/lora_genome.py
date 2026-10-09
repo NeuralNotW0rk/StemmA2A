@@ -1,6 +1,5 @@
 """LoRA / Grating genome representation, mutation, crossover, and phenotypic expression."""
 
-import copy
 import json
 import random
 from dataclasses import dataclass
@@ -89,6 +88,29 @@ def lora_gaussian_noise_mutator(std: float, mean: float = 0.0) -> Callable[[Any]
     return mutate_fn
 
 
+def lora_gene_mutator(lora_noise: float, active_flip_prob: float) -> Callable[[LoRAGene], LoRAGene]:
+    """
+    Returns a mutator that builds a new LoRAGene from noised copies of a gene's weights.
+    Equivalent to attribute_mutator over (lora_down, lora_up, active), but skips its deepcopy of the
+    gene, since the noise mutators already return new tensors.
+    """
+    from neutral_selection.variation.mutation import bit_flip_mutator
+
+    mutate_down = lora_gaussian_noise_mutator(std=lora_noise)
+    mutate_up = lora_gaussian_noise_mutator(std=lora_noise)
+    flip_active = bit_flip_mutator(prob=active_flip_prob)
+
+    def mutate_fn(gene: LoRAGene) -> LoRAGene:
+        return LoRAGene(
+            address=gene.address,
+            lora_down=mutate_down(gene.lora_down),
+            lora_up=mutate_up(gene.lora_up),
+            active=flip_active(gene.active)
+        )
+
+    return mutate_fn
+
+
 def get_lora_mutation_strategy(
     lora_noise: float = 0.05,
     active_flip_prob: float = 0.05,
@@ -97,15 +119,11 @@ def get_lora_mutation_strategy(
     """
     Returns a UniformMutation strategy tailored for LoRAGenome instances.
     """
-    from neutral_selection.variation.mutation import UniformMutation, attribute_mutator, bit_flip_mutator
+    from neutral_selection.variation.mutation import UniformMutation
 
     return UniformMutation(
         mutation_rate=mutation_rate,
-        mutation_fn=attribute_mutator({
-            "lora_down": lora_gaussian_noise_mutator(std=lora_noise),
-            "lora_up": lora_gaussian_noise_mutator(std=lora_noise),
-            "active": bit_flip_mutator(prob=active_flip_prob)
-        })
+        mutation_fn=lora_gene_mutator(lora_noise, active_flip_prob)
     )
 
 
@@ -300,8 +318,8 @@ class LoRAGenome(Genome):
         )
 
         for _ in range(population_size):
-            child_genome = copy.deepcopy(base_genome)
-            child_genome = mutate(child_genome, mutation_strategy)
+            # Mutation builds a new genome and never modifies the base genome's tensors in place
+            child_genome = mutate(base_genome, mutation_strategy)
             
             if not isinstance(child_genome, cls):
                 child_genome = cls(list(child_genome))
