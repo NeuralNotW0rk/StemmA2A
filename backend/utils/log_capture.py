@@ -21,6 +21,9 @@ class _TeeStream:
         self._at_line_start = True
 
     def write(self, text: str) -> int:
+        # Behave like a real text stream: Click probes with write(b"") and treats the stream as binary if it doesn't raise
+        if not isinstance(text, str):
+            raise TypeError(f"write() argument must be str, not {type(text).__name__}")
         if self._stream is not None:
             try:
                 self._stream.write(text)

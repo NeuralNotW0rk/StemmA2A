@@ -28,6 +28,14 @@ export interface FormField {
     show_if: Record<string, any>;
     value: any;
   }[];
+  description?: string;
+  // First matching entry overrides label/placeholder/description
+  conditionalProps?: {
+    show_if: Record<string, any>;
+    label?: string;
+    placeholder?: string;
+    description?: string;
+  }[];
   allowSequence?: boolean;
 }
 

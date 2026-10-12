@@ -210,13 +210,32 @@
       formData[fieldName] = path
     }
   }
+  function matchesConditions(
+    condSet: Record<string, unknown>,
+    data: Record<string, unknown>
+  ): boolean {
+    for (const key in condSet) {
+      const condition = condSet[key]
+      if (condition === 'exists') {
+        if (!data[key]) return false
+      } else if (data[key] !== condition) {
+        return false
+      }
+    }
+    return true
+  }
+
   const visibleFields = $derived.by(() => {
-    // Collect all condition target keys from config's show_if
+    // Collect all condition target keys from config's show_if and conditionalProps
     const targetKeys = new Set<string>(
       config.flatMap((field) => {
-        if (!field.show_if) return []
-        const condSets = Array.isArray(field.show_if) ? field.show_if : [field.show_if]
-        return condSets.flatMap((condSet) => Object.keys(condSet))
+        const condSets = field.show_if
+          ? Array.isArray(field.show_if)
+            ? field.show_if
+            : [field.show_if]
+          : []
+        const propConds = (field.conditionalProps ?? []).map((p) => p.show_if)
+        return [...condSets, ...propConds].flatMap((condSet) => Object.keys(condSet))
       })
     )
 
@@ -226,47 +245,29 @@
       void contextData?.[key]
     }
 
-    return config.filter((field: FormField) => {
-      if (!field.show_if) {
-        return true
-      }
+    // Combine context and form data, with form data taking precedence.
+    const data = { ...contextData, ...formData }
 
-      // Combine context and form data, with form data taking precedence.
-      const data = { ...contextData, ...formData }
-
-      if (Array.isArray(field.show_if)) {
-        return field.show_if.some((condSet) => {
-          for (const key in condSet) {
-            const condition = condSet[key]
-            if (condition === 'exists') {
-              if (!data[key]) {
-                return false
-              }
-            } else {
-              if (data[key] !== condition) {
-                return false
-              }
-            }
-          }
+    return config
+      .filter((field: FormField) => {
+        if (!field.show_if) {
           return true
-        })
-      }
-
-      for (const key in field.show_if) {
-        const condition = field.show_if[key]
-        if (condition === 'exists') {
-          if (!data[key]) {
-            return false
-          }
-        } else {
-          if (data[key] !== condition) {
-            return false
-          }
         }
-      }
-
-      return true
-    })
+        if (Array.isArray(field.show_if)) {
+          return field.show_if.some((condSet) => matchesConditions(condSet, data))
+        }
+        return matchesConditions(field.show_if, data)
+      })
+      .map((field: FormField): FormField => {
+        const override = field.conditionalProps?.find((p) => matchesConditions(p.show_if, data))
+        if (!override) return field
+        return {
+          ...field,
+          label: override.label ?? field.label,
+          placeholder: override.placeholder ?? field.placeholder,
+          description: override.description ?? field.description
+        }
+      })
   })
 </script>
 
@@ -593,6 +594,9 @@
           </div>
         </div>
       {/if}
+      {#if field.description}
+        <p class="field-description">{field.description}</p>
+      {/if}
     </div>
   {/each}
 </form>
@@ -642,6 +646,13 @@
     display: block;
     font-weight: 500;
     margin-bottom: 0.5rem;
+  }
+
+  .field-description {
+    margin: 0.375rem 0 0;
+    font-size: 0.8rem;
+    line-height: 1.4;
+    opacity: 0.7;
   }
 
   .input-row > input[type='text'],
