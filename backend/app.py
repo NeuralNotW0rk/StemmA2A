@@ -1033,6 +1033,9 @@ def link_artifact_dependencies(element: GraphElement, param_graph) -> int:
     """
     if param_graph is None or not param_graph.G.has_node(element.id):
         return 0
+    # A generated exemplar's inputs are implied through its individual
+    if param_graph.is_generated_exemplar(element.id):
+        return 0
 
     edges_added = 0
     potential_source_ids: list[tuple[str, str]] = []
@@ -1188,8 +1191,9 @@ async def get_job_status(job_id):
                                 group_node_attrs['member_ids'].append(final_artifact.id)
                             update_group_labels(group_id)
 
+                    is_exemplar = param_graph.is_generated_exemplar(final_artifact.id)
                     for element in job_context.get("linked_elements", []):
-                        if parent_id and element.id == parent_id:
+                        if is_exemplar or (parent_id and element.id == parent_id):
                             continue
                         edge_exists = any(
                             v == final_artifact.id and attrs.get('type') != 'spring'

@@ -581,6 +581,15 @@ class TestLoRAEvolution(unittest.TestCase):
             g_reloaded.load()
             self.assertFalse(g_reloaded.G.has_edge(sample_ind_id, exemplar_audio.id))
 
+            # Verify that input edges into an exemplar generated from its individual are removed during graph load
+            g_reloaded.update_element(exemplar_audio.id, {"context": {"individuals": [{"id": sample_ind_id, "strength": 1.0}]}})
+            self.assertTrue(g_reloaded.is_generated_exemplar(exemplar_audio.id))
+            g_reloaded.G.add_edge("model_test", exemplar_audio.id, type="model", relation="source")
+            g_reloaded.save()
+            g_reloaded.load()
+            self.assertFalse(g_reloaded.G.has_edge("model_test", exemplar_audio.id))
+            self.assertEqual(app_module.link_artifact_dependencies(g_reloaded.get_element(exemplar_audio.id), g_reloaded), 0)
+
             # Restore original globals
             app_module.param_graph = old_graph
             app_module.engine_provider = old_provider

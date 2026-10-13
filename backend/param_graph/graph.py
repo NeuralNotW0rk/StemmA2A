@@ -1,6 +1,7 @@
 import os
 import json
 import uuid
+import shutil
 from pathlib import Path
 from time import time
 
@@ -114,6 +115,14 @@ class ParameterGraph:
         if legacy_parent_child_edges:
             self.G.remove_edges_from(legacy_parent_child_edges)
 
+        # Clean up legacy input edges into generated exemplars (their inputs are implied by the individual)
+        legacy_exemplar_input_edges = [
+            (u, v) for u, v, d in self.G.edges(data=True)
+            if self.is_generated_exemplar(v) and self.is_implied_exemplar_input(d)
+        ]
+        if legacy_exemplar_input_edges:
+            self.G.remove_edges_from(legacy_exemplar_input_edges)
+
         # Ensure all model nodes have output_type populated
         for node, d in self.G.nodes(data=True):
             if d.get('type') == 'model':
@@ -214,8 +223,13 @@ class ParameterGraph:
         if data_path.exists() and data_path.stat().st_size > 0:
             try:
                 os.replace(str(data_path), str(bak_path))
-            except Exception as e:
-                print(f"[ParameterGraph] Warning: Failed to create backup {bak_path}: {e}")
+            except OSError:
+                # Sync clients (e.g. Proton Drive, OneDrive) can hold the file open without delete
+                # sharing, which blocks renames but still permits reads; fall back to a copy
+                try:
+                    shutil.copyfile(str(data_path), str(bak_path))
+                except Exception as e:
+                    print(f"[ParameterGraph] Warning: Failed to create backup {bak_path}: {e}")
 
         # 4. Atomically swap temp_path to data_path (with retry on Windows)
         last_err = None
@@ -296,6 +310,29 @@ class ParameterGraph:
             "target": target.id,
             **edge_attrs
         }
+
+    def is_generated_exemplar(self, node_id: str) -> bool:
+        """
+        True for an artifact generated from the individual that contains it. Its generation inputs
+        (model, latents, gratings, ...) are implied through that individual, so it takes no input edges.
+        Precursor audio wrapped into an individual does not qualify: the individual derives from it.
+        """
+        if not self.G.has_node(node_id):
+            return False
+        attrs = self.G.nodes[node_id]
+        parent_id = attrs.get('parent')
+        if not parent_id or not self.G.has_node(parent_id) or self.G.nodes[parent_id].get('type') != 'individual':
+            return False
+        context = attrs.get('context')
+        individuals = context.get('individuals') if isinstance(context, dict) else None
+        if not isinstance(individuals, list):
+            return False
+        return any((ind.get('id') if isinstance(ind, dict) else ind) == parent_id for ind in individuals)
+
+    @staticmethod
+    def is_implied_exemplar_input(edge_attrs: dict) -> bool:
+        """Whether an edge into a generated exemplar is an input edge (as opposed to spring or phenotype sharing)."""
+        return edge_attrs.get('type') != 'spring' and edge_attrs.get('relation') != 'shares_phenotype'
 
     def get_element(self, id: str) -> GraphElement:
         """

@@ -1402,9 +1402,15 @@
 
     cy.on('mouseup', handleMouseUp)
 
+    // dragfree fires once per node in a multi-node drag; coalesce into a single save
+    let dragSaveTimer: ReturnType<typeof setTimeout> | null = null
     cy.on('dragfree', 'node', () => {
       // Always save position so it remains physically exactly where it was dropped
-      extractAndSavePositions()
+      if (dragSaveTimer) clearTimeout(dragSaveTimer)
+      dragSaveTimer = setTimeout(() => {
+        dragSaveTimer = null
+        extractAndSavePositions()
+      }, 150)
     })
   }
 
