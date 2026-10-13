@@ -482,6 +482,36 @@ const defaultStyle: CssStyleDeclaration[] = [
     }
   },
 
+  // Rooms: a box holding the members that connect to the surrounding view
+  {
+    selector: 'node[type="room"]',
+    style: {
+      label: (node: NodeSingular): string => {
+        const name = (node.data('name') || node.data('id')) as string
+        const count = node.data('_member_count')
+        return typeof count === 'number' ? `${name} · ${count} inside` : name
+      },
+      'text-valign': 'top',
+      'text-margin-y': -4,
+      'font-weight': 'bold',
+      'background-color': groupColor,
+      'background-opacity': 0.25,
+      'border-color': selectedColor,
+      'border-width': 3,
+      'border-style': 'double',
+      shape: 'round-rectangle',
+      padding: '24px',
+      width: 120,
+      height: 80
+    }
+  },
+  {
+    selector: 'node.doorway',
+    style: {
+      opacity: 0.4
+    }
+  },
+
   // Edge-specific style configuration
   {
     selector: 'edge.hidden',

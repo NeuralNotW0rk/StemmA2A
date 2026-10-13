@@ -13,12 +13,15 @@
   import NodePropertyPopper from './NodePropertyPopper.svelte'
   import { cyInstanceStore, selectionStore } from '../../utils/stores'
   import { GROUPING_CONFIG } from '../../utils/app-config'
+  import { projectRoomView } from '../../utils/rooms'
 
   interface Props {
     graphData?: {
       elements: cytoscape.ElementDefinition[] | cytoscape.ElementsDefinition
     } | null
     viewMode?: 'batch' | 'cluster'
+    // The room being viewed, or null for the main graph
+    activeRoom?: string | null
     showSpringEdges?: boolean
     showDetailedLabels?: boolean
     chronologicalConstraint?: boolean
@@ -33,6 +36,10 @@
     onnodeSelect?: (data: any) => void
     onedgeSelect?: (data: any) => void
     onElementRemove?: (data: any) => void
+    onbreakout?: (elementIds: string[]) => void
+    onforkProject?: (elementIds: string[]) => void
+    onenterRoom?: (roomId: string) => void
+    ondissolveRoom?: (roomId: string) => void
     onstartGrouping?: (data: any) => void
     onsavePositions?: (positions: Record<string, { x: number; y: number }>) => void | Promise<void>
     onexpandPath?: (id: string) => void
@@ -50,6 +57,7 @@
 
   let {
     graphData = null,
+    activeRoom = null,
     showSpringEdges = false,
     showDetailedLabels = true,
     chronologicalConstraint = false,
@@ -64,6 +72,10 @@
     onnodeSelect,
     onedgeSelect,
     onElementRemove,
+    onbreakout,
+    onforkProject,
+    onenterRoom,
+    ondissolveRoom,
     onstartGrouping,
     onsavePositions,
     onexpandPath,
@@ -95,6 +107,8 @@
   let loadingOperations = $state(false)
   let operationsError: string | null = $state(null)
   let lastCxtTapPosition = { x: 0, y: 0 }
+  // The room whose view is on screen; positions carried between rebuilds only apply within one view
+  let renderedRoom: string | null | undefined = undefined
 
   // --- Inline Node Property Popper State ---
   interface NodePropertyPopperConfig {
@@ -828,12 +842,50 @@
       }
     ]
 
-    const nodeCommands = (ele: cytoscape.NodeSingular): Command[] => [
+    // The clicked node, or the whole selection when the clicked node is part of it
+    const targetNodeIds = (ele: cytoscape.NodeSingular): string[] => {
+      const selectedNodes = cy!.$('node:selected')
+      const nodes = selectedNodes.length > 1 && selectedNodes.contains(ele) ? selectedNodes : ele
+      return nodes.map((n) => n.id())
+    }
+
+    const nodeCommands = (ele: cytoscape.NodeSingular): Command[] =>
+      // Doorways belong to another view: usable as inputs, but managed from where they live
+      ele.data('_view_role') === 'doorway'
+        ? []
+        : [
+            {
+              content: 'Rename',
+              select: () => openRenamePopper(ele)
+            },
+            {
+              content: 'Break Out',
+              select: () => onbreakout?.(targetNodeIds(ele))
+            },
+            {
+              content: 'Fork to Project',
+              select: () => onforkProject?.(targetNodeIds(ele))
+            },
+            ...elementCommands(ele)
+          ]
+
+    const roomNodeCommands = (ele: cytoscape.NodeSingular): Command[] => [
       {
-        content: 'Rename',
-        select: () => openRenamePopper(ele)
+        content: 'Enter Room',
+        select: () => onenterRoom?.(ele.id())
       },
-      ...elementCommands(ele)
+      ...(ele.data('_view_role') === 'doorway'
+        ? []
+        : [
+            {
+              content: 'Rename',
+              select: () => openRenamePopper(ele)
+            },
+            {
+              content: 'Rejoin',
+              select: () => ondissolveRoom?.(ele.id())
+            }
+          ])
     ]
 
     const modelNodeCommands = (ele: cytoscape.NodeSingular): Command[] => [
@@ -1040,6 +1092,8 @@
             return individualNodeCommands(ele)
           case 'latent':
             return latentNodeCommands(ele)
+          case 'room':
+            return roomNodeCommands(ele)
           default:
             return nodeCommands(ele) // Fallback for any other node type
         }
@@ -1104,6 +1158,10 @@
     })
 
     cy.on('dblclick', 'node, edge', (evt: EventObject) => {
+      if (evt.target.isNode() && evt.target.data('type') === 'room') {
+        onenterRoom?.(evt.target.id())
+        return
+      }
       customFit(evt.target, getDynamicPadding())
     })
 
@@ -1231,7 +1289,11 @@
 
       // Block ghost-dragging for members of directory nodes, directories, and groups
       const isGhostDraggable =
-        nodeParentType !== 'directory' && nodeType !== 'directory' && nodeType !== 'group'
+        nodeParentType !== 'directory' &&
+        nodeType !== 'directory' &&
+        nodeType !== 'group' &&
+        nodeType !== 'room' &&
+        !node.data('_view_role')
 
       const isEligible = node.children().length === 0 || nodeType === 'individual'
 
@@ -1571,7 +1633,10 @@
     if (!cy) return
     const positions: Record<string, { x: number; y: number }> = {}
     cy.nodes().forEach((node) => {
-      if (node.children().length === 0) {
+      // Stand-ins share the real node's ID; their position belongs to this view only
+      if (node.data('_view_role')) return
+      // A room box is placed by its saved position, which its boundary stand-ins arrange around
+      if (node.children().length === 0 || node.data('type') === 'room') {
         positions[node.id()] = { ...node.position() }
       }
     })
@@ -1619,7 +1684,12 @@
       return true
     })
 
-    // 1. Snapshot the CURRENT visual state
+    newElements = projectRoomView(newElements, activeRoom)
+
+    // 1. Snapshot the CURRENT visual state (only meaningful when the view is unchanged)
+    const viewChanged = renderedRoom !== undefined && renderedRoom !== activeRoom
+    renderedRoom = activeRoom
+    if (viewChanged) cy.elements().remove()
     const savedPositions: Record<string, { x: number; y: number }> = {}
     cy.nodes().forEach((node) => {
       // Only store positions for leaf nodes to avoid compound drift

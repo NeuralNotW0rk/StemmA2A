@@ -4,6 +4,7 @@ from typing import Any, Optional, Callable
 import time
 import uuid
 import threading
+import contextvars
 import asyncio
 import traceback
 from concurrent.futures import ThreadPoolExecutor
@@ -162,7 +163,8 @@ class TaskManager:
                 traceback.print_exc()
                 self.fail_job(jid, error=str(ex), traceback_str=traceback.format_exc())
 
-        self._executor.submit(_worker_wrapper)
+        # Run in a copy of the caller's context so context variables (e.g. room placement) carry over
+        self._executor.submit(contextvars.copy_context().run, _worker_wrapper)
         return jid
 
     def cleanup_expired(self, ttl_seconds: float = 300.0) -> None:

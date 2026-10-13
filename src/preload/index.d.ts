@@ -1,4 +1,5 @@
 import { ElectronAPI } from '@electron-toolkit/preload'
+import type { ForkResult, ProjectOrigin } from '../renderer/src/utils/types'
 
 interface API {
   getRunMode: () => Promise<'local' | 'remote'>
@@ -13,8 +14,15 @@ interface API {
   getRecentProjects: () => Promise<string[]>
   removeRecentProject: (projectPath: string) => Promise<void>
   addRecentProject: (projectPath: string) => Promise<void>
-  loadProject: (projectData: { project_path?: string; project_name?: string }) => Promise<any>
+  loadProject: (projectData: {
+    project_path?: string
+    project_name?: string
+  }) => Promise<{ project_name: string; project_path: string; origin?: ProjectOrigin | null }>
   createProject: (projectData: { project_path?: string; project_name?: string }) => Promise<any>
+  forkProject: (elementIds: string[]) => Promise<ForkResult>
+  createRoom: (elementIds: string[]) => Promise<{ room_id: string }>
+  dissolveRoom: (roomId: string) => Promise<{ member_ids: string[] }>
+  setViewRoom: (roomId: string | null) => Promise<{ room_id: string | null }>
   getGraphData: (viewMode: 'batch' | 'cluster') => Promise<any>
   get_generate_form_config: (adapterName: string) => Promise<any>
   get_import_form_config: (adapterName: string) => Promise<any>

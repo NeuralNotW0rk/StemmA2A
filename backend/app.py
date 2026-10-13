@@ -17,6 +17,7 @@ import logging
 import shutil
 import uuid
 import copy
+import contextvars
 from dataclasses import replace
 
 from dotenv import load_dotenv
@@ -48,6 +49,9 @@ from param_graph.elements.artifacts.bundle_element import Bundle
 from param_graph.elements.collections.directory_element import Directory
 from param_graph.elements.local_path import LocalPath
 from param_graph.utils import save_artifact_asset, resolve_element
+from param_graph.transfer import collect_subgraph, write_subgraph
+from param_graph.rooms import placement_room, room_of, break_out, dissolve
+from coolname import generate_slug
 from engine.engine_provider import EngineProvider
 from engine.encoders.clap_encoder import CLAPEncoder
 from engine.encoders.clip_encoder import CLIPEncoder
@@ -156,6 +160,14 @@ active_jobs = {}
 local_jobs = task_manager.jobs
 
 graph_lock = threading.Lock()
+# The room the frontend is viewing; new top-level elements are placed there (see param_graph.rooms)
+view_room: str | None = None
+
+
+@app.before_request
+def set_placement_room():
+    # Set on every request so a value never leaks between requests sharing a thread
+    placement_room.set(view_room if param_graph is not None and param_graph.G.has_node(view_room or '') else None)
 
 
 # --------------------
@@ -195,7 +207,7 @@ def load_project():
     """
     Load a project from an absolute path.
     """
-    global param_graph
+    global param_graph, view_room
     
     try:
         data = request.get_json()
@@ -213,6 +225,7 @@ def load_project():
         with graph_lock:
             run_project_migrations(project_path)
             param_graph = ParameterGraph(str(project_path))
+            view_room = None
             initialize_engine(str(project_path))
 
             if param_graph.load():
@@ -220,6 +233,7 @@ def load_project():
                     "message": f"Project '{project_path.name}' loaded successfully.",
                     "project_name": project_path.name,
                     "project_path": str(project_path),
+                    "origin": param_graph.origin,
                     "success": True
                 })
             
@@ -245,7 +259,7 @@ def create_project():
     """
     Create a new project at a given absolute path.
     """
-    global param_graph
+    global param_graph, view_room
     
     try:
         data = request.get_json()
@@ -265,6 +279,7 @@ def create_project():
         with graph_lock:
             param_graph = ParameterGraph(str(project_path))
             param_graph.project_name = final_project_name
+            view_room = None
             initialize_engine(str(project_path))
             param_graph.save()
 
@@ -290,6 +305,7 @@ def get_project():
             "message": "success",
             "project_name": Path(param_graph.root).name,
             "project_path": str(param_graph.root),
+            "origin": param_graph.origin,
             "success": True
         })
     else:
@@ -297,6 +313,124 @@ def get_project():
             "message": "no project selected",
             "success": False
         })
+
+
+@app.route("/fork_project", methods=["POST"])
+def fork_project():
+    """
+    Copies the given elements, with everything they depend on, into a new project next to the
+    current one ("<project>-<slug>"), recording where it came from. The current project is left
+    untouched and stays loaded; the caller decides when to switch.
+    """
+    if param_graph is None:
+        return jsonify({"error": "No project loaded"}), 400
+
+    data = request.get_json() or {}
+    element_ids = data.get("element_ids") or []
+    include_lineage = data.get("include_lineage", True)
+    if not element_ids:
+        return jsonify({"error": "element_ids is required"}), 400
+
+    try:
+        # Snapshot under the lock; copying files and writing the fork happen outside it
+        with graph_lock:
+            subgraph = collect_subgraph(param_graph, element_ids, include_lineage=include_lineage)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+    source_root = Path(param_graph.root)
+    name = f"{source_root.name}-{generate_slug(2)}"
+    while (source_root.parent / name).exists():
+        name = f"{source_root.name}-{generate_slug(2)}"
+    project_path = source_root.parent / name
+
+    try:
+        project_path.mkdir(parents=True)
+        target = ParameterGraph(str(project_path))
+        target.project_name = name
+        target.origin = {
+            "project_name": subgraph.source_name,
+            "project_path": str(subgraph.source_root),
+            "element_ids": subgraph.selected_ids,
+            "created": int(time.time()),
+        }
+        report = write_subgraph(subgraph, target)
+        # Detached exemplars are plain artifacts now, so their inputs get explicit edges
+        for element_id in report["converted_exemplars"]:
+            link_artifact_dependencies(target.get_element(element_id), target)
+        target.save()
+    except Exception as e:
+        print(f"Failed to fork elements into a project: {e}")
+        traceback.print_exc()
+        shutil.rmtree(project_path, ignore_errors=True)
+        return jsonify({"error": str(e)}), 500
+
+    return jsonify({
+        "message": f"Forked {report['element_count']} elements into '{name}'.",
+        "project_name": name,
+        "project_path": str(project_path),
+        **report,
+        "success": True
+    })
+
+
+# --------------------
+#  Rooms
+# --------------------
+
+@app.route("/rooms", methods=["POST"])
+def create_room():
+    """Breaks the given elements out of their view into a new room, shown there as a box."""
+    if param_graph is None:
+        return jsonify({"error": "No project loaded"}), 400
+
+    data = request.get_json() or {}
+    element_ids = data.get("element_ids") or []
+    if not element_ids:
+        return jsonify({"error": "element_ids is required"}), 400
+
+    try:
+        with graph_lock:
+            room_id = break_out(param_graph, element_ids, name=data.get("name") or generate_slug(2))
+            param_graph.save()
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+    return jsonify({"room_id": room_id, "success": True})
+
+
+@app.route("/rooms/<room_id>/dissolve", methods=["POST"])
+def dissolve_room(room_id):
+    """Rejoins a room's members with the view the room sits in."""
+    global view_room
+    if param_graph is None:
+        return jsonify({"error": "No project loaded"}), 400
+
+    try:
+        with graph_lock:
+            outer = param_graph.G.nodes[room_id].get("room") if param_graph.G.has_node(room_id) else None
+            members = dissolve(param_graph, room_id)
+            param_graph.save()
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+    if view_room == room_id:
+        view_room = outer
+    return jsonify({"member_ids": members, "success": True})
+
+
+@app.route("/rooms/view", methods=["POST"])
+def set_view_room():
+    """Records the room the frontend is viewing (None for the main graph) for placing new elements."""
+    global view_room
+    if param_graph is None:
+        return jsonify({"error": "No project loaded"}), 400
+
+    room_id = (request.get_json() or {}).get("room_id")
+    if room_id and param_graph.G.nodes.get(room_id, {}).get("type") != "room":
+        return jsonify({"error": f"'{room_id}' is not a room."}), 400
+    view_room = room_id
+    return jsonify({"room_id": view_room, "success": True})
 
 
 # --------------------
@@ -591,7 +725,8 @@ async def import_model():
         }
 
         threading.Thread(
-            target=lambda: asyncio.run(_import_model_task(job_id, data)),
+            target=contextvars.copy_context().run,
+            args=(lambda: asyncio.run(_import_model_task(job_id, data)),),
             daemon=True
         ).start()
 
@@ -713,7 +848,8 @@ async def export_shared_model():
         }
 
         threading.Thread(
-            target=lambda: asyncio.run(_export_shared_model_task(job_id, model_id)),
+            target=contextvars.copy_context().run,
+            args=(lambda: asyncio.run(_export_shared_model_task(job_id, model_id)),),
             daemon=True
         ).start()
 
@@ -1118,6 +1254,9 @@ async def get_job_status(job_id):
 
         if status in ["completed", "failed", "not_found"]:
             job_context = active_jobs.pop(job_id, None)
+            if job_context is not None:
+                # Place the result in the room the job was started from, not the one viewed now
+                placement_room.set(job_context.get("room"))
 
             if status == "completed":
                 if job_context is None:
@@ -1321,6 +1460,13 @@ async def execute_operation():
         
     try:
         payload = request.get_json() or {}
+        # Work started on an element inside a room stays in that room, whichever view it came from
+        initiator = payload.get("initiator")
+        initiator_id = initiator.get("id") if isinstance(initiator, dict) else None
+        if initiator_id and param_graph.G.has_node(initiator_id):
+            initiator_room = room_of(param_graph.G, initiator_id)
+            if initiator_room:
+                placement_room.set(initiator_room)
         resp_data, status_code = await dispatch_operation(
             payload=payload,
             param_graph=param_graph,
@@ -1446,7 +1592,8 @@ async def rescan_source():
         }
 
         threading.Thread(
-            target=lambda: asyncio.run(_rescan_source_task(job_id, source_name)),
+            target=contextvars.copy_context().run,
+            args=(lambda: asyncio.run(_rescan_source_task(job_id, source_name)),),
             daemon=True
         ).start()
 
@@ -1604,7 +1751,8 @@ async def expand_path():
         }
 
         threading.Thread(
-            target=lambda: asyncio.run(_expand_path_task(job_id, path_node_id)),
+            target=contextvars.copy_context().run,
+            args=(lambda: asyncio.run(_expand_path_task(job_id, path_node_id)),),
             daemon=True
         ).start()
 
@@ -2663,7 +2811,8 @@ async def export_audio():
         }
 
         threading.Thread(
-            target=lambda: asyncio.run(_export_audio_task(job_id, names, export_dir_str)),
+            target=contextvars.copy_context().run,
+            args=(lambda: asyncio.run(_export_audio_task(job_id, names, export_dir_str)),),
             daemon=True
         ).start()
 

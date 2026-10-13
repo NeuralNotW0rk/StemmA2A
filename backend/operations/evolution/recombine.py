@@ -4,6 +4,7 @@ from typing import Any, Optional, Union
 from dataclasses import dataclass
 import os
 import copy
+import contextvars
 import uuid
 import threading
 import traceback
@@ -588,8 +589,10 @@ async def dispatch_recombine_operation(
             "error": None
         }
 
+    # Copying the context keeps the request's room placement in the worker
     thread = threading.Thread(
-        target=run_recombine_task,
+        target=contextvars.copy_context().run,
+        args=(run_recombine_task,),
         kwargs=dict(
             parent_job_id=parent_job_id,
             parent_ids=parent_ids,

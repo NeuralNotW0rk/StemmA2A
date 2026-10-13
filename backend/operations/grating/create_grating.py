@@ -3,6 +3,7 @@
 from typing import Any, Optional
 import uuid
 import threading
+import contextvars
 import traceback
 import asyncio
 
@@ -124,14 +125,15 @@ async def dispatch_create_grating_operation(
         }
 
     threading.Thread(
-        target=lambda: asyncio.run(create_grating_task(
+        target=contextvars.copy_context().run,
+        args=(lambda: asyncio.run(create_grating_task(
             job_id=job_id,
             data=data,
             param_graph=param_graph,
             engine_provider=engine_provider,
             graph_lock=graph_lock,
             local_jobs=local_jobs,
-        )),
+        )),),
         daemon=True
     ).start()
 

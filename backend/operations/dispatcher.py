@@ -19,6 +19,7 @@ from param_graph.elements.models.base_model_element import Model
 from param_graph.elements.collections.group_element import Group
 from param_graph.elements.base_elements import Asset
 from param_graph.utils import save_artifact_asset
+from param_graph.rooms import placement_room
 from utils.audio import save_audio
 from utils.form import create_dynamic_model
 from utils.uid import XXH3_64, path_from_uid
@@ -540,7 +541,8 @@ async def dispatch_operation(
                 "group_id": group_id,
                 "linked_elements": linked_elements,
                 "validated_params": v_params,
-                "operation": operation_name
+                "operation": operation_name,
+                "room": placement_room.get(),
             }
 
         returned_job_id = await engine.execute(operation_name, job_id=job_id, **engine_args, **dumped_params)

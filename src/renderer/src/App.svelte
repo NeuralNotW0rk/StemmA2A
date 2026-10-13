@@ -34,10 +34,22 @@
     clearDismissableJobs,
     cancelAllJobs
   } from './utils/job-management'
-  import type { ActionPanelView, ElementData, ErrorInfo } from './utils/types'
+  import type {
+    ActionPanelView,
+    ForkResult,
+    ElementData,
+    ErrorInfo,
+    ProjectOrigin
+  } from './utils/types'
+  import { flattenElements, roomPath } from './utils/rooms'
 
   let graphData: any = $state(null)
   let currentProject: string | null = $state(null)
+  // Set for a forked project: the project it was copied from
+  let projectOrigin: ProjectOrigin | null = $state(null)
+  // The room being viewed, or null for the main graph
+  let activeRoom: string | null = $state(null)
+  let roomCrumbs = $derived(roomPath(flattenElements(graphData), activeRoom))
   let viewMode: 'batch' | 'cluster' = $state('batch')
   let audioSrc: string | null = $state(null)
   let audioTitle: string | null = $state(null)
@@ -198,6 +210,8 @@
 
   function handleBackendRestart(): void {
     currentProject = null
+    projectOrigin = null
+    activeRoom = null
     graphData = null
     selectedElementData = null
     audioSrc = null
@@ -265,21 +279,26 @@
   async function handleProjectLoad(data: {
     project_path?: string
     project_name?: string
-  }): Promise<void> {
+  }): Promise<boolean> {
     try {
       const projectName = data.project_name || data.project_path?.split(/[/\\]/).pop()
       console.log(`Loading project: ${projectName}`)
-      await window.api.loadProject(data)
+      const loaded = await window.api.loadProject(data)
       await loadOperations()
       graphData = await window.api.getGraphData(viewMode)
       currentProject = projectName || null
+      projectOrigin = loaded.origin ?? null
+      // Loading a project resets the backend to its main graph
+      activeRoom = null
       if (data.project_path) {
         await window.api.addRecentProject(data.project_path)
       }
       console.log(`Successfully loaded project: ${projectName}`)
+      return true
     } catch (error) {
       console.error('Failed to load project:', error)
       errorInInfoPanel = { title: 'Project Load Failed', message: error.message }
+      return false
     }
   }
 
@@ -293,6 +312,8 @@
     await loadOperations()
     graphData = await window.api.getGraphData(viewMode)
     currentProject = projectName || null
+    projectOrigin = null
+    activeRoom = null
     if (data.project_path) {
       await window.api.addRecentProject(data.project_path)
     }
@@ -469,6 +490,78 @@
     actionPanelView = 'removal'
   }
 
+  async function enterRoom(roomId: string | null): Promise<void> {
+    try {
+      // The backend places new elements in the viewed room
+      await window.api.setViewRoom(roomId)
+      activeRoom = roomId
+    } catch (error: unknown) {
+      console.error('Failed to change room:', error)
+      const message = error instanceof Error ? error.message : String(error)
+      errorInInfoPanel = { title: 'Changing Room Failed', message }
+    }
+  }
+
+  async function handleBreakout(elementIds: string[]): Promise<void> {
+    try {
+      await window.api.createRoom(elementIds)
+      await refreshGraphData()
+    } catch (error: unknown) {
+      console.error('Break out failed:', error)
+      const message = error instanceof Error ? error.message : String(error)
+      errorInInfoPanel = { title: 'Break Out Failed', message }
+    }
+  }
+
+  async function handleDissolveRoom(roomId: string): Promise<void> {
+    try {
+      // Leaving a room that is about to disappear: go to the view it rejoins
+      const crumbIndex = roomCrumbs.findIndex((crumb) => crumb.id === roomId)
+      if (crumbIndex >= 0) {
+        await enterRoom(crumbIndex > 0 ? roomCrumbs[crumbIndex - 1].id : null)
+      }
+      await window.api.dissolveRoom(roomId)
+      await refreshGraphData()
+    } catch (error: unknown) {
+      console.error('Rejoin failed:', error)
+      const message = error instanceof Error ? error.message : String(error)
+      errorInInfoPanel = { title: 'Rejoin Failed', message }
+    }
+  }
+
+  async function handleForkProject(elementIds: string[]): Promise<void> {
+    let result: ForkResult
+    try {
+      result = await window.api.forkProject(elementIds)
+    } catch (error: unknown) {
+      console.error('Fork to project failed:', error)
+      const message = error instanceof Error ? error.message : String(error)
+      errorInInfoPanel = { title: 'Fork to Project Failed', message }
+      return
+    }
+
+    // Switch to the fork right away; the original is one click back
+    if (!(await handleProjectLoad({ project_path: result.project_path }))) return
+    await toolbarComponent.refreshRecentProjects()
+    // Spring edges are not carried over; rebuild them for the fork
+    await handleUpdateEmbeddings()
+
+    const converted = result.converted_exemplars.length
+    if (converted) {
+      errorInInfoPanel = {
+        title: 'Forked to Project',
+        message: `${converted} exemplar(s) were forked without their individual and are now plain audio. Their lineage is kept in their context.`
+      }
+    }
+  }
+
+  async function handleReturnToOrigin(): Promise<void> {
+    if (!projectOrigin) return
+    if (await handleProjectLoad({ project_path: projectOrigin.project_path })) {
+      await toolbarComponent.refreshRecentProjects()
+    }
+  }
+
   function handleStartGrouping(nodeData: any): void {
     initiatorNodeStore.set(nodeData)
     actionPanelView = 'grouping'
@@ -541,6 +634,10 @@
     try {
       await loadOperations()
       graphData = await window.api.getGraphData(viewMode)
+      // The viewed room may have been removed
+      if (activeRoom && roomCrumbs.length === 0) {
+        await enterRoom(null)
+      }
       console.log(`Graph data refreshed for view mode ${viewMode}`)
     } catch (error) {
       console.error('Failed to get graph data:', error)
@@ -692,7 +789,11 @@
     onupdateEmbeddings={handleUpdateEmbeddings}
     onupdateLabels={handleUpdateLabels}
     onrepairEdges={handleRepairEdges}
+    onreturnToOrigin={handleReturnToOrigin}
+    onnavigateRoom={enterRoom}
     {currentProject}
+    {projectOrigin}
+    {roomCrumbs}
     {viewMode}
     bind:showSpringEdges
     bind:showDetailedLabels={showDetailedLabelsToggle}
@@ -836,6 +937,11 @@
     onexport={handleExport}
     onedgeSelect={handleElementSelect}
     onElementRemove={handleElementRemove}
+    onbreakout={handleBreakout}
+    onforkProject={handleForkProject}
+    onenterRoom={enterRoom}
+    ondissolveRoom={handleDissolveRoom}
+    {activeRoom}
     onstartGrouping={handleStartGrouping}
     onsavePositions={handleSavePositions}
     onexpandPath={handleExpandPath}

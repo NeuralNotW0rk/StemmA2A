@@ -33,6 +33,23 @@ export type NodeFilter = Record<string, unknown>
 
 export type ErrorInfo = { title: string; message: string }
 
+/** The project a forked project was copied from. */
+export interface ProjectOrigin {
+  project_name: string
+  project_path: string
+  element_ids: string[]
+  created: number
+}
+
+export interface ForkResult {
+  project_name: string
+  project_path: string
+  element_count: number
+  edge_count: number
+  copied_files: number
+  converted_exemplars: string[]
+}
+
 export interface NodeListItem {
   id: number | string
   node: NodeData | string | null

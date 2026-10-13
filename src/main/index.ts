@@ -747,6 +747,7 @@ app.whenReady().then(async (): Promise<void> => {
         console.error(`Main Process: /load_project error data: ${errorText}`)
         throw new Error(`Failed to load project. Status code: ${loadResponse.status}`)
       }
+      return await loadResponse.json()
     }
   )
 
@@ -791,6 +792,35 @@ app.whenReady().then(async (): Promise<void> => {
         throw new Error(`Failed to create project. Status code: ${createResponse.status}`)
       }
     }
+  )
+
+  const postJson = async (path: string, body: unknown, action: string): Promise<unknown> => {
+    const response = await fetchWithAuth(`${BACKEND_URL}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    })
+    const result = await response.json()
+    if (!response.ok) {
+      throw new Error(result.error || `${action} failed. Status: ${response.status}`)
+    }
+    return result
+  }
+
+  ipcMain.handle('forkProject', async (_event, elementIds: string[]) =>
+    postJson('/fork_project', { element_ids: elementIds }, 'Fork to project')
+  )
+
+  ipcMain.handle('createRoom', async (_event, elementIds: string[]) =>
+    postJson('/rooms', { element_ids: elementIds }, 'Break out')
+  )
+
+  ipcMain.handle('dissolveRoom', async (_event, roomId: string) =>
+    postJson(`/rooms/${encodeURIComponent(roomId)}/dissolve`, {}, 'Rejoin')
+  )
+
+  ipcMain.handle('setViewRoom', async (_event, roomId: string | null) =>
+    postJson('/rooms/view', { room_id: roomId }, 'Changing room')
   )
 
   ipcMain.handle('getGraphData', async (_event, viewMode) => {

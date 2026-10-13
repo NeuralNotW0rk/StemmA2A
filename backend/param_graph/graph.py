@@ -11,6 +11,7 @@ from utils.filesystem import check_dir
 from .const import *
 from .elements.base_elements import GraphElement
 from .registry import resolve_element
+from .rooms import placement_room, release_members
 
 DEFAULT_SR = 48000
 
@@ -61,6 +62,8 @@ class ParameterGraph:
         self.backend = backend
         self.G = nx.DiGraph()
         self.project_name = None
+        # Where the project was broken out from, if it was ({project_name, project_path, element_ids, created})
+        self.origin = None
         # Embeddings as of the last sidecar read/write, used to skip unchanged rewrites
         self._saved_embeddings = None
 
@@ -98,6 +101,7 @@ class ParameterGraph:
                 raise ValueError(f"Corrupted project graph file at '{target_path}': {e}") from e
 
         self.project_name = data.get('project_name', self.root.name)
+        self.origin = data.get('origin')
         self.G = nx.cytoscape.cytoscape_graph(data.get('graph', {}))
         
         # Clean up legacy edge nodes that were added as nodes
@@ -207,6 +211,8 @@ class ParameterGraph:
             'project_name': self.project_name or self.root.name,
             'graph': graph_data,
         }
+        if self.origin:
+            data['origin'] = self.origin
 
         # 1. Serialize in-memory FIRST. If this fails, the file on disk is untouched.
         json_str = json.dumps(data, separators=(',', ':'), default=_safe_json_default)
@@ -290,6 +296,10 @@ class ParameterGraph:
         ele_id = ele_attrs.get('id', None)
         if not allow_duplicates and ele_id and self.G.has_node(ele_id):
             return False
+
+        room = placement_room.get()
+        if room and self.G.has_node(room) and not self.G.has_node(ele_id):
+            ele_attrs.setdefault('room', room)
 
         if ele_attrs.get('type') == 'model' and not ele_attrs.get('output_type'):
             adapter = ele_attrs.get('adapter')
@@ -393,4 +403,8 @@ class ParameterGraph:
             if not added:
                 break
 
+        # Removing a room rejoins its members with the room's view rather than deleting them
+        for node in list(to_remove):
+            if self.G.nodes[node].get('type') == 'room':
+                release_members(self.G, node)
         self.G.remove_nodes_from(to_remove)

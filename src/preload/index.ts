@@ -19,6 +19,13 @@ const api = {
   loadProject: (projectData: any): Promise<any> => ipcRenderer.invoke('loadProject', projectData),
   createProject: (projectData: any): Promise<any> =>
     ipcRenderer.invoke('createProject', projectData),
+  forkProject: (elementIds: string[]): Promise<unknown> =>
+    ipcRenderer.invoke('forkProject', elementIds),
+  createRoom: (elementIds: string[]): Promise<unknown> =>
+    ipcRenderer.invoke('createRoom', elementIds),
+  dissolveRoom: (roomId: string): Promise<unknown> => ipcRenderer.invoke('dissolveRoom', roomId),
+  setViewRoom: (roomId: string | null): Promise<unknown> =>
+    ipcRenderer.invoke('setViewRoom', roomId),
   getGraphData: (viewMode: 'batch' | 'cluster'): Promise<any> =>
     ipcRenderer.invoke('getGraphData', viewMode),
   get_generate_form_config: (adapterName: string): Promise<any> =>
