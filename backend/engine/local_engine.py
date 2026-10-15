@@ -2,6 +2,7 @@ import io
 import os
 import tempfile
 import queue
+import shutil
 import threading
 import uuid
 import asyncio
@@ -15,6 +16,7 @@ import torchaudio
 from param_graph.elements.base_elements import GraphElement
 from .engine import Engine
 from .model_cache import ModelCache
+from .results import OperationResult, serialize_result
 from utils.uid import path_from_uid
 from utils.audio import save_audio
 from evolution.genome import LoRAGenome, express_to_grating
@@ -367,29 +369,43 @@ class LocalEngine(Engine):
         """
         return await self._generate_logic(**kwargs)
 
-    async def _invert_logic(self, **kwargs) -> GraphElement:
+    def _persist_output(self, artifact: GraphElement, data) -> GraphElement:
+        """Saves an operation output's file into the data root and points the artifact at it."""
+        local_path = self.data_root / path_from_uid(artifact.id)
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if data is None:
+            # The adapter already wrote the artifact's file (e.g. a grating's safetensors)
+            shutil.copyfile(artifact.file.path, local_path)
+        else:
+            # Save the latent tensor file
+            torch.save(data.cpu(), local_path)
+
+        # Update the artifact with the persistent path
+        new_file_asset = replace(artifact.file, path=str(local_path))
+        return replace(artifact, file=new_file_asset)
+
+    async def _invert_logic(self, **kwargs):
         """
-        The actual inversion logic. Gets a cached model adapter and uses it to perform DDIM inversion.
-        Saves the resulting latent tensor to a persistent location.
+        The actual inversion logic. Gets a cached model adapter and uses it to invert a source artifact
+        (DDIM inversion to a latent, or StyleGAN pivotal tuning to a pivot latent and its grating).
+        Saves the results to a persistent location.
         """
         model_element = kwargs["model_element"]
         model_element = self._resolve_model_element(model_element)
         adapter_class = self._get_adapter_class(model_element.adapter)
         adapter = self.model_cache.get(model_element, adapter_class)
 
-        artifact, tensor = adapter.invert(**kwargs)
+        result = adapter.invert(**kwargs)
 
-        local_path = self.data_root / path_from_uid(artifact.id)
-        local_path.parent.mkdir(parents=True, exist_ok=True)
+        if isinstance(result, OperationResult):
+            return {
+                "artifacts": [self._persist_output(artifact, data) for artifact, data in result.outputs],
+                "links": result.links,
+            }
 
-        # Save the latent tensor file
-        torch.save(tensor.cpu(), local_path)
-
-        # Update the artifact with the persistent path
-        new_file_asset = replace(artifact.file, path=str(local_path))
-        artifact = replace(artifact, file=new_file_asset)
-
-        return artifact
+        artifact, tensor = result
+        return self._persist_output(artifact, tensor)
 
     async def invert(self, **kwargs) -> GraphElement:
         return await self._invert_logic(**kwargs)
@@ -473,11 +489,9 @@ class LocalEngine(Engine):
         if not status:
             return {"status": "not_found"}
         
-        # If the result is a GraphElement, convert it to a dict for the response
+        # Convert the result (one element, or several from a multi-artifact operation) to dicts for the response
         if status.get("status") == "completed":
-            result = status.get("result")
-            if isinstance(result, GraphElement):
-                status["result"] = result.to_dict()
+            status["result"] = serialize_result(status.get("result"))
 
         return status
 

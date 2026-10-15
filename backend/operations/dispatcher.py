@@ -28,7 +28,7 @@ from .registry import operation_registry
 from .task_manager import task_manager, TaskManager
 from .evolution.wrap_individual import wrap_precursor_as_individual
 from .evolution.expression import express_individuals
-from .evolution.mutate import dispatch_mutate_operation
+from .evolution.scatter import dispatch_scatter_operation
 from .evolution.recombine import dispatch_recombine_operation
 from .evolution.resolution import resolve_exemplar_context
 from .grating.create_grating import dispatch_create_grating_operation
@@ -277,8 +277,8 @@ async def dispatch_operation(
 
         # Queued Background Host Tasks
         elif op.execution == "queued":
-            if operation_name in ("scatter", "mutate"):
-                return await dispatch_mutate_operation(
+            if operation_name == "scatter":
+                return await dispatch_scatter_operation(
                     data=payload,
                     param_graph=param_graph,
                     graph_lock=graph_lock,
@@ -476,7 +476,7 @@ async def dispatch_operation(
         for arg_name, element in list(node_engine_args.items()):
             if isinstance(element, list):
                 for el in element:
-                    if not isinstance(el, (Audio, Model, Grating, Latent, Individual)):
+                    if not isinstance(el, (Audio, Image, Model, Grating, Latent, Individual)):
                         return {"error": f"Node '{el.id}' is not a valid artifact."}, 400
             else:
                 if isinstance(element, Audio):
@@ -488,7 +488,7 @@ async def dispatch_operation(
                             element.file = replace(element.file, path=str(valid_path))
                             node_engine_args[arg_name] = element
 
-                if not isinstance(element, (Audio, Model, Grating, Latent, Individual)):
+                if not isinstance(element, (Audio, Image, Model, Grating, Latent, Individual)):
                     field_name = arg_name.removesuffix("_element")
                     return {"error": f"Node '{element.id}' for field '{field_name}' is not a valid artifact."}, 400
 

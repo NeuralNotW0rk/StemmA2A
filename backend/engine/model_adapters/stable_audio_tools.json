@@ -205,6 +205,13 @@
     ],
     "invert": [
         {
+            "name": "source_audio",
+            "label": "Source Audio",
+            "type": "node",
+            "filter": { "type": "audio" },
+            "required": true
+        },
+        {
             "name": "prompt",
             "label": "Prompt",
             "type": "textarea",

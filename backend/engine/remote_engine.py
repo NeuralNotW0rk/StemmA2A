@@ -10,6 +10,7 @@ from typing import Any
 from param_graph.elements.base_elements import GraphElement
 
 from .engine import Engine
+from .results import is_multi_result
 from param_graph.registry import resolve_element
 from utils.uid import path_from_uid
 
@@ -246,10 +247,59 @@ class RemoteEngine(Engine):
                 except Exception:
                     pass
 
+    async def _fetch_result_element(self, element_dict: dict, session: aiohttp.ClientSession) -> dict:
+        """
+        Downloads a result element's asset (with transfer deduplication) and returns the element anchored
+        to the local download directory. Raises if the download fails.
+        """
+        result_element = resolve_element(element_dict)
+
+        # Save the file to a stable temporary location that won't be auto-deleted.
+        tmp_root = Path(__file__).parent.parent / "tmp"
+        tmp_root.mkdir(exist_ok=True)
+
+        # Construct the path from the UID to save locally.
+        base_path = path_from_uid(result_element.id)
+        local_path = tmp_root / base_path
+
+        # Download asset if not already cached locally
+        if not (local_path.exists() and local_path.stat().st_size > 0):
+            tracker: _TransferTracker | None = None
+            is_initiator = False
+
+            with self._transfer_lock:
+                if result_element.id in self._active_downloads:
+                    print(f"[RemoteEngine Download] Asset '{result_element.id}' is already being downloaded. Joining in-flight transfer...")
+                    tracker = self._active_downloads[result_element.id]
+                    is_initiator = False
+                else:
+                    tracker = _TransferTracker()
+                    self._active_downloads[result_element.id] = tracker
+                    is_initiator = True
+
+            if is_initiator:
+                success = False
+                try:
+                    success = await self._download_single_asset(result_element.id, local_path, session)
+                finally:
+                    with self._transfer_lock:
+                        tracker.success = success
+                        tracker.done_event.set()
+                        if self._active_downloads.get(result_element.id) is tracker:
+                            del self._active_downloads[result_element.id]
+            else:
+                success = await self._wait_for_transfer(tracker, timeout=float(self.timeout))
+
+            if not success:
+                raise Exception(f"Failed to download asset {result_element.id}.")
+
+        # Anchor the element's path to the root of our stable temp directory.
+        return result_element.anchor(str(tmp_root), with_extension=False).to_dict()
+
     async def get_job_status(self, job_id: str) -> dict[str, Any]:
         """
         Polls the remote server for the status of a job.
-        If the job is complete, it downloads the resulting file with transfer deduplication.
+        If the job is complete, it downloads the resulting file(s) with transfer deduplication.
         """
         auth_headers = self._get_auth_headers()
         timeout = aiohttp.ClientTimeout(total=self.timeout)
@@ -261,65 +311,28 @@ class RemoteEngine(Engine):
 
                     status_info = await response.json()
 
-                    # If the job is complete and has a result, we need to download the file.
+                    # If the job is complete and has a result, we need to download its file(s).
                     if status_info.get("status") == "completed" and "result" in status_info:
-                        result_dict = status_info["result"]
+                        result = status_info["result"]
 
-                        # The result from the service IS the element dictionary.
-                        element_dict = result_dict
-                        if not element_dict or not isinstance(element_dict, dict) or "id" not in element_dict:
+                        # The result from the service IS the element dictionary (or a multi-artifact result of them).
+                        if is_multi_result(result):
+                            elements = result["artifacts"]
+                        elif result and isinstance(result, dict) and "id" in result:
+                            elements = [result]
+                        else:
                             return status_info  # Return as-is if there's no valid element
 
-                        result_element = resolve_element(element_dict)
+                        try:
+                            fetched = [await self._fetch_result_element(element, session) for element in elements]
+                        except Exception as e:
+                            print(f"Error: {e}")
+                            status_info["status"] = "failed"
+                            status_info["error"] = str(e)
+                            return status_info
 
-                        # Save the file to a stable temporary location that won't be auto-deleted.
-                        tmp_root = Path(__file__).parent.parent / "tmp"
-                        tmp_root.mkdir(exist_ok=True)
-
-                        # Construct the path from the UID to save locally.
-                        base_path = path_from_uid(result_element.id)
-                        local_path = tmp_root / base_path
-
-                        # Download asset if not already cached locally
-                        if not (local_path.exists() and local_path.stat().st_size > 0):
-                            tracker: _TransferTracker | None = None
-                            is_initiator = False
-
-                            with self._transfer_lock:
-                                if result_element.id in self._active_downloads:
-                                    print(f"[RemoteEngine Download] Asset '{result_element.id}' is already being downloaded. Joining in-flight transfer...")
-                                    tracker = self._active_downloads[result_element.id]
-                                    is_initiator = False
-                                else:
-                                    tracker = _TransferTracker()
-                                    self._active_downloads[result_element.id] = tracker
-                                    is_initiator = True
-
-                            if is_initiator:
-                                success = False
-                                try:
-                                    success = await self._download_single_asset(result_element.id, local_path, session)
-                                finally:
-                                    with self._transfer_lock:
-                                        tracker.success = success
-                                        tracker.done_event.set()
-                                        if self._active_downloads.get(result_element.id) is tracker:
-                                            del self._active_downloads[result_element.id]
-                            else:
-                                success = await self._wait_for_transfer(tracker, timeout=float(self.timeout))
-
-                            if not success:
-                                error_msg = f"Failed to download asset {result_element.id}."
-                                print(f"Error: {error_msg}")
-                                status_info["status"] = "failed"
-                                status_info["error"] = error_msg
-                                return status_info
-
-                        # Anchor the element's path to the root of our stable temp directory.
-                        anchored_element = result_element.anchor(str(tmp_root), with_extension=False)
-
-                        # Replace the dict result with the anchored element's dict representation.
-                        status_info["result"] = anchored_element.to_dict()
+                        # Replace the dict result with the anchored elements' dict representations.
+                        status_info["result"] = {**result, "artifacts": fetched} if is_multi_result(result) else fetched[0]
 
                     return status_info
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:

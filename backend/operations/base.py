@@ -17,7 +17,7 @@ class Operation(ABC):
     @property
     @abstractmethod
     def name(self) -> str:
-        """Unique operation identifier (e.g. 'gain', 'slice', 'mutate', 'recombine')."""
+        """Unique operation identifier (e.g. 'gain', 'slice', 'scatter', 'recombine')."""
         pass
 
     @property

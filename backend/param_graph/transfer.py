@@ -120,7 +120,8 @@ def _ancestry(G: nx.DiGraph, individual_ids: list[str]) -> list[dict]:
             'generation': attrs.get('generation'),
             'parent_ids': parent_ids,
         }
-        for key in ('mutation_operation', 'recombine_operation', 'precursor_artifact_id'):
+        # mutation_operation is the pre-rename name of scatter_operation, still found in older projects
+        for key in ('scatter_operation', 'mutation_operation', 'recombine_operation', 'precursor_artifact_id'):
             if key in context:
                 entry[key] = copy.deepcopy(context[key])
         chain.append(entry)

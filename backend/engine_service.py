@@ -11,6 +11,7 @@ import torch
 from pydantic import ValidationError
 
 from engine.engine_provider import EngineProvider
+from engine.results import map_result_elements
 from utils.uid import path_from_uid
 from utils.migrations import run_global_migrations
 from utils.log_capture import start_log_capture
@@ -227,13 +228,11 @@ async def get_job_status(job_id):
         engine = engine_provider.get_engine()
         status = await engine.get_job_status(job_id)
 
-        # De-anchor completed results before sending them over the wire
-        if status.get("status") == "completed" and "result" in status:
-            result_data = status.get("result")
-            if result_data and "id" in result_data:
-                element = resolve_element(result_data)
-                de_anchored_element = element.de_anchor()
-                status["result"] = de_anchored_element.to_dict()
+        # De-anchor completed results (every artifact of a multi-artifact result) before sending them over the wire
+        if status.get("status") == "completed" and status.get("result"):
+            status["result"] = map_result_elements(
+                status["result"], lambda data: resolve_element(data).de_anchor().to_dict()
+            )
 
         return jsonify(status)
     except Exception as e:

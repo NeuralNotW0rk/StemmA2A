@@ -39,15 +39,68 @@
             "label": "Randomize Noise",
             "type": "boolean",
             "defaultValue": false
+        },
+        {
+            "name": "init_latent",
+            "label": "Initial Latent",
+            "type": "node",
+            "filter": { "type": "latent" },
+            "defaultValue": null
         }
     ],
     "invert": [
         {
-            "name": "steps",
-            "label": "Optimization Steps",
+            "name": "source_image",
+            "label": "Source Image",
+            "type": "node",
+            "filter": { "type": "image" },
+            "required": true
+        },
+        {
+            "name": "projection_steps",
+            "label": "Projection Steps",
             "type": "integer",
-            "defaultValue": 100,
-            "placeholder": "Projection step count"
+            "defaultValue": 500,
+            "placeholder": "Steps optimizing the pivot latent"
+        },
+        {
+            "name": "tuning_steps",
+            "label": "Tuning Steps",
+            "type": "integer",
+            "defaultValue": 350,
+            "placeholder": "Steps tuning the LoRA around the pivot"
+        },
+        {
+            "name": "rank",
+            "label": "LoRA Rank",
+            "type": "integer",
+            "defaultValue": 4,
+            "placeholder": "Higher reconstructs more detail, stays less editable"
+        },
+        {
+            "name": "projection_lr",
+            "label": "Projection Learning Rate",
+            "type": "float",
+            "defaultValue": 0.1
+        },
+        {
+            "name": "tuning_lr",
+            "label": "Tuning Learning Rate",
+            "type": "float",
+            "defaultValue": 0.001
+        },
+        {
+            "name": "use_lpips",
+            "label": "Perceptual (LPIPS) Loss",
+            "type": "boolean",
+            "defaultValue": true
+        },
+        {
+            "name": "seed",
+            "label": "Seed",
+            "type": "integer",
+            "defaultValue": 0,
+            "randomizable": true
         }
     ]
 }

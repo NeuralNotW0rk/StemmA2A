@@ -9,6 +9,7 @@ from typing import Union, Optional, Any, Callable
 import torch
 from diffracture.topology.grating import Grating
 from neutral_selection.representation.genome import Genome
+from neutral_selection.variation.mutation import MutationStrategy
 
 
 @dataclass
@@ -66,65 +67,104 @@ PerturbationGene = LoRAGene
 
 # --- LoRA Mutation Operators ---
 
-def lora_gaussian_noise_mutator(std: float, mean: float = 0.0) -> Callable[[Any], Any]:
+def lora_noise_reference(val: torch.Tensor, floor: Optional[float] = None) -> float:
     """
-    Returns a mutator function that adds Gaussian noise to numeric values,
-    with custom LoRA-specific scaling initialization for zero-initialized torch Tensors.
+    Returns the scale a tensor's noise is measured against: its own RMS, floored at `floor`
+    (by default the 1/sqrt(fan_in) init scale). The floor keeps zero-initialized factors able to
+    move and sizes steps by layer width; the RMS keeps steps proportional once weights have grown.
     """
-    from neutral_selection.variation.mutation import gaussian_noise_mutator
+    if floor is None:
+        fan_in = val.numel() // val.size(0) if val.dim() > 0 and val.size(0) > 0 else 1
+        floor = 1.0 / max(fan_in, 1) ** 0.5
+    rms = val.detach().float().pow(2).mean().sqrt().item() if val.numel() > 0 else 0.0
+    return max(rms, floor)
 
-    base_mutator = gaussian_noise_mutator(std, mean=mean)
 
-    def mutate_fn(val: Any) -> Any:
-        if hasattr(val, "device") and hasattr(val, "dtype") and hasattr(val, "clone"):
-            # Check for torch Tensor
-            if torch.all(val == 0.0):
-                # Standard LoRA-style initialization: scale std by 1 / sqrt(rank)
-                rank = val.size(0)
-                init_std = 1.0 / (rank ** 0.5) if rank > 0 else 1.0
-                return torch.randn_like(val) * init_std * std + mean
-        return base_mutator(val)
+def lora_scaled_noise_mutator(noise_scale: float, floor: Optional[float] = None) -> Callable[[torch.Tensor], torch.Tensor]:
+    """
+    Returns a mutator that adds Gaussian noise with std noise_scale * lora_noise_reference(tensor, floor),
+    so noise_scale is a step size relative to each tensor rather than an absolute weight delta.
+    """
+    def mutate_fn(val: torch.Tensor) -> torch.Tensor:
+        std = noise_scale * lora_noise_reference(val, floor)
+        return val + (torch.randn(val.shape, device=val.device) * std).to(val.dtype)
 
     return mutate_fn
 
 
-def lora_gene_mutator(lora_noise: float, active_flip_prob: float) -> Callable[[LoRAGene], LoRAGene]:
+def lora_up_noise_floor(lora_down: torch.Tensor) -> Optional[float]:
     """
-    Returns a mutator that builds a new LoRAGene from noised copies of a gene's weights.
-    Equivalent to attribute_mutator over (lora_down, lora_up, active), but skips its deepcopy of the
-    gene, since the noise mutators already return new tensors.
+    Returns the lora_up noise floor at which its contribution to dW = up @ down has an RMS of about
+    noise_scale / sqrt(in_features), the init scale of the base layer's weights. That contribution
+    scales with ||down||_F, so a fixed fan-in floor would overshoot once lora_down has grown.
+    Returns None (the fan-in default) when lora_down is zero.
     """
-    from neutral_selection.variation.mutation import bit_flip_mutator
+    down_norm = lora_down.detach().float().norm().item()
+    return 1.0 / down_norm if down_norm > 0.0 else None
 
-    mutate_down = lora_gaussian_noise_mutator(std=lora_noise)
-    mutate_up = lora_gaussian_noise_mutator(std=lora_noise)
-    flip_active = bit_flip_mutator(prob=active_flip_prob)
 
-    def mutate_fn(gene: LoRAGene) -> LoRAGene:
-        return LoRAGene(
-            address=gene.address,
-            lora_down=mutate_down(gene.lora_down),
-            lora_up=mutate_up(gene.lora_up),
-            active=flip_active(gene.active)
-        )
+class LoRAMutation(MutationStrategy):
+    """
+    Mutation strategy for LoRAGenomes.
+    Each active gene is perturbed with probability mutation_rate using relative Gaussian noise on both
+    factors, with lora_up's floor set from lora_down (see lora_up_noise_floor). Separately, each gene's
+    active flag flips with probability active_flips / len(genome), so the expected number of flips per
+    offspring stays fixed regardless of model size.
+    Inactive genes are frozen: a gene switched off keeps its weights, so switching it back on restores
+    the state it was selected in rather than an unheard random drift.
+    """
+    def __init__(self, noise_scale: float, active_flips: float, mutation_rate: float) -> None:
+        if noise_scale < 0.0:
+            raise ValueError("noise_scale must be non-negative.")
+        if active_flips < 0.0:
+            raise ValueError("active_flips must be non-negative.")
+        if not (0.0 <= mutation_rate <= 1.0):
+            raise ValueError("mutation_rate must be between 0.0 and 1.0 inclusive.")
+        self.noise_scale = float(noise_scale)
+        self.active_flips = float(active_flips)
+        self.mutation_rate = float(mutation_rate)
 
-    return mutate_fn
+    def __call__(self, genome: Genome) -> Genome:
+        if not isinstance(genome, Genome):
+            raise TypeError("genome must be an instance of Genome.")
+
+        genes = list(genome)
+        flip_prob = min(1.0, self.active_flips / len(genes)) if genes else 0.0
+        mutated: list[LoRAGene] = []
+        for gene in genes:
+            if not isinstance(gene, LoRAGene):
+                raise TypeError(f"LoRAMutation expects LoRAGene items, got {type(gene).__name__}.")
+            flip = random.random() < flip_prob
+            # Only genes that are expressed both before and after this step are perturbed
+            perturb = (
+                gene.active and not flip
+                and self.noise_scale > 0.0 and random.random() < self.mutation_rate
+            )
+            if not perturb and not flip:
+                # Genes are never modified in place, so the parent's gene can be shared
+                mutated.append(gene)
+                continue
+            mutated.append(LoRAGene(
+                address=gene.address,
+                lora_down=self._perturb(gene.lora_down) if perturb else gene.lora_down,
+                lora_up=self._perturb(gene.lora_up, lora_up_noise_floor(gene.lora_down)) if perturb else gene.lora_up,
+                active=(not gene.active) if flip else gene.active
+            ))
+        return genome.__class__(mutated)
+
+    def _perturb(self, val: torch.Tensor, floor: Optional[float] = None) -> torch.Tensor:
+        return lora_scaled_noise_mutator(self.noise_scale, floor)(val)
 
 
 def get_lora_mutation_strategy(
-    lora_noise: float = 0.05,
-    active_flip_prob: float = 0.05,
+    noise_scale: float = 0.1,
+    active_flips: float = 1.0,
     mutation_rate: float = 1.0
 ) -> Any:
     """
-    Returns a UniformMutation strategy tailored for LoRAGenome instances.
+    Returns a LoRAMutation strategy for LoRAGenome instances.
     """
-    from neutral_selection.variation.mutation import UniformMutation
-
-    return UniformMutation(
-        mutation_rate=mutation_rate,
-        mutation_fn=lora_gene_mutator(lora_noise, active_flip_prob)
-    )
+    return LoRAMutation(noise_scale=noise_scale, active_flips=active_flips, mutation_rate=mutation_rate)
 
 
 # --- LoRA Crossover / Recombination Operators ---
@@ -299,8 +339,8 @@ class LoRAGenome(Genome):
         cls,
         base_grating: Grating,
         population_size: int,
-        lora_noise: float,
-        active_flip_prob: float
+        noise_scale: float,
+        active_flips: float
     ) -> list["LoRAGenome"]:
         """
         Creates an initial population of LoRAGenomes from a base grating.
@@ -312,8 +352,8 @@ class LoRAGenome(Genome):
         population: list[LoRAGenome] = []
 
         mutation_strategy = get_lora_mutation_strategy(
-            lora_noise=lora_noise,
-            active_flip_prob=active_flip_prob,
+            noise_scale=noise_scale,
+            active_flips=active_flips,
             mutation_rate=1.0
         )
 

@@ -196,15 +196,17 @@ def find_exemplar_audio(
 
 
 def _lineage_parent_ids(node_id: str, element: Any, param_graph: Any) -> list[str]:
-    """Returns a node's lineage parents: 'parent' graph edges, then mutation and lineage context records."""
+    """Returns a node's lineage parents: 'parent' graph edges, then scatter and lineage context records."""
     parent_ids = [
         u for u, _, edge_data in param_graph.G.in_edges(node_id, data=True)
         if edge_data.get("relation") == "parent"
     ]
     context = getattr(element, "context", None) or {}
-    mutation_parent = context.get("mutation_operation", {}).get("parent_id")
-    if mutation_parent:
-        parent_ids.append(mutation_parent)
+    # Projects saved before the rename record scatter parents under "mutation_operation"
+    scatter_record = context.get("scatter_operation") or context.get("mutation_operation") or {}
+    scatter_parent = scatter_record.get("parent_id")
+    if scatter_parent:
+        parent_ids.append(scatter_parent)
     parent_ids.extend(context.get("lineage", {}).get("parent_ids", []))
     return parent_ids
 
@@ -216,7 +218,7 @@ def iter_lineage(
 ) -> Iterator[tuple[str, int]]:
     """
     Yields (node_id, depth) for an Individual (depth 0) and then its ancestors, breadth-first and
-    nearest first. Ancestors are found through 'parent' edges and the mutation/lineage records in
+    nearest first. Ancestors are found through 'parent' edges and the scatter/lineage records in
     context; only Individual ancestors are expanded further. Callers must hold the graph lock.
 
     Args:

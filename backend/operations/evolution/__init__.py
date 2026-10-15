@@ -8,17 +8,12 @@ from .wrap_individual import (
     wrap_artifact_as_individual,
     wrap_precursor_as_individual,
 )
-from .mutate import (
+from .scatter import (
     ScatterOperation,
-    MutateOperation,
-    MutatedOffspring,
-    mutate_offspring,
+    ScatteredOffspring,
     scatter_offspring,
-    mutate_evolution_task,
     scatter_evolution_task,
-    run_mutate_task,
     run_scatter_task,
-    dispatch_mutate_operation,
     dispatch_scatter_operation,
 )
 from .recombine import (
@@ -54,10 +49,6 @@ def get_evolution_operations() -> list[dict]:
     for filename in ["wrap_individual.json", "scatter.json", "recombine.json"]:
         json_path = dir_path / filename
         if not json_path.exists():
-            # Fallback to mutate.json if scatter.json is absent
-            if filename == "scatter.json":
-                json_path = dir_path / "mutate.json"
-        if not json_path.exists():
             raise FileNotFoundError(f"Evolution operation config not found at: {json_path}")
         with open(json_path, "r", encoding="utf-8") as f:
             operations.append(json.load(f))
@@ -70,15 +61,10 @@ __all__ = [
     "wrap_artifact_as_individual",
     "wrap_precursor_as_individual",
     "ScatterOperation",
-    "MutateOperation",
-    "MutatedOffspring",
-    "mutate_offspring",
+    "ScatteredOffspring",
     "scatter_offspring",
-    "mutate_evolution_task",
     "scatter_evolution_task",
-    "run_mutate_task",
     "run_scatter_task",
-    "dispatch_mutate_operation",
     "dispatch_scatter_operation",
     "RecombineOperation",
     "LineageRecord",

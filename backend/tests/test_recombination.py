@@ -54,7 +54,7 @@ class TestRecombinationEngine(unittest.TestCase):
 
         selection_strat = TournamentSelection(tournament_size=2)
         crossover_strat = get_lora_crossover_strategy(num_cut_points=1)
-        mutation_strat = get_lora_mutation_strategy(lora_noise=0.05, active_flip_prob=0.0)
+        mutation_strat = get_lora_mutation_strategy(noise_scale=0.05, active_flips=0.0)
 
         offspring = recombine_offspring(
             parents=parents,
@@ -86,7 +86,7 @@ class TestRecombinationEngine(unittest.TestCase):
 
         selection_strat = TournamentSelection(tournament_size=2)
         crossover_strat = get_lora_crossover_strategy(num_cut_points=1)
-        mutation_strat = get_lora_mutation_strategy(lora_noise=0.1, active_flip_prob=0.0)
+        mutation_strat = get_lora_mutation_strategy(noise_scale=0.1, active_flips=0.0)
 
         offspring = recombine_offspring(
             parents=parents,
@@ -123,7 +123,7 @@ class TestRecombinationEngine(unittest.TestCase):
 
         selection_strat = TournamentSelection(tournament_size=2)
         crossover_strat = get_lora_crossover_strategy(num_cut_points=1)
-        mutation_strat = get_lora_mutation_strategy(lora_noise=0.05, active_flip_prob=0.0)
+        mutation_strat = get_lora_mutation_strategy(noise_scale=0.05, active_flips=0.0)
 
         offspring = recombine_offspring(
             parents=parents,
@@ -318,7 +318,7 @@ class TestRecombinationAPI(unittest.TestCase):
                 "selection_type": "tournament",
                 "crossover_type": "blend_crossover",
                 "mutation_rate": 1.0,
-                "lora_noise": 0.05
+                "noise_scale": 0.05
             }
 
             resp = client.post("/recombine_evolution", json=payload)
@@ -726,7 +726,7 @@ class TestRecombinationAPI(unittest.TestCase):
                 offspring_size=2,
                 selection_cfg={"type": "uniform"},
                 crossover_cfg={"type": "two_point"},
-                mutation_cfg={"mutation_rate": 0.0, "lora_noise": 0.0, "active_flip_prob": 0.0},
+                mutation_cfg={"mutation_rate": 0.0, "noise_scale": 0.0, "active_flips": 0.0},
                 crossover_prob=0.0,
                 elitism=0,
                 generation_context={},

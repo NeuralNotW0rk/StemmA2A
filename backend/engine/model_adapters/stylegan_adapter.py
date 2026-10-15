@@ -15,9 +15,13 @@ from torchvision.utils import save_image
 from .base_adapter import ModelAdapter, operation
 from param_graph.elements.base_elements import Asset, GraphElement
 from param_graph.elements.artifacts.image_element import Image
+from param_graph.elements.artifacts.grating_element import Grating as GratingArtifact
+from param_graph.elements.artifacts.latent_element import Latent
 from param_graph.elements.models.stylegan_element import StyleGANModel
 from utils.uid import XXH3_64, UIDMismatchError
 from utils.filesystem import get_path_size
+from .stylegan_pti import load_target_image, pivotal_tuning_inversion
+from ..results import ArtifactLink, OperationResult
 
 # ==============================================================================
 # Dynamic TensorFlow (NVIDIA legacy pkl) check-pointing utilities
@@ -922,21 +926,28 @@ class StyleGANAdapter(ModelAdapter):
         truncation = float(kwargs.get("truncation", 0.7))
         seed = kwargs.get("seed", None)
         randomize_noise = bool(kwargs.get("randomize_noise", False))
+        init_latent = kwargs.get("init_latent_element")
 
         if seed is not None:
             torch.manual_seed(seed)
             import random
             random.seed(seed)
-        
+
         with torch.no_grad():
-            z = torch.randn(1, self.style_dim, device=self.device)
-            img, _ = self.model([z], truncation=truncation, truncation_latent=self.mean_latent, randomize_noise=randomize_noise)
+            if init_latent is not None:
+                # An explicit w (e.g. an inversion pivot) is rendered as is: truncating it would pull
+                # it toward the average and away from the image it encodes
+                w = self._load_w(init_latent)
+                img, _ = self.model([w], input_is_latent=True, randomize_noise=randomize_noise)
+            else:
+                z = torch.randn(1, self.style_dim, device=self.device)
+                img, _ = self.model([z], truncation=truncation, truncation_latent=self.mean_latent, randomize_noise=randomize_noise)
             img = img.squeeze(0) # Shape: [3, H, W]
 
         # Generate unique IDs
         uid_gen = XXH3_64()
         img_id = uid_gen.from_tensor(img)
-        
+
         # Save output temporarily (engine will move it to the project files)
         temp_dir = tempfile.mkdtemp()
         temp_path = os.path.join(temp_dir, f"{img_id}.png")
@@ -944,15 +955,18 @@ class StyleGANAdapter(ModelAdapter):
 
         asset = Asset(path=temp_path, uid=img_id, extension=".png")
         size = self.model_info.config.get("size", 256)
-        
+        context = {
+            "seed": seed,
+            "truncation": truncation,
+            "size": size
+        }
+        if init_latent is not None:
+            context["init_latent_id"] = init_latent.id
+
         image_artifact = Image(
             id=img_id,
-            name=f"stylegan_gen_{seed if seed is not None else 'rand'}",
-            context={
-                "seed": seed,
-                "truncation": truncation,
-                "size": size
-            },
+            name=f"stylegan_latent_{init_latent.id[:8]}" if init_latent is not None else f"stylegan_gen_{seed if seed is not None else 'rand'}",
+            context=context,
             file=asset,
             width=size,
             height=size
@@ -961,33 +975,123 @@ class StyleGANAdapter(ModelAdapter):
 
         return image_artifact, img
 
+    def _load_w(self, latent_element) -> torch.Tensor:
+        """Loads a W ([1, style_dim]) or W+ ([1, n_latent, style_dim]) latent saved as a tensor file."""
+        path = latent_element.file.path
+        if not path or not os.path.exists(path):
+            raise FileNotFoundError(f"Latent file not found at {path}")
+        w = torch.load(path, map_location=self.device, weights_only=True)
+        if w.dim() == 1:
+            w = w.unsqueeze(0)
+        if w.shape[-1] != self.style_dim or w.dim() not in (2, 3) or (w.dim() == 3 and w.shape[1] != self.model.n_latent):
+            raise ValueError(
+                f"Latent '{latent_element.id}' has shape {tuple(w.shape)}, which is not a StyleGAN2 W or W+ latent "
+                f"for this model (style dim {self.style_dim}, {self.model.n_latent} layers)."
+            )
+        return w.float()
+
     @operation(
         name="invert",
         is_standard=True,
-        description="StyleGAN2 latent space projection",
-        initiator_types=["model", "image"]
+        description="StyleGAN2 pivotal tuning inversion",
+        initiator_types=["model", "image"],
+        context_overrides={
+            "image": {
+                "name": "Invert Image",
+                "description": "Invert the selected image into a pivot latent and a LoRA grating that reproduces it there"
+            }
+        }
     )
-    def invert(self, **kwargs) -> tuple[GraphElement, torch.Tensor]:
-        # Return a mock mapping or a w-latent for test purposes
-        # Since StyleGAN2 inversion involves optimization, we can generate a random/empty w-latent mapping
-        import uuid
-        from param_graph.elements.artifacts.latent_element import Latent
-        
-        latent_id = "latent_" + str(uuid.uuid4())[:8]
-        temp_dir = tempfile.mkdtemp()
-        temp_path = os.path.join(temp_dir, f"{latent_id}.pt")
-        
-        # Mock projection vector of shape [1, 14, 512]
-        latent_vector = torch.zeros(1, self.model.n_latent, self.style_dim)
-        torch.save(latent_vector, temp_path)
-        
-        asset = Asset(path=temp_path, uid=latent_id, extension=".pt")
-        latent_artifact = Latent(
-            id=latent_id,
-            name="stylegan_inversion_latent",
-            context={"inversion_strength": 1.0},
-            file=asset
+    def invert(self, **kwargs) -> OperationResult:
+        """
+        Pivotal Tuning Inversion: projects the source image to a pivot w, then tunes a LoRA grating on the
+        synthesis convs so G(w) reproduces it. Returns the pivot Latent and the Grating, linked pivot -> grating:
+        generating from the pivot with the grating applied renders the inverted image.
+        """
+        source_image = kwargs.get("source_image_element")
+        if source_image is None or not getattr(source_image, "file", None) or not source_image.file.path:
+            raise ValueError("StyleGAN inversion needs a source image.")
+        if not os.path.exists(source_image.file.path):
+            raise FileNotFoundError(f"Source image not found at {source_image.file.path}")
+
+        projection_steps = int(kwargs.get("projection_steps", 500))
+        tuning_steps = int(kwargs.get("tuning_steps", 350))
+        rank = int(kwargs.get("rank", 4))
+        projection_lr = float(kwargs.get("projection_lr", 0.1))
+        tuning_lr = float(kwargs.get("tuning_lr", 1e-3))
+        use_lpips = bool(kwargs.get("use_lpips", True))
+        seed = kwargs.get("seed", 0)
+        if seed is not None:
+            torch.manual_seed(int(seed))
+
+        size = self.model_info.config.get("size", 256)
+        target = load_target_image(source_image.file.path, size, self.device)
+
+        def progress(phase, step, total, loss):
+            if step == total or step % 50 == 0:
+                print(f"PTI {phase}: step {step}/{total}, loss {loss:.4f}")
+
+        result = pivotal_tuning_inversion(
+            self.model,
+            target,
+            w_avg=self.mean_latent,
+            projection_steps=projection_steps,
+            tuning_steps=tuning_steps,
+            rank=rank,
+            projection_lr=projection_lr,
+            tuning_lr=tuning_lr,
+            use_lpips=use_lpips,
+            progress=progress
         )
-        latent_artifact._temp_dir_ref = temp_dir
-        
-        return latent_artifact, latent_vector
+        grating = result["grating"].cpu()
+        w_pivot = result["w_pivot"].cpu()
+        source_name = os.path.splitext(os.path.basename(source_image.file.path))[0]
+        temp_dir = tempfile.mkdtemp()
+
+        # The pivot: a W latent, rendered with the grating applied to reproduce the image
+        latent_id = self.uid_generator.from_tensor(w_pivot)
+        latent_path = os.path.join(temp_dir, f"{latent_id}.pt")
+        torch.save(w_pivot, latent_path)
+        latent = Latent(
+            id=latent_id,
+            name=f"pti_pivot_{source_name}",
+            context={
+                "inversion_method": "pti",
+                "source_image_id": source_image.id,
+                "projection_steps": projection_steps,
+                "projection_loss": result["projection_loss"],
+                "reconstruction_loss": result["loss"]
+            },
+            file=Asset(path=latent_path, uid=latent_id, extension=".pt")
+        )
+        latent._temp_dir_ref = temp_dir
+
+        # The grating tuned around the pivot. Content-addressed over its factors and the pivot it belongs to
+        grating_id = self.uid_generator.from_state_dict({**grating.state_dict(), "pivot": w_pivot})
+        grating_path = os.path.join(temp_dir, f"{grating_id}.safetensors")
+        grating.save(grating_path)
+
+        grating_artifact = GratingArtifact(
+            id=grating_id,
+            name=f"pti_{source_name}",
+            context={
+                "inversion_method": "pti",
+                "pivot_latent": latent_id,
+                "rank": rank,
+                "tuning_steps": tuning_steps,
+                "tuning_loss": result["tuning_loss"],
+                "reconstruction_loss": result["loss"]
+            },
+            file=Asset(path=grating_path, uid=grating_id, extension=".safetensors"),
+            base_model_id=self.model_info.id,
+            elements=[{
+                "address": element.address,
+                "kernel_type": element.kernel_type,
+                "metadata": element.metadata
+            } for element in grating._nodes]
+        )
+
+        return OperationResult(
+            outputs=[(latent, w_pivot), (grating_artifact, None)],
+            links=[ArtifactLink(source=latent_id, target=grating_id, relation="pivot")]
+        )

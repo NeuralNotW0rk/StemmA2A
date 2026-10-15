@@ -284,12 +284,12 @@ def recombine_evolution_task(
             blend_factor=float(crossover_cfg.get("blend_factor", 0.5)) if isinstance(crossover_cfg, dict) else 0.5,
         )
 
-        lora_noise = float(mutation_cfg.get("lora_noise", merged_context.get("lora_noise", 0.05)))
-        active_flip_prob = float(mutation_cfg.get("active_flip_prob", merged_context.get("active_flip_prob", 0.05)))
+        noise_scale = float(mutation_cfg.get("noise_scale", merged_context.get("noise_scale", 0.05)))
+        active_flips = float(mutation_cfg.get("active_flips", merged_context.get("active_flips", 1.0)))
         mutation_rate = float(mutation_cfg.get("mutation_rate", 0.1))
         mutation_strat = get_lora_mutation_strategy(
-            lora_noise=lora_noise,
-            active_flip_prob=active_flip_prob,
+            noise_scale=noise_scale,
+            active_flips=active_flips,
             mutation_rate=mutation_rate
         )
 
@@ -551,8 +551,8 @@ async def dispatch_recombine_operation(
     crossover_cfg = data.get("crossover") or params.get("crossover") or {"type": c_type}
     mutation_cfg = data.get("mutation") or params.get("mutation") or {
         "mutation_rate": float(data.get("mutation_rate") or params.get("mutation_rate") or 0.1),
-        "lora_noise": float(data.get("lora_noise") or params.get("lora_noise") or 0.05),
-        "active_flip_prob": float(data.get("active_flip_prob") or params.get("active_flip_prob") or 0.05)
+        "noise_scale": float(data.get("noise_scale") or params.get("noise_scale") or 0.05),
+        "active_flips": float(data.get("active_flips") or params.get("active_flips") or 1.0)
     }
 
     crossover_prob = float(data.get("crossover_prob") or params.get("crossover_prob") or 1.0)

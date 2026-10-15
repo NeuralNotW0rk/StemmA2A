@@ -190,10 +190,10 @@
       }
     }
 
-    // Filter out 'mutate'/'scatter' if target audio node does not have an associated generative model
+    // Filter out 'scatter' if target audio node does not have an associated generative model
     if (targetNode && (initiatorType === 'audio' || targetNode.data('member_type') === 'audio')) {
       if (!hasAssociatedModel(targetNode)) {
-        ops = ops.filter((op) => op.name !== 'mutate' && op.name !== 'scatter')
+        ops = ops.filter((op) => op.name !== 'scatter')
       }
     }
 
@@ -260,7 +260,7 @@
     model: ['generate'],
     grating: ['generate'],
     latent: ['generate'],
-    individual: ['mutate'],
+    individual: ['scatter'],
     group: ['recombine']
   }
 
@@ -345,7 +345,6 @@
 
   const MULTI_INITIATOR_OPERATIONS = new Set([
     'recombine',
-    'mutate',
     'scatter',
     'generate',
     'express'

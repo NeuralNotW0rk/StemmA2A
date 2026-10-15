@@ -53,6 +53,7 @@ from param_graph.transfer import collect_subgraph, write_subgraph
 from param_graph.rooms import placement_room, room_of, break_out, dissolve
 from coolname import generate_slug
 from engine.engine_provider import EngineProvider
+from engine.results import is_multi_result, result_artifacts, root_ids
 from engine.encoders.clap_encoder import CLAPEncoder
 from engine.encoders.clip_encoder import CLIPEncoder
 from utils.audio import load_audio, save_audio_to_buffer, save_audio
@@ -83,7 +84,7 @@ from param_graph.elements.collections.group_element import Group
 from operations.evolution import (
     wrap_precursor_as_individual,
     express_individual_to_grating_artifact,
-    dispatch_mutate_operation,
+    dispatch_scatter_operation,
     dispatch_recombine_operation,
     extract_individual_parent_ids,
     collect_exemplar_presets,
@@ -1012,11 +1013,9 @@ async def wrap_individual():
 
 
 @app.route("/scatter_evolution", methods=["POST"])
-@app.route("/mutate_evolution", methods=["POST"])
-@app.route("/start_evolution", methods=["POST"])
-async def mutate_evolution():
+async def scatter_evolution():
     """
-    Mutates parent individuals to produce variant offspring.
+    Scatters variant offspring around seed individuals.
     Genetics runs 100% locally on CPU without remote engine dependencies.
     """
     if param_graph is None or engine_provider is None:
@@ -1024,7 +1023,7 @@ async def mutate_evolution():
 
     try:
         data = request.get_json() or {}
-        resp, code = await dispatch_mutate_operation(
+        resp, code = await dispatch_scatter_operation(
             data=data,
             param_graph=param_graph,
             graph_lock=graph_lock,
@@ -1035,7 +1034,7 @@ async def mutate_evolution():
         )
         return jsonify(resp), code
     except Exception as e:
-        print(f"Failed to start mutation: {e}")
+        print(f"Failed to start scatter: {e}")
         traceback.print_exc()
         return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
@@ -1265,27 +1264,59 @@ async def get_job_status(job_id):
 
                 print(f"Job {job_id} completed. Processing artifact...")
                 result_dict = status_info.get("result", {})
-                artifact_data = result_dict.get('artifact', result_dict)
+                # Multi-artifact operations (e.g. a StyleGAN inversion's pivot latent and its grating)
+                # return several artifacts; the first is the primary one
+                artifact_data, companion_data, result_links = result_artifacts(result_dict)
 
                 if not artifact_data:
                     raise Exception("Completed job did not return a valid artifact.")
 
+                # Artifacts that an internal link points to are reached through its source, not the job's inputs
+                root_artifact_ids = set(root_ids(result_dict)) if is_multi_result(result_dict) else None
+
                 with graph_lock:
-                    temp_artifact = resolve_element(artifact_data) if isinstance(artifact_data, dict) else artifact_data
-
                     output_dir = param_graph.root / "generate"
-                    final_artifact = save_artifact_asset(temp_artifact, output_dir, asset_name="file")
-                    
-                    # Ensure context is populated for labelling, and merge job-level validated params (like model_id, operation, gratings)
-                    if isinstance(final_artifact, Artifact):
-                        current_context = final_artifact.context or {}
-                        merged_context = {**job_context.get("validated_params", {}), **current_context}
-                        merged_context.pop("job_id", None)
-                        merged_context.pop("execution_mode", None)
-                        final_artifact = replace(final_artifact, context=merged_context)
-
                     parent_id = job_context.get("parent_id")
                     group_id = job_context.get("group_id") or job_context.get("batch_id")
+
+                    def _store(data):
+                        temp_artifact = resolve_element(data) if isinstance(data, dict) else data
+                        stored = save_artifact_asset(temp_artifact, output_dir, asset_name="file")
+
+                        # Ensure context is populated for labelling, and merge job-level validated params (like model_id, operation, gratings)
+                        if isinstance(stored, Artifact):
+                            current_context = stored.context or {}
+                            merged_context = {**job_context.get("validated_params", {}), **current_context}
+                            merged_context.pop("job_id", None)
+                            merged_context.pop("execution_mode", None)
+                            stored = replace(stored, context=merged_context)
+                        return stored
+
+                    def _add_to_group(artifact):
+                        param_graph.update_element(artifact.id, {"parent": group_id})
+                        group_node_attrs = param_graph.G.nodes[group_id]
+                        if 'member_ids' not in group_node_attrs or not isinstance(group_node_attrs['member_ids'], list):
+                            group_node_attrs['member_ids'] = []
+                        if artifact.id not in group_node_attrs['member_ids']:
+                            group_node_attrs['member_ids'].append(artifact.id)
+                        update_group_labels(group_id)
+
+                    def _link_inputs(artifact):
+                        if root_artifact_ids is not None and artifact.id not in root_artifact_ids:
+                            return
+                        is_exemplar = param_graph.is_generated_exemplar(artifact.id)
+                        for element in job_context.get("linked_elements", []):
+                            if is_exemplar or (parent_id and element.id == parent_id):
+                                continue
+                            edge_exists = any(
+                                v == artifact.id and attrs.get('type') != 'spring'
+                                for _, v, attrs in param_graph.G.out_edges(element.id, data=True)
+                            )
+                            if not edge_exists:
+                                print(f"Linking {element.id} to {artifact.id}")
+                                param_graph.link(element, artifact, relation='source')
+
+                    final_artifact = _store(artifact_data)
 
                     existing_parent = (
                         param_graph.G.nodes[final_artifact.id].get("parent")
@@ -1322,41 +1353,45 @@ async def get_job_status(job_id):
                         if parent_id:
                             param_graph.update_element(final_artifact.id, {"parent": parent_id})
                         elif group_id:
-                            param_graph.update_element(final_artifact.id, {"parent": group_id})
-                            group_node_attrs = param_graph.G.nodes[group_id]
-                            if 'member_ids' not in group_node_attrs or not isinstance(group_node_attrs['member_ids'], list):
-                                group_node_attrs['member_ids'] = []
-                            if final_artifact.id not in group_node_attrs['member_ids']:
-                                group_node_attrs['member_ids'].append(final_artifact.id)
-                            update_group_labels(group_id)
+                            _add_to_group(final_artifact)
 
-                    is_exemplar = param_graph.is_generated_exemplar(final_artifact.id)
-                    for element in job_context.get("linked_elements", []):
-                        if is_exemplar or (parent_id and element.id == parent_id):
-                            continue
-                        edge_exists = any(
-                            v == final_artifact.id and attrs.get('type') != 'spring'
-                            for _, v, attrs in param_graph.G.out_edges(element.id, data=True)
-                        )
-                        if not edge_exists:
-                            print(f"Linking {element.id} to {final_artifact.id}")
-                            param_graph.link(element, final_artifact, relation='source')
+                    _link_inputs(final_artifact)
+
+                    # The rest of a multi-artifact result joins the batch group alongside the primary when it is a root
+                    stored_artifacts = {final_artifact.id: final_artifact}
+                    for data in companion_data:
+                        companion = _store(data)
+                        param_graph.add_element(companion)
+                        if group_id and not parent_id and companion.id in root_artifact_ids:
+                            _add_to_group(companion)
+                        _link_inputs(companion)
+                        stored_artifacts[companion.id] = companion
+
+                    for link in result_links:
+                        source = stored_artifacts.get(link.get("source"))
+                        target = stored_artifacts.get(link.get("target"))
+                        if source and target:
+                            param_graph.link(source, target, relation=link.get("relation") or "source")
 
                     # Deterministically ensure all structural dependencies declared in context are linked
-                    link_artifact_dependencies(final_artifact, param_graph)
+                    for artifact in stored_artifacts.values():
+                        link_artifact_dependencies(artifact, param_graph)
 
                     param_graph.save()
-                
+
                 trigger_embedding_update()
-                
+
                 print("Artifact processed and saved to graph successfully.")
-                return jsonify({
+                response = {
                     "status": "completed",
                     "message": "Audio generated and registered successfully.",
                     "artifact": final_artifact.to_dict(),
                     "node_id": final_artifact.id,
                     "validated_params": job_context.get("validated_params")
-                }), 200
+                }
+                if companion_data:
+                    response["artifacts"] = [artifact.to_dict() for artifact in stored_artifacts.values()]
+                return jsonify(response), 200
 
             elif status == "failed":
                 error_msg = status_info.get("error", "Unknown error during generation.")

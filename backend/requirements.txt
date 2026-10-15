@@ -28,3 +28,4 @@ torchcodec
 k-diffusion
 pytorch-lightning
 stable-audio-tools
+lpips

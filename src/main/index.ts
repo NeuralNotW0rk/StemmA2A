@@ -350,7 +350,7 @@ app.whenReady().then(async (): Promise<void> => {
   })
 
   ipcMain.handle('startEvolution', async (_event, evolutionData) => {
-    const response = await fetchWithAuth(`${BACKEND_URL}/start_evolution`, {
+    const response = await fetchWithAuth(`${BACKEND_URL}/scatter_evolution`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(evolutionData)

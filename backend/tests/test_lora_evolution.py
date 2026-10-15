@@ -1,4 +1,5 @@
 import unittest
+import random
 import torch
 from unittest.mock import AsyncMock, MagicMock
 from diffracture.topology.grating import Grating
@@ -10,7 +11,7 @@ from evolution.genome import (
     LoRAGenome,
     express_to_grating,
 )
-from evolution.lora_genome import lora_gaussian_noise_mutator
+from evolution.lora_genome import lora_scaled_noise_mutator, lora_noise_reference, get_lora_mutation_strategy
 from neutral_selection.variation.mutation import mutate, UniformMutation, attribute_mutator, bit_flip_mutator
 from neutral_selection.variation.recombination import RandomNPointCrossover, recombine
 from neutral_selection.representation.individual import Individual
@@ -173,13 +174,13 @@ class TestLoRAEvolution(unittest.TestCase):
         self.assertTrue(torch.equal(child_a[1].lora_up, torch.full((2, 1), 20.0)))
 
     def test_mutation(self) -> None:
-        """Verify gene mutation perturbs weights and active status."""
+        """Verify the scaled noise mutator perturbs weights and initializes zero tensors."""
         gene = PerturbationGene("l1", torch.tensor([1.0, 0.0]), torch.tensor([0.0, 1.0]), True)
 
         # Mutate using composed generic attribute mutators
         gene_mutator = attribute_mutator({
-            "lora_down": lora_gaussian_noise_mutator(std=0.1),
-            "lora_up": lora_gaussian_noise_mutator(std=0.2),
+            "lora_down": lora_scaled_noise_mutator(noise_scale=0.1),
+            "lora_up": lora_scaled_noise_mutator(noise_scale=0.2),
             "active": bit_flip_mutator(prob=0.0)
         })
         mutated = gene_mutator(gene)
@@ -189,34 +190,56 @@ class TestLoRAEvolution(unittest.TestCase):
         self.assertFalse(torch.equal(mutated.lora_up, gene.lora_up))
         self.assertTrue(mutated.active)
 
-        # Verify mutation still occurs for inactive genes (recessive/dormant mutation)
-        inactive_gene = PerturbationGene("l1", torch.tensor([1.0, 0.0]), torch.tensor([0.0, 1.0]), False)
-        mutated_inactive = gene_mutator(inactive_gene)
-        self.assertFalse(torch.equal(mutated_inactive.lora_down, inactive_gene.lora_down))
-        self.assertFalse(mutated_inactive.active)
-
         # Verify that mutating a zero weight gene initializes it with random weights
         zero_gene = PerturbationGene("l1", torch.zeros(2, 2), torch.zeros(2, 2), True)
         mutated_zero = gene_mutator(zero_gene)
         self.assertFalse(torch.all(mutated_zero.lora_down == 0.0))
         self.assertFalse(torch.all(mutated_zero.lora_up == 0.0))
 
+    def test_scaled_noise_is_relative(self) -> None:
+        """Verify noise std is noise_scale times the tensor's RMS, floored at 1/sqrt(fan_in)."""
+        torch.manual_seed(0)
+        mutator = lora_scaled_noise_mutator(noise_scale=0.1)
+
+        # Grown weights: steps follow the tensor's own RMS, whatever its absolute size
+        for magnitude in (0.5, 50.0):
+            big = torch.full((1, 4096), magnitude)
+            delta_std = (mutator(big) - big).std().item()
+            self.assertAlmostEqual(delta_std / (0.1 * magnitude), 1.0, delta=0.05)
+
+        # Zero lora_up (out=1536, rank=1): floor is 1/sqrt(rank), not 1/sqrt(out_features)
+        zero_up = torch.zeros(1536, 1)
+        self.assertAlmostEqual(lora_noise_reference(zero_up), 1.0)
+        self.assertAlmostEqual((mutator(zero_up) - zero_up).std().item(), 0.1, delta=0.01)
+
+        # Zero lora_down (rank=1, in=6144): floor is the 1/sqrt(fan_in) init scale
+        zero_down = torch.zeros(1, 6144)
+        self.assertAlmostEqual(lora_noise_reference(zero_down), 1.0 / 6144 ** 0.5)
+
+        # lora_up's floor follows lora_down, so a grown lora_down does not inflate the dW step
+        strategy = get_lora_mutation_strategy(noise_scale=0.1, active_flips=0.0)
+        for down_scale in (1.0 / 6144 ** 0.5, 1.0):
+            down = torch.randn(1, 6144)
+            down = down / down.pow(2).mean().sqrt() * down_scale
+            genome = LoRAGenome([PerturbationGene("l1", down, torch.zeros(1536, 1), True)])
+            child = mutate(genome, strategy)
+            dw_rms = (child[0].lora_up @ genome[0].lora_down).pow(2).mean().sqrt().item()
+            # dW from a zero lora_up lands near noise_scale times the 1/sqrt(in) base weight scale
+            self.assertAlmostEqual(dw_rms * 6144 ** 0.5, 0.1, delta=0.01)
+
+        # Half-precision tensors keep their dtype
+        half = torch.ones(4, 4, dtype=torch.float16)
+        self.assertEqual(mutator(half).dtype, torch.float16)
+
     def test_lora_genome_mutation_strategy(self) -> None:
-        """Verify UniformMutation with attribute_mutator mutates the entire LoRAGenome."""
+        """Verify LoRAMutation perturbs every active gene at mutation_rate=1.0 and preserves the genome type."""
         genes = [
             PerturbationGene("l1", torch.tensor([1.0, 0.0]), torch.tensor([0.0, 1.0]), True),
-            PerturbationGene("l2", torch.zeros(2, 2), torch.zeros(2, 2), False)
+            PerturbationGene("l2", torch.zeros(2, 2), torch.zeros(2, 2), True)
         ]
         genome = LoRAGenome(genes)
 
-        strategy = UniformMutation(
-            mutation_rate=1.0,
-            mutation_fn=attribute_mutator({
-                "lora_down": lora_gaussian_noise_mutator(std=0.1),
-                "lora_up": lora_gaussian_noise_mutator(std=0.2),
-                "active": bit_flip_mutator(prob=0.0)
-            })
-        )
+        strategy = get_lora_mutation_strategy(noise_scale=0.1, active_flips=0.0, mutation_rate=1.0)
 
         mutated_genome = mutate(genome, strategy)
         self.assertIsInstance(mutated_genome, LoRAGenome)
@@ -230,7 +253,59 @@ class TestLoRAEvolution(unittest.TestCase):
         # Second gene (zero init) should be initialized
         self.assertFalse(torch.all(mutated_genome[1].lora_down == 0.0))
         self.assertFalse(torch.all(mutated_genome[1].lora_up == 0.0))
-        self.assertFalse(mutated_genome[1].active)
+        self.assertTrue(mutated_genome[1].active)
+
+        # Parent tensors are never modified in place
+        self.assertTrue(torch.all(genome[1].lora_up == 0.0))
+
+    def test_inactive_genes_are_frozen(self) -> None:
+        """Verify switched-off genes keep their weights, so switching back on restores the selected state."""
+        random.seed(0)
+        torch.manual_seed(0)
+        dormant = PerturbationGene("l1", torch.full((1, 4), 0.5), torch.full((4, 1), 0.25), False)
+        genome = LoRAGenome([dormant])
+
+        # No flips: the dormant gene is shared untouched across generations
+        child = genome
+        for _ in range(10):
+            child = mutate(child, get_lora_mutation_strategy(noise_scale=0.5, active_flips=0.0))
+        self.assertIs(child[0].lora_down, dormant.lora_down)
+        self.assertFalse(child[0].active)
+
+        # Switching it back on restores exactly the weights it was switched off with
+        revived = mutate(genome, get_lora_mutation_strategy(noise_scale=0.5, active_flips=1.0))
+        self.assertTrue(revived[0].active)
+        self.assertTrue(torch.equal(revived[0].lora_down, dormant.lora_down))
+        self.assertTrue(torch.equal(revived[0].lora_up, dormant.lora_up))
+
+        # A gene switched off in this step is frozen at its pre-step weights
+        expressed = LoRAGenome([PerturbationGene("l1", torch.full((1, 4), 0.5), torch.full((4, 1), 0.25), True)])
+        silenced = mutate(expressed, get_lora_mutation_strategy(noise_scale=0.5, active_flips=1.0))
+        self.assertFalse(silenced[0].active)
+        self.assertTrue(torch.equal(silenced[0].lora_down, expressed[0].lora_down))
+
+    def test_active_flips_are_per_offspring(self) -> None:
+        """Verify the expected number of flips per offspring is active_flips, independent of genome size."""
+        random.seed(0)
+        for gene_count in (20, 400):
+            genome = LoRAGenome([
+                PerturbationGene(f"l{i}", torch.ones(1, 2), torch.ones(2, 1), True) for i in range(gene_count)
+            ])
+            # mutation_rate=0 isolates flipping: weights stay untouched and genes are shared
+            strategy = get_lora_mutation_strategy(noise_scale=0.1, active_flips=2.0, mutation_rate=0.0)
+            trials = 500
+            total_flips = 0
+            for _ in range(trials):
+                child = mutate(genome, strategy)
+                total_flips += sum(1 for g in child if not g.active)
+                for parent_gene, child_gene in zip(genome, child):
+                    self.assertIs(child_gene.lora_down, parent_gene.lora_down)
+            self.assertAlmostEqual(total_flips / trials, 2.0, delta=0.25)
+
+        # More flips requested than genes: every gene flips
+        small = LoRAGenome([PerturbationGene("l0", torch.ones(1, 2), torch.ones(2, 1), True)])
+        child = mutate(small, get_lora_mutation_strategy(noise_scale=0.0, active_flips=5.0))
+        self.assertFalse(child[0].active)
 
     def test_create_initial_population(self) -> None:
         """Verify LoRAGenome.create_initial_population generates expected copies and mutations."""
@@ -245,8 +320,8 @@ class TestLoRAEvolution(unittest.TestCase):
         population = LoRAGenome.create_initial_population(
             base_grating=grating,
             population_size=3,
-            lora_noise=0.1,
-            active_flip_prob=0.0
+            noise_scale=0.1,
+            active_flips=0.0
         )
 
         self.assertEqual(len(population), 3)
@@ -392,8 +467,8 @@ class TestLoRAEvolution(unittest.TestCase):
             with self.assertRaises(ValueError):
                 LoRAGenome.load(save_path)
 
-    def test_start_evolution_api_structure(self) -> None:
-        """Test `/wrap_individual` and `/mutate_evolution` API endpoints, verifying individual baseline wrapping, precursor audio linking, direct parent lineage, and mutation group compound hierarchy (no bundles)."""
+    def test_scatter_evolution_api_structure(self) -> None:
+        """Test `/wrap_individual` and `/scatter_evolution` API endpoints, verifying individual baseline wrapping, precursor audio linking, direct parent lineage, and scatter group compound hierarchy (no bundles)."""
         import tempfile
         import shutil
         import os
@@ -494,19 +569,20 @@ class TestLoRAEvolution(unittest.TestCase):
             self.assertTrue(g_reloaded.G.has_edge("precursor_audio_test", baseline_ind_id))
             self.assertEqual(g_reloaded.G.get_edge_data("precursor_audio_test", baseline_ind_id)["relation"], "precursor")
 
-            # 5. Invoke /mutate_evolution on baseline individual
+            # 5. Invoke /scatter_evolution on baseline individual
             payload = {
                 "parents": [baseline_ind_id],
                 "offspring_size": 3,
-                "lora_noise": 0.05,
-                "active_flip_prob": 0.05,
+                "noise_scale": 0.05,
+                # Single-gene genomes would flip on every child; flips are covered by unit tests
+                "active_flips": 0.0,
                 "generation_context": {
                     "operation": "generate",
                     "prompt": "Test Prompt"
                 }
             }
 
-            resp = client.post("/mutate_evolution", json=payload)
+            resp = client.post("/scatter_evolution", json=payload)
             self.assertEqual(resp.status_code, 202)
             
             res_data = resp.get_json()
@@ -524,7 +600,7 @@ class TestLoRAEvolution(unittest.TestCase):
                         completed_data = status_data.get("result")
                         break
                     elif status_data.get("status") == "failed":
-                        self.fail(f"Evolution mutate job failed: {status_data.get('error')}")
+                        self.fail(f"Evolution scatter job failed: {status_data.get('error')}")
                 time.sleep(0.01)
                 
             self.assertIsNotNone(completed_data, "Job did not complete in time")
@@ -598,8 +674,8 @@ class TestLoRAEvolution(unittest.TestCase):
         finally:
             shutil.rmtree(tmp_dir)
 
-    def test_start_evolution_genome_centric(self) -> None:
-        """Test `/wrap_individual` with elements blueprint, `/mutate_evolution`, and `/express_individual` in a genome-centric manner without registering baseline grating nodes."""
+    def test_scatter_evolution_genome_centric(self) -> None:
+        """Test `/wrap_individual` with elements blueprint, `/scatter_evolution`, and `/express_individual` in a genome-centric manner without registering baseline grating nodes."""
         import tempfile
         import shutil
         import os
@@ -674,14 +750,14 @@ class TestLoRAEvolution(unittest.TestCase):
             self.assertTrue(wrap_data["success"])
             baseline_ind_id = wrap_data["node_id"]
 
-            # 4. Invoke /mutate_evolution on baseline individual
-            mutate_payload = {
+            # 4. Invoke /scatter_evolution on baseline individual
+            scatter_payload = {
                 "parents": [baseline_ind_id],
                 "offspring_size": 2,
-                "lora_noise": 0.05,
-                "active_flip_prob": 0.05
+                "noise_scale": 0.05,
+                "active_flips": 1.0
             }
-            resp = client.post("/mutate_evolution", json=mutate_payload)
+            resp = client.post("/scatter_evolution", json=scatter_payload)
             self.assertEqual(resp.status_code, 202)
             res_data = resp.get_json()
             self.assertTrue(res_data["success"])
@@ -698,7 +774,7 @@ class TestLoRAEvolution(unittest.TestCase):
                         completed_data = status_data.get("result")
                         break
                     elif status_data.get("status") == "failed":
-                        self.fail(f"Evolution mutate job failed: {status_data.get('error')}")
+                        self.fail(f"Evolution scatter job failed: {status_data.get('error')}")
                 time.sleep(0.01)
                 
             self.assertIsNotNone(completed_data, "Job did not complete in time")
@@ -740,8 +816,8 @@ class TestLoRAEvolution(unittest.TestCase):
         finally:
             shutil.rmtree(tmp_dir)
 
-    def test_execute_operation_mutate(self) -> None:
-        """Test `/execute_operation` endpoint with operation='wrap_individual' and operation='mutate'."""
+    def test_execute_operation_scatter(self) -> None:
+        """Test `/execute_operation` endpoint with operation='wrap_individual' and operation='scatter'."""
         import tempfile
         import shutil
         from unittest.mock import AsyncMock
@@ -814,14 +890,14 @@ class TestLoRAEvolution(unittest.TestCase):
             self.assertTrue(wrap_data["success"])
             baseline_ind_id = wrap_data["node_id"]
 
-            # 4. Invoke /execute_operation with operation='mutate' on baseline individual
+            # 4. Invoke /execute_operation with operation='scatter' on baseline individual
             payload = {
-                "operation": "mutate",
+                "operation": "scatter",
                 "execution_mode": "async",
                 "parents": [baseline_ind_id],
                 "offspring_size": 2,
-                "lora_noise": 0.05,
-                "active_flip_prob": 0.05
+                "noise_scale": 0.05,
+                "active_flips": 1.0
             }
             resp = client.post("/execute_operation", json=payload)
             self.assertEqual(resp.status_code, 202)
@@ -840,7 +916,7 @@ class TestLoRAEvolution(unittest.TestCase):
                         completed_data = status_data.get("result")
                         break
                     elif status_data.get("status") == "failed":
-                        self.fail(f"Evolution mutate job failed: {status_data.get('error')}")
+                        self.fail(f"Evolution scatter job failed: {status_data.get('error')}")
                 time.sleep(0.01)
                 
             self.assertIsNotNone(completed_data, "Job did not complete in time")
@@ -875,7 +951,7 @@ class TestLoRAEvolution(unittest.TestCase):
         self.assertGreater(len(ops), 0)
         
         op_names = {op["name"] for op in ops}
-        self.assertIn("mutate", op_names)
+        self.assertIn("scatter", op_names)
         self.assertIn("gain", op_names)
         self.assertIn("normalize", op_names)
         
@@ -886,8 +962,8 @@ class TestLoRAEvolution(unittest.TestCase):
             self.assertIn("context_overrides", op)
             self.assertIn("form_config", op)
 
-    def test_mutate_duplicate_individual_rejection(self) -> None:
-        """Verify that mutation discards mutated individuals whose genome UIDs already exist in the graph."""
+    def test_scatter_duplicate_individual_rejection(self) -> None:
+        """Verify that scatter discards scattered individuals whose genome UIDs already exist in the graph."""
         import tempfile
         import shutil
         import os
@@ -895,7 +971,7 @@ class TestLoRAEvolution(unittest.TestCase):
         from param_graph.elements.models.stylegan_element import StyleGANModel
         from param_graph.elements.artifacts.individual_element import Individual
         from param_graph.elements.base_elements import Asset
-        from operations.evolution.mutate import mutate_evolution_task
+        from operations.evolution.scatter import scatter_evolution_task
         from utils.uid import XXH3_64
 
         tmp_dir = tempfile.mkdtemp()
@@ -905,7 +981,7 @@ class TestLoRAEvolution(unittest.TestCase):
 
             model_node = StyleGANModel(
                 id="model_mut_test",
-                name="Mut Test Model",
+                name="Scatter Test Model",
                 context={},
                 checkpoint=Asset(path="mock_path", uid="mock_uid", extension=".pt"),
                 adapter="stylegan2"
@@ -932,13 +1008,13 @@ class TestLoRAEvolution(unittest.TestCase):
             g.add_element(parent_ind)
             g.save()
 
-            # Run mutate task with 0 noise and 0 flip prob (yielding identical genome)
-            mutate_evolution_task(
-                parent_job_id="test_dup_mutate",
+            # Run scatter task with 0 noise and 0 flip prob (yielding identical genome)
+            scatter_evolution_task(
+                parent_job_id="test_dup_scatter",
                 parent_ids=[parent_uid],
                 offspring_size=2,
-                lora_noise=0.0,
-                active_flip_prob=0.0,
+                noise_scale=0.0,
+                active_flips=0.0,
                 mutation_rate=0.0,
                 generation_context={},
                 generate_exemplars=False,

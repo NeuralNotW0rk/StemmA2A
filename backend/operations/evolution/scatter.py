@@ -1,4 +1,4 @@
-"""Agnostic evolutionary mutation operation, operators, and background task execution."""
+"""Scatter operation: spreads variant offspring around seed individuals, plus background task execution."""
 
 from typing import Any, Optional, Callable, Union
 from dataclasses import dataclass
@@ -32,25 +32,25 @@ from .wrap_individual import wrap_precursor_as_individual
 
 
 @dataclass
-class MutatedOffspring:
-    """Wraps a newly mutated Individual alongside its parent lineage tracking."""
+class ScatteredOffspring:
+    """Wraps a newly scattered Individual alongside its parent lineage tracking."""
     individual: NSIndividual
     parent_id: str
     mutated: bool
 
 
-def mutate_offspring(
+def scatter_offspring(
     parents: Union[Population, list[NSIndividual]],
     mutation_strategy: MutationStrategy,
     offspring_per_parent: int = 1,
     parent_ids: Optional[list[str]] = None,
-) -> list[MutatedOffspring]:
+) -> list[ScatteredOffspring]:
     """
-    Mutates each parent individual in the given collection by `offspring_per_parent` times
-    using the supplied MutationStrategy.
+    Scatters `offspring_per_parent` variants around each parent individual in the given collection,
+    perturbing each with the supplied MutationStrategy.
     """
     parent_list: list[NSIndividual] = list(parents)
-    results: list[MutatedOffspring] = []
+    results: list[ScatteredOffspring] = []
 
     for idx, parent in enumerate(parent_list):
         pid = parent_ids[idx] if (parent_ids and idx < len(parent_ids)) else (
@@ -68,7 +68,7 @@ def mutate_offspring(
                 crossover_applied=False,
                 mutated=True
             )
-            results.append(MutatedOffspring(
+            results.append(ScatteredOffspring(
                 individual=cloned_ind,
                 parent_id=pid,
                 mutated=True
@@ -77,12 +77,12 @@ def mutate_offspring(
     return results
 
 
-def mutate_evolution_task(
+def scatter_evolution_task(
     parent_job_id: str,
     parent_ids: list[str],
     offspring_size: int,
-    lora_noise: float,
-    active_flip_prob: float,
+    noise_scale: float,
+    active_flips: float,
     mutation_rate: float = 1.0,
     generation_context: Optional[dict[str, Any]] = None,
     generate_exemplars: bool = False,
@@ -94,9 +94,9 @@ def mutate_evolution_task(
     uid_generator: Optional[Any] = None,
 ) -> None:
     """
-    Background worker that mutates parent individuals to produce variant offspring,
+    Background worker that scatters variant offspring around parent individuals,
     creates child nodes in the parameter graph with lineage relationships,
-    and groups offspring in a mutation Group.
+    and groups offspring in a scatter Group.
     """
     uid_gen = uid_generator or XXH3_64()
 
@@ -106,7 +106,7 @@ def mutate_evolution_task(
             local_jobs[parent_job_id]["progress"] = {
                 "value": 0,
                 "total": offspring_size,
-                "description": "Starting mutation..."
+                "description": "Starting scatter..."
             }
 
         def _resolve_parents_and_group() -> tuple[list[Individual], Any, Any, Any, Any, int, dict[str, Any], str, dict[str, Any], dict[str, Any], Group]:
@@ -193,19 +193,19 @@ def mutate_evolution_task(
 
             # Create visual container Group
             mut_group_id = f"group_{uid_gen.from_string(str(uuid.uuid4()))}"
-            mutation_group = Group(
+            scatter_group = Group(
                 id=mut_group_id,
                 member_ids=[],
                 member_type='individual'
             )
-            param_graph.add_element(mutation_group)
-            param_graph.update_element(mutation_group.id, {"alias": f"Mutation (Gen {next_generation})"})
+            param_graph.add_element(scatter_group)
+            param_graph.update_element(scatter_group.id, {"alias": f"Scatter (Gen {next_generation})"})
             param_graph.save()
 
             return (
                 parent_nodes, model_element, model_id, baseline_grating_id,
                 base_grating, next_generation, merged_context, operation,
-                node_engine_args, dumped_params, mutation_group
+                node_engine_args, dumped_params, scatter_group
             )
 
         if graph_lock is not None:
@@ -213,20 +213,20 @@ def mutate_evolution_task(
                 (
                     parent_nodes, model_element, model_id, baseline_grating_id,
                     base_grating, next_generation, merged_context, operation,
-                    node_engine_args, dumped_params, mutation_group
+                    node_engine_args, dumped_params, scatter_group
                 ) = _resolve_parents_and_group()
         else:
             (
                 parent_nodes, model_element, model_id, baseline_grating_id,
                 base_grating, next_generation, merged_context, operation,
-                node_engine_args, dumped_params, mutation_group
+                node_engine_args, dumped_params, scatter_group
             ) = _resolve_parents_and_group()
 
-        group_id = mutation_group.id
+        group_id = scatter_group.id
 
         mutation_strategy = get_lora_mutation_strategy(
-            lora_noise=lora_noise,
-            active_flip_prob=active_flip_prob,
+            noise_scale=noise_scale,
+            active_flips=active_flips,
             mutation_rate=mutation_rate
         )
 
@@ -239,7 +239,7 @@ def mutate_evolution_task(
                 local_jobs[parent_job_id]["progress"] = {
                     "value": i,
                     "total": offspring_size,
-                    "description": f"Mutating individual {i+1} of {offspring_size}..."
+                    "description": f"Scattering individual {i+1} of {offspring_size}..."
                 }
 
             # Select parent (round-robin across supplied parent individuals)
@@ -258,7 +258,7 @@ def mutate_evolution_task(
 
             if child_ind_id in individual_ids:
                 print(
-                    f"[_mutate_evolution_task] Discarding duplicate mutated individual '{child_ind_id}' "
+                    f"[scatter_evolution_task] Discarding duplicate scattered individual '{child_ind_id}' "
                     f"already generated in current batch."
                 )
                 continue
@@ -268,9 +268,9 @@ def mutate_evolution_task(
             saved_genome_path = output_dir / f"{child_ind_id}.safetensors"
 
             child_context = copy.deepcopy(merged_context)
-            child_context["mutation_operation"] = {
-                "lora_noise": lora_noise,
-                "active_flip_prob": active_flip_prob,
+            child_context["scatter_operation"] = {
+                "noise_scale": noise_scale,
+                "active_flips": active_flips,
                 "mutation_rate": mutation_rate,
                 "parent_id": selected_parent.id,
                 "generation": next_generation
@@ -284,7 +284,7 @@ def mutate_evolution_task(
             slug = generate_slug(2)
             child_node = Individual(
                 id=child_ind_id,
-                name=f"Gen {next_generation} - Mut {i+1} ({slug})",
+                name=f"Gen {next_generation} - Scatter {i+1} ({slug})",
                 file=Asset(path=str(saved_genome_path), uid=child_ind_id, extension=".safetensors"),
                 base_model_id=model_id,
                 baseline_grating_id=baseline_grating_id,
@@ -301,8 +301,8 @@ def mutate_evolution_task(
                 if selected_parent.id != child_ind_id:
                     param_graph.link(selected_parent, child_node, relation='parent')
 
-                mutation_group.member_ids.append(child_ind_id)
-                param_graph.update_element(mutation_group.id, {"member_ids": mutation_group.member_ids})
+                scatter_group.member_ids.append(child_ind_id)
+                param_graph.update_element(scatter_group.id, {"member_ids": scatter_group.member_ids})
                 return True
 
             if graph_lock is not None:
@@ -313,7 +313,7 @@ def mutate_evolution_task(
 
             if not added:
                 print(
-                    f"[_mutate_evolution_task] Discarding duplicate mutated individual '{child_ind_id}' "
+                    f"[scatter_evolution_task] Discarding duplicate scattered individual '{child_ind_id}' "
                     f"which already exists in the parameter graph."
                 )
                 continue
@@ -349,9 +349,9 @@ def mutate_evolution_task(
 
                     asyncio.run(engine.execute(operation, job_id=sub_job_id, **child_engine_args, **dumped_params))
                     job_ids.append(sub_job_id)
-                    print(f"[_mutate_evolution_task] Queued exemplar generation job {sub_job_id} for individual {child_ind_id}")
+                    print(f"[scatter_evolution_task] Queued exemplar generation job {sub_job_id} for individual {child_ind_id}")
                 except Exception as ex:
-                    print(f"[_mutate_evolution_task] Warning: Failed to queue exemplar generation for individual {child_ind_id}: {ex}")
+                    print(f"[scatter_evolution_task] Warning: Failed to queue exemplar generation for individual {child_ind_id}: {ex}")
                     traceback.print_exc()
 
         # Persist the whole batch in one write, since every save re-serializes the entire graph
@@ -366,7 +366,7 @@ def mutate_evolution_task(
             local_jobs[parent_job_id]["progress"] = {
                 "value": offspring_size,
                 "total": offspring_size,
-                "description": "Mutation complete."
+                "description": "Scatter complete."
             }
             local_jobs[parent_job_id]["result"] = {
                 "individual_ids": individual_ids,
@@ -374,10 +374,10 @@ def mutate_evolution_task(
                 "generation": next_generation,
                 "job_ids": job_ids
             }
-        print(f"[_mutate_evolution_task] Mutation completed successfully for job {parent_job_id}")
+        print(f"[scatter_evolution_task] Scatter completed successfully for job {parent_job_id}")
 
     except Exception as e:
-        print(f"Failed in async evolution mutation: {e}")
+        print(f"Failed in async evolution scatter: {e}")
         traceback.print_exc()
         if local_jobs is not None and parent_job_id in local_jobs:
             local_jobs[parent_job_id]["status"] = "failed"
@@ -386,10 +386,10 @@ def mutate_evolution_task(
             local_jobs[parent_job_id]["traceback"] = traceback.format_exc()
 
 
-run_mutate_task = mutate_evolution_task
+run_scatter_task = scatter_evolution_task
 
 
-async def dispatch_mutate_operation(
+async def dispatch_scatter_operation(
     data: dict[str, Any],
     param_graph: Any,
     graph_lock: Optional[threading.Lock] = None,
@@ -399,7 +399,7 @@ async def dispatch_mutate_operation(
     uid_generator: Optional[Any] = None,
 ) -> tuple[dict[str, Any], int]:
     """
-    Validates and spawns a background mutation operation for parent individual(s).
+    Validates and spawns a background scatter operation for seed individual(s).
     """
     if param_graph is None or engine_provider is None:
         return {"error": "No project loaded"}, 400
@@ -475,26 +475,22 @@ async def dispatch_mutate_operation(
         or params.get("population_size")
         or 5
     )
-    lora_noise = float(
-        data.get("lora_noise")
-        if data.get("lora_noise") is not None
+    noise_scale = float(
+        data.get("noise_scale")
+        if data.get("noise_scale") is not None
         else (
-            params.get("lora_noise")
-            if params.get("lora_noise") is not None
-            else (
-                data.get("lora_down_noise")
-                if data.get("lora_down_noise") is not None
-                else 0.05
-            )
+            params.get("noise_scale")
+            if params.get("noise_scale") is not None
+            else 0.1
         )
     )
-    active_flip_prob = float(
-        data.get("active_flip_prob")
-        if data.get("active_flip_prob") is not None
+    active_flips = float(
+        data.get("active_flips")
+        if data.get("active_flips") is not None
         else (
-            params.get("active_flip_prob")
-            if params.get("active_flip_prob") is not None
-            else 0.05
+            params.get("active_flips")
+            if params.get("active_flips") is not None
+            else 1.0
         )
     )
     mutation_rate = float(
@@ -527,7 +523,7 @@ async def dispatch_mutate_operation(
     else:
         generate_exemplars = bool(generate_exemplars)
 
-    parent_job_id = data.get("job_id") or f"evolution_mutate_{uuid.uuid4().hex[:12]}"
+    parent_job_id = data.get("job_id") or f"evolution_scatter_{uuid.uuid4().hex[:12]}"
     if local_jobs is not None:
         local_jobs[parent_job_id] = {
             "status": "pending",
@@ -540,13 +536,13 @@ async def dispatch_mutate_operation(
     # Copying the context keeps the request's room placement in the worker
     thread = threading.Thread(
         target=contextvars.copy_context().run,
-        args=(run_mutate_task,),
+        args=(run_scatter_task,),
         kwargs=dict(
             parent_job_id=parent_job_id,
             parent_ids=parent_ids,
             offspring_size=offspring_size,
-            lora_noise=lora_noise,
-            active_flip_prob=active_flip_prob,
+            noise_scale=noise_scale,
+            active_flips=active_flips,
             mutation_rate=mutation_rate,
             generation_context=merged_generation_context,
             generate_exemplars=generate_exemplars,
@@ -565,7 +561,7 @@ async def dispatch_mutate_operation(
         "success": True,
         "job_id": parent_job_id,
         "status": "pending",
-        "message": "Mutation job initialized"
+        "message": "Scatter job initialized"
     }, 202
 
 
@@ -588,12 +584,12 @@ class ScatterOperation(Operation):
         return "queued"
 
     def execute_task(self, job_id: str, **kwargs: Any) -> None:
-        mutate_evolution_task(
+        scatter_evolution_task(
             parent_job_id=job_id,
             parent_ids=kwargs.get("parent_ids", []),
             offspring_size=kwargs.get("offspring_size", 5),
-            lora_noise=kwargs.get("lora_noise", 0.05),
-            active_flip_prob=kwargs.get("active_flip_prob", 0.05),
+            noise_scale=kwargs.get("noise_scale", 0.1),
+            active_flips=kwargs.get("active_flips", 1.0),
             mutation_rate=kwargs.get("mutation_rate", 1.0),
             generation_context=kwargs.get("generation_context", {}),
             generate_exemplars=kwargs.get("generate_exemplars", False),
@@ -604,22 +600,3 @@ class ScatterOperation(Operation):
             active_jobs=kwargs.get("active_jobs"),
             uid_generator=kwargs.get("uid_generator"),
         )
-
-
-@register
-class MutateOperation(ScatterOperation):
-    @property
-    def name(self) -> str:
-        return "mutate"
-
-    @property
-    def description(self) -> str:
-        return "Mutates parent individuals to produce variant offspring (alias for scatter)."
-
-
-# Scatter Aliases
-scatter_offspring = mutate_offspring
-scatter_evolution_task = mutate_evolution_task
-run_scatter_task = run_mutate_task
-dispatch_scatter_operation = dispatch_mutate_operation
-

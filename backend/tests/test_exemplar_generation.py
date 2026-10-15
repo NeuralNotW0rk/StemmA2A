@@ -161,11 +161,11 @@ class TestExemplarGeneration(unittest.TestCase):
         self.assertIsInstance(gen_group, Group)
         self.assertEqual(len(gen_group.member_ids), 3)
 
-    def test_decoupled_mutation_offline(self) -> None:
-        """Verify that mutation completes purely offline on CPU without calling engine.execute."""
+    def test_decoupled_scatter_offline(self) -> None:
+        """Verify that scatter completes purely offline on CPU without calling engine.execute."""
         model_node = StyleGANModel(
-            id="model_mutate_offline",
-            name="Offline Mutate Model",
+            id="model_scatter_offline",
+            name="Offline Scatter Model",
             context={},
             checkpoint=Asset(path="mock_model_path", uid="mock_model_uid", extension=".pt"),
             adapter="stylegan2"
@@ -183,9 +183,9 @@ class TestExemplarGeneration(unittest.TestCase):
             id="parent_mut_1",
             name="Parent Mut",
             file=Asset(path=str(gpath), uid="parent_mut_1", extension=".safetensors"),
-            base_model_id="model_mutate_offline",
+            base_model_id="model_scatter_offline",
             generation=0,
-            context={"model_id": "model_mutate_offline", "baseline_elements": []}
+            context={"model_id": "model_scatter_offline", "baseline_elements": []}
         )
         self.graph.add_element(parent_ind)
         self.graph.link(model_node, parent_ind, relation="binds_to")
@@ -194,10 +194,12 @@ class TestExemplarGeneration(unittest.TestCase):
         self.mock_engine.execute.reset_mock()
 
         resp = self.client.post("/execute_operation", json={
-            "operation": "mutate",
+            "operation": "scatter",
             "parents": [parent_ind.id],
             "offspring_size": 2,
-            "lora_noise": 0.05,
+            "noise_scale": 0.05,
+            # Single-gene genomes would flip on every child; flips are covered by unit tests
+            "active_flips": 0.0,
             "mutation_rate": 1.0
         })
         self.assertEqual(resp.status_code, 202)
@@ -212,7 +214,7 @@ class TestExemplarGeneration(unittest.TestCase):
                     completed_data = s_data.get("result")
                     break
                 elif s_data.get("status") == "failed":
-                    self.fail(f"Mutation failed: {s_data.get('error')}")
+                    self.fail(f"Scatter failed: {s_data.get('error')}")
             time.sleep(0.01)
 
         self.assertIsNotNone(completed_data)
@@ -369,11 +371,11 @@ class TestExemplarGeneration(unittest.TestCase):
             ]
             self.assertEqual(len(exemplar_audios), 1)
 
-    def test_mutate_with_auto_exemplar_generation(self) -> None:
-        """Verify that mutation with generate_exemplars=True queues engine jobs and parents exemplars to individuals."""
+    def test_scatter_with_auto_exemplar_generation(self) -> None:
+        """Verify that scatter with generate_exemplars=True queues engine jobs and parents exemplars to individuals."""
         model_node = StyleGANModel(
-            id="model_mutate_auto_ex",
-            name="Auto Ex Mutate Model",
+            id="model_scatter_auto_ex",
+            name="Auto Ex Scatter Model",
             context={},
             checkpoint=Asset(path="mock_model_path", uid="mock_model_uid", extension=".pt"),
             adapter="stylegan2"
@@ -389,11 +391,11 @@ class TestExemplarGeneration(unittest.TestCase):
 
         parent_ind = Individual(
             id="p_mut_auto_ind",
-            name="Parent Mut Auto",
+            name="Parent Scatter Auto",
             file=Asset(path=str(gpath), uid="p_mut_auto_ind", extension=".safetensors"),
-            base_model_id="model_mutate_auto_ex",
+            base_model_id="model_scatter_auto_ex",
             generation=0,
-            context={"model_id": "model_mutate_auto_ex", "baseline_elements": []}
+            context={"model_id": "model_scatter_auto_ex", "baseline_elements": []}
         )
         self.graph.add_element(parent_ind)
         self.graph.link(model_node, parent_ind, relation="binds_to")
@@ -402,11 +404,13 @@ class TestExemplarGeneration(unittest.TestCase):
         self.mock_engine.execute.reset_mock()
 
         resp = self.client.post("/execute_operation", json={
-            "operation": "mutate",
+            "operation": "scatter",
             "parents": [parent_ind.id],
             "offspring_size": 2,
             "generate_exemplars": True,
-            "lora_noise": 0.05,
+            "noise_scale": 0.05,
+            # Single-gene genomes would flip on every child; flips are covered by unit tests
+            "active_flips": 0.0,
             "mutation_rate": 1.0
         })
 
@@ -422,7 +426,7 @@ class TestExemplarGeneration(unittest.TestCase):
                     completed_data = s_data.get("result")
                     break
                 elif s_data.get("status") == "failed":
-                    self.fail(f"Mutation failed: {s_data.get('error')}")
+                    self.fail(f"Scatter failed: {s_data.get('error')}")
             time.sleep(0.01)
 
         self.assertIsNotNone(completed_data)

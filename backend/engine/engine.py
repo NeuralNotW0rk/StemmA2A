@@ -106,10 +106,6 @@ class Engine(ABC):
                                     {"name": "model", "type": "node", "label": "Model", "filter": {"type": "model"}, "required": True}
                                 ]
                             }
-                            if op_name == "invert":
-                                supported_ops[op_name]["form_config"].append(
-                                    {"name": "source_audio", "type": "node", "label": "Source Audio", "filter": {"type": "audio"}, "required": True}
-                                )
                         else:
                             supported_ops[op_name]["initiator_types"].update(initiator_types)
                             supported_ops[op_name]["context_overrides"].update(context_overrides)

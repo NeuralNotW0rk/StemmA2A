@@ -42,7 +42,7 @@ class TestSubgraphTransfer(unittest.TestCase):
         return {"path": str(path), "uid": uid, "extension": extension, "size": None}
 
     def _build_lineage(self):
-        """model -> baseline grating; precursor audio wrapped as gen 0; gen 1 mutated with an exemplar."""
+        """model -> baseline grating; precursor audio wrapped as gen 0; gen 1 scattered with an exemplar."""
         G = self.source.G
         G.add_node(MODEL, id=MODEL, type="model", adapter="stable_audio_tools", output_type="audio",
                    name="model", context={}, checkpoint=self._file("sa.ckpt", MODEL, ".ckpt", self.external))
@@ -62,7 +62,7 @@ class TestSubgraphTransfer(unittest.TestCase):
         G.add_node(GEN1, id=GEN1, type="individual", name="Gen 1", generation=1, base_model_id=MODEL,
                    baseline_grating_id=BASELINE, parent=MUT_GROUP,
                    context={"model_id": MODEL, "precursor_artifact_id": PRECURSOR,
-                            "mutation_operation": {"parent_id": GEN0, "mutation_rate": 0.1},
+                            "scatter_operation": {"parent_id": GEN0, "mutation_rate": 0.1},
                             "lineage": {"parent_ids": [GEN0], "mutated": True}},
                    file=self._file("generate/ind1.safetensors", GEN1, ".safetensors"))
         G.add_node(EXEMPLAR, id=EXEMPLAR, type="audio", name="exemplar", parent=GEN1, alias="Gen 1 #1",
@@ -92,7 +92,7 @@ class TestSubgraphTransfer(unittest.TestCase):
 
         self.assertEqual(set(G.nodes), {GEN1, EXEMPLAR, GEN0, PRECURSOR, MODEL, BASELINE})
         self.assertEqual(report["converted_exemplars"], [])
-        # The exemplar stays inside its individual; the mutation group was left behind
+        # The exemplar stays inside its individual; the scatter group was left behind
         self.assertEqual(G.nodes[EXEMPLAR]["parent"], GEN1)
         self.assertNotIn("parent", G.nodes[GEN1])
         self.assertTrue(G.has_edge(GEN0, GEN1))
@@ -133,7 +133,7 @@ class TestSubgraphTransfer(unittest.TestCase):
         self.assertEqual(ancestry["individuals"], [{"id": GEN1, "strength": 1.0}])
         self.assertEqual(ancestry["baseline_grating_id"], BASELINE)
         self.assertEqual([a["id"] for a in ancestry["lineage"]], [GEN1, GEN0])
-        self.assertEqual(ancestry["lineage"][0]["mutation_operation"]["parent_id"], GEN0)
+        self.assertEqual(ancestry["lineage"][0]["scatter_operation"]["parent_id"], GEN0)
         self.assertEqual(ancestry["lineage"][1]["precursor_artifact_id"], PRECURSOR)
         # The source keeps the exemplar as it was
         self.assertIn("individuals", self.source.G.nodes[EXEMPLAR]["context"])
