@@ -659,8 +659,14 @@ class StableAudioAdapter(ModelAdapter):
     @operation(
         name="invert",
         is_standard=True,
-        description="Invert audio to a latent representation",
-        initiator_types=["audio"]
+        description="Invert an audio or image artifact into the selected model's latent space",
+        initiator_types=["model", "audio"],
+        context_overrides={
+            "audio": {
+                "name": "Invert Audio",
+                "description": "Invert the selected audio into a latent with a Stable Audio model"
+            }
+        }
     )
     def invert(self, **kwargs) -> tuple[Latent, torch.Tensor]:
         model = self.model.to(self.device)

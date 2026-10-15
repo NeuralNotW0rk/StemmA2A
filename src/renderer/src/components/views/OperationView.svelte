@@ -33,7 +33,33 @@
     onError: (error: ErrorInfo) => void
   }>()
 
-  let baseFields = $derived<FormConfig>($selectedOperation?.form_config || [])
+  // A model op shared across adapters (e.g. invert) is implemented per adapter for different artifact
+  // types: only the adapters handling the initiating artifact are offered. Null when unrestricted
+  let initiatorArtifactType = $derived(
+    $initiatorNodeStore?.type === 'group'
+      ? $initiatorNodeStore.member_type
+      : $initiatorNodeStore?.type
+  )
+  let compatibleAdapters = $derived.by((): string[] | null => {
+    const adapters = $selectedOperation?.adapter_initiator_types
+    const type = initiatorArtifactType
+    if (!adapters || !type || isReplicated) return null
+    const all = Object.keys(adapters)
+    if (!all.some((a) => adapters[a].includes(type))) return null
+    const compatible = all.filter((a) => adapters[a].includes(type))
+    return compatible.length < all.length ? compatible : null
+  })
+
+  let baseFields = $derived.by((): FormConfig => {
+    const fields: FormConfig = $selectedOperation?.form_config || []
+    const adapters = compatibleAdapters
+    if (!adapters) return fields
+    return fields.map((f) =>
+      f.name === 'model' && f.type === 'node'
+        ? { ...f, filter: { ...f.filter, _one_of: { adapter: adapters } } }
+        : f
+    )
+  })
   let adapterFields = $state<FormField[]>([])
   let fieldsConfig = $derived([...baseFields, ...adapterFields])
 
@@ -533,6 +559,13 @@
       isLoading = true
       error = null
       await tick()
+
+      if (compatibleAdapters && !compatibleAdapters.includes(adapterName)) {
+        adapterFields = []
+        throw new Error(
+          `${adapterName} models can't ${opName} ${initiatorArtifactType} artifacts. Choose a ${compatibleAdapters.join(' or ')} model.`
+        )
+      }
 
       const config = await window.api.getAdapterConfig(adapterName)
       const rawOpName = opName.includes(':') ? opName.split(':')[0] : opName

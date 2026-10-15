@@ -22,6 +22,8 @@ export interface OperationInfo {
   execution?: 'immediate' | 'queued' | string
   execution_mode?: 'sync' | 'async' | string
   initiator_types?: string[]
+  /** For a model op shared across adapters: the initiator types each adapter implements it for */
+  adapter_initiator_types?: Record<string, string[]>
   output_type?: string
   form_config?: FormConfig
   context_overrides?: Record<string, OperationContextOverride>

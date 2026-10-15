@@ -486,6 +486,14 @@
         continue
       }
 
+      // Special evaluation: Each listed property must take one of its allowed values
+      if (key === '_one_of') {
+        for (const [prop, allowed] of Object.entries(expectedValue as Record<string, unknown[]>)) {
+          if (!allowed.includes(data[prop])) return false
+        }
+        continue
+      }
+
       // Special evaluation: Ensure the node has exactly the same incoming structural dependencies
       if (key === '_incoming_node_ids') {
         const incomingIds = node.data('_incoming_node_ids') || []

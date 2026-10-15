@@ -32,6 +32,7 @@ from flask_cors import CORS
 import torch
 import torchaudio
 import numpy as np
+from PIL import Image as PILImage
 from sklearn.neighbors import NearestNeighbors
 from sklearn.metrics.pairwise import cosine_distances
 from pydantic import ValidationError
@@ -1692,6 +1693,7 @@ async def _expand_path_task(job_id: str, path_node_id: str) -> None:
                         existing_paths.add(el.file.path)
 
         audio_exts = {'.wav', '.mp3', '.flac', '.ogg', '.m4a', '.aiff'}
+        image_exts = {'.png', '.jpg', '.jpeg', '.webp', '.bmp', '.gif'}
         entries = [entry for entry in dir_path.iterdir() if not entry.name.startswith('.')]
         total_entries = len(entries)
         new_elements = []
@@ -1719,6 +1721,16 @@ async def _expand_path_task(job_id: str, path_node_id: str) -> None:
                     new_elements.append(Audio(id=element_id, name=entry.name, context={}, file=asset, duration=duration))
                 except Exception as e:
                     print(f"Failed to load audio for {entry.name} to generate UID: {e}")
+            elif entry.is_file() and entry.suffix.lower() in image_exts:
+                try:
+                    with PILImage.open(entry_str) as pil_img:
+                        pixels = np.asarray(pil_img.convert("RGB"))
+                    element_id = uid_generator.from_tensor(torch.from_numpy(pixels))
+                    asset = Asset(path=entry_str, uid=element_id, extension=entry.suffix.lower())
+                    height, width = pixels.shape[:2]
+                    new_elements.append(Image(id=element_id, name=entry.name, context={}, file=asset, width=width, height=height))
+                except Exception as e:
+                    print(f"Failed to load image for {entry.name} to generate UID: {e}")
 
         local_jobs[job_id]["progress"] = {
             "value": 90,

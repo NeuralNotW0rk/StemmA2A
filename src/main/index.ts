@@ -718,6 +718,10 @@ app.whenReady().then(async (): Promise<void> => {
         mimeType = 'image/jpeg'
       } else if (extension === '.webp') {
         mimeType = 'image/webp'
+      } else if (extension === '.gif') {
+        mimeType = 'image/gif'
+      } else if (extension === '.bmp') {
+        mimeType = 'image/bmp'
       }
 
       // 4. Return buffer and mime type

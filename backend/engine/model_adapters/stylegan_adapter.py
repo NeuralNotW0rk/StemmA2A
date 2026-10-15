@@ -993,12 +993,12 @@ class StyleGANAdapter(ModelAdapter):
     @operation(
         name="invert",
         is_standard=True,
-        description="StyleGAN2 pivotal tuning inversion",
+        description="Invert an audio or image artifact into the selected model's latent space",
         initiator_types=["model", "image"],
         context_overrides={
             "image": {
                 "name": "Invert Image",
-                "description": "Invert the selected image into a pivot latent and a LoRA grating that reproduces it there"
+                "description": "Invert the selected image with a StyleGAN2 model (pivotal tuning) into a pivot latent and a LoRA grating that reproduces it there"
             }
         }
     )

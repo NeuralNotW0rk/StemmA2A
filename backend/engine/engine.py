@@ -101,6 +101,8 @@ class Engine(ABC):
                                 "execution": "queued",
                                 "execution_mode": "async",  # backward compatibility alias
                                 "initiator_types": set(initiator_types),
+                                # A standard op is shared across adapters, each implementing it for its own artifact types
+                                "adapter_initiator_types": {adapter_name: list(initiator_types)},
                                 "context_overrides": dict(context_overrides),
                                 "form_config": [
                                     {"name": "model", "type": "node", "label": "Model", "filter": {"type": "model"}, "required": True}
@@ -108,6 +110,7 @@ class Engine(ABC):
                             }
                         else:
                             supported_ops[op_name]["initiator_types"].update(initiator_types)
+                            supported_ops[op_name]["adapter_initiator_types"][adapter_name] = list(initiator_types)
                             supported_ops[op_name]["context_overrides"].update(context_overrides)
                     else:
                         namespaced_name = f"{op_name}:{adapter_name}"
@@ -118,6 +121,7 @@ class Engine(ABC):
                             "execution": "queued",
                             "execution_mode": "async",
                             "initiator_types": list(initiator_types),
+                            "adapter_initiator_types": {adapter_name: list(initiator_types)},
                             "context_overrides": dict(context_overrides),
                             "form_config": [
                                 {"name": "model", "type": "node", "label": "Model", "filter": {"type": "model"}, "required": True}
@@ -128,6 +132,19 @@ class Engine(ABC):
                 op["initiator_types"] = list(op["initiator_types"])
 
         return list(supported_ops.values())
+
+    def get_operation_adapters(self, op_name: str) -> dict[str, list[str]]:
+        """
+        Maps each adapter implementing op_name to the initiator types it accepts. Read from the local
+        adapter classes, so it needs no round trip to a remote engine.
+        """
+        adapters = {}
+        for adapter_name, adapter_class in self.adapter_registry.items():
+            for attr_name in dir(adapter_class):
+                member = getattr(adapter_class, attr_name)
+                if getattr(member, "_is_operation", False) and member._op_name == op_name:
+                    adapters[adapter_name] = list(member._op_initiator_types)
+        return adapters
 
     @abstractmethod
     async def execute(self, operation_id: str, **kwargs) -> str:

@@ -379,6 +379,25 @@ async def dispatch_operation(
         if not isinstance(model_element, Model):
             return {"error": f"Node '{model_id}' is not a valid model."}, 400
 
+        # Shared ops (e.g. invert) are implemented per adapter for different artifact types: reject a
+        # model whose adapter can't handle the initiating artifact instead of failing deep inside it
+        effective_initiator_type = (
+            initiator.get("member_type") if initiator_type == "group" and isinstance(initiator, dict) else initiator_type
+        )
+        op_adapters = engine.get_operation_adapters(operation_name)
+        accepted_types = op_adapters.get(model_element.adapter)
+        if (
+            effective_initiator_type
+            and accepted_types is not None
+            and effective_initiator_type not in accepted_types
+            and any(effective_initiator_type in types for types in op_adapters.values())
+        ):
+            return {
+                "error": f"Model '{model_element.name}' ({model_element.adapter}) can't {operation_name} "
+                         f"{effective_initiator_type} artifacts. Choose a model whose adapter supports it: "
+                         + ", ".join(a for a, types in op_adapters.items() if effective_initiator_type in types)
+            }, 400
+
         adapter_config = await engine.get_adapter_config(model_element.adapter)
         form_config = adapter_config.get(operation_name, [])
         if not form_config:
