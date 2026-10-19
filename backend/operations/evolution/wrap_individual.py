@@ -169,7 +169,8 @@ async def wrap_precursor_as_individual(
     if err_dict is not None:
         return err_dict, err_code  # type: ignore
 
-    # Baseline grating created below for this precursor, added to the graph alongside the individual
+    # Generation 0 is built from a freshly initialized grating. Genomes carry their own topology, so that
+    # grating is only kept (as a hidden baseline) when it holds elements that cannot become genes
     new_baseline_grating = None
 
     # If grating node exists
@@ -223,14 +224,28 @@ async def wrap_precursor_as_individual(
             ]
 
         engine = engine_provider.get_engine()
-        grating_name = f"baseline_{uuid.uuid4().hex[:8]}"
-        new_baseline_grating = await engine.create_grating(model_element, grating_name, elements_input)
-        # is_baseline hides the node in the graph view; individuals reference it by baseline_grating_id
-        new_baseline_grating.context = {"is_baseline": True}
-        baseline_grating_id = new_baseline_grating.id
-        base_grating_path = new_baseline_grating.file.path
+        diff_base_grating = await engine.build_grating(model_element, elements_input)
         baseline_name = precursor_node.name or precursor_node.alias or "Artifact"
-        diff_base_grating = DiffractureGrating.load(base_grating_path)
+
+        if any("lora_down" not in el.params or "lora_up" not in el.params for el in diff_base_grating.nodes.values()):
+            grating_id = f"grating_{uuid.uuid4().hex[:8]}"
+            grating_path = param_graph.root / "generate" / f"{grating_id}.safetensors"
+            os.makedirs(grating_path.parent, exist_ok=True)
+            diff_base_grating.save(str(grating_path))
+            new_baseline_grating = Grating(
+                id=grating_id,
+                name=f"baseline_{uuid.uuid4().hex[:8]}",
+                # is_baseline hides the node in the graph view; individuals reference it by baseline_grating_id
+                context={"is_baseline": True},
+                file=Asset(path=str(grating_path), uid=grating_id, extension=".safetensors"),
+                base_model_id=model_element.id,
+                elements=[{
+                    "address": el.address,
+                    "kernel_type": el.kernel_type,
+                    "metadata": el.metadata
+                } for el in diff_base_grating._nodes]
+            )
+            baseline_grating_id = new_baseline_grating.id
 
     # Build baseline genome from base grating
     baseline_genome = LoRAGenome.from_grating(diff_base_grating)

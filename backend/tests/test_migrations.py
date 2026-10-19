@@ -10,7 +10,7 @@ backend_dir = Path(__file__).resolve().parent.parent
 if str(backend_dir) not in sys.path:
     sys.path.insert(0, str(backend_dir))
 
-from utils.migrations import migrate_batch_to_group, migrate_baseline_references, migrate_genome_encoding
+from utils.migrations import migrate_batch_to_group, migrate_baseline_references, migrate_genome_encoding, migrate_prune_baselines
 
 
 class TestMigrations(unittest.TestCase):
@@ -227,6 +227,80 @@ class TestMigrations(unittest.TestCase):
             before = graph_file.read_bytes(), converted.read_bytes()
             migrate_genome_encoding(project_path)
             self.assertEqual((graph_file.read_bytes(), converted.read_bytes()), before)
+        finally:
+            shutil.rmtree(tmp_dir)
+
+    def test_prune_baselines_migration(self):
+        import torch
+        from safetensors.torch import save_file
+
+        tmp_dir = tempfile.mkdtemp()
+        project_path = Path(tmp_dir)
+        generate = project_path / "generate"
+        generate.mkdir()
+
+        try:
+            def grating_file(uid, kinds):
+                topology = [{"address": f"l{i}", "kernel_type": kind, "metadata": {}} for i, kind in enumerate(kinds)]
+                save_file({"x": torch.zeros(1)}, str(generate / f"{uid}.safetensors"), metadata={"topology": json.dumps(topology)})
+
+            def genome_file(uid, fmt):
+                metadata = {"addresses": "[]", "gene_metadata": "{}"}
+                if fmt:
+                    metadata["format"] = fmt
+                save_file({"x": torch.zeros(1)}, str(generate / f"{uid}.safetensors"), metadata=metadata)
+
+            grating_file("base_lora", ["lora", "lora"])
+            grating_file("base_bend", ["lora", "scale"])
+            grating_file("base_legacy", ["lora"])
+            genome_file("ind_new", "2")
+            genome_file("ind_bend", "2")
+            genome_file("ind_old", None)
+
+            def node(id_, type_, **extra):
+                return {"data": {"id": id_, "type": type_, "file": {"path": "", "uid": id_, "extension": ".safetensors"}, **extra}}
+
+            baseline = {"context": {"is_baseline": True}}
+            graph_data = {"graph": {"elements": {"nodes": [
+                node("model", "model"),
+                node("base_lora", "grating", **baseline),
+                node("base_bend", "grating", **baseline),
+                node("base_legacy", "grating", **baseline),
+                node("ind_new", "individual", baseline_grating_id="base_lora"),
+                node("ind_bend", "individual", baseline_grating_id="base_bend"),
+                node("ind_old", "individual", baseline_grating_id="base_legacy"),
+                {"data": {"id": "aud", "type": "audio", "context": {"baseline_grating_id": "base_lora"}}},
+                {"data": {"id": "room", "type": "room", "member_ids": ["base_lora", "ind_new"]}},
+            ], "edges": [
+                {"data": {"id": "model->base_lora", "source": "model", "target": "base_lora"}},
+                {"data": {"id": "model->ind_new", "source": "model", "target": "ind_new"}},
+            ]}}}
+            graph_file = project_path / "graph.json"
+            graph_file.write_text(json.dumps(graph_data), encoding="utf-8")
+
+            migrate_prune_baselines(project_path)
+
+            migrated = json.loads(graph_file.read_text(encoding="utf-8"))["graph"]["elements"]
+            nodes = {n["data"]["id"]: n["data"] for n in migrated["nodes"]}
+
+            # The all-LoRA baseline is gone, with its edges, references and file
+            self.assertNotIn("base_lora", nodes)
+            self.assertFalse((generate / "base_lora.safetensors").exists())
+            self.assertEqual([e["data"]["id"] for e in migrated["edges"]], ["model->ind_new"])
+            self.assertIsNone(nodes["ind_new"]["baseline_grating_id"])
+            self.assertIsNone(nodes["aud"]["context"]["baseline_grating_id"])
+            self.assertEqual(nodes["room"]["member_ids"], ["ind_new"])
+            self.assertTrue((project_path / "graph.json.pre-baseline-pruning").exists())
+
+            # A baseline holding non-LoRA elements, or still needed by a legacy genome, is kept
+            self.assertEqual(nodes["ind_bend"]["baseline_grating_id"], "base_bend")
+            self.assertEqual(nodes["ind_old"]["baseline_grating_id"], "base_legacy")
+            self.assertTrue((generate / "base_bend.safetensors").exists())
+
+            # A second run changes nothing
+            before = graph_file.read_bytes()
+            migrate_prune_baselines(project_path)
+            self.assertEqual(graph_file.read_bytes(), before)
         finally:
             shutil.rmtree(tmp_dir)
 

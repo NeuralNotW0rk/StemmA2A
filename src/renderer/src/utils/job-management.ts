@@ -55,7 +55,9 @@ export function updateJob(job: Job): void {
     const index = jobs.findIndex((j) => j.id === job.id)
     if (index > -1) {
       const newJobs = [...jobs]
-      newJobs[index] = job
+      // Callers mutate the job they hold, so store a copy: a component handed the same object
+      // reference again does not re-render, and the job would keep showing its old status
+      newJobs[index] = { ...job }
       return newJobs
     }
     return jobs

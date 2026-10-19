@@ -395,6 +395,126 @@ def migrate_genome_encoding(project_path: Path) -> None:
         print(f"Warning: {len(unresolved)} genome(s) in {project_path.name} have no baseline grating to take topology from and were not converted: {', '.join(unresolved[:5])}")
 
 
+def migrate_prune_baselines(project_path: Path) -> None:
+    """
+    Removes hidden baseline gratings (context is_baseline) that only served as templates for expressing
+    genomes. Genomes now carry their own topology, so a baseline is removed when every element in it is a
+    LoRA element (all of it lives in the genomes) and no individual referencing it still has an unconverted
+    legacy genome. References to it are cleared and its edges dropped; graph.json is rewritten (original kept
+    as graph.json.pre-baseline-pruning) before the baseline files are deleted.
+    """
+    if not project_path or not project_path.is_dir():
+        return
+
+    graph_file = project_path / "graph.json"
+    if not graph_file.exists() or graph_file.stat().st_size == 0:
+        return
+
+    import json
+    import shutil
+    import uuid
+
+    try:
+        with open(graph_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except json.JSONDecodeError as e:
+        print(f"Warning: Could not parse {graph_file} for migration (invalid JSON): {e}")
+        return
+
+    elements = data.get("graph", {}).get("elements", {})
+    nodes = elements.get("nodes", [])
+    node_data = {node["data"]["id"]: node["data"] for node in nodes if "id" in node.get("data", {})}
+    baselines = [
+        d for d in node_data.values()
+        if d.get("type") == "grating" and isinstance(d.get("context"), dict) and d["context"].get("is_baseline")
+    ]
+    if not baselines:
+        return
+
+    from safetensors import safe_open
+
+    generate_dir = project_path / "generate"
+
+    def resolve_file(d: dict) -> Path | None:
+        """Finds a node's file, preferring the project's own generate folder, then the stored path."""
+        file_info = d.get("file") if isinstance(d.get("file"), dict) else {}
+        candidates = []
+        if file_info.get("uid"):
+            candidates.append(generate_dir / f"{file_info['uid']}{file_info.get('extension') or '.safetensors'}")
+        candidates.append(file_info.get("path"))
+        for candidate in candidates:
+            if candidate and Path(candidate).is_file():
+                return Path(candidate)
+        return None
+
+    def kernel_types(d: dict, path: Path | None) -> list:
+        if path is not None:
+            with safe_open(str(path), framework="pt", device="cpu") as f:
+                topology = (f.metadata() or {}).get("topology")
+            if topology:
+                return [node.get("kernel_type") for node in json.loads(topology)]
+        return [el.get("kernel_type") for el in d.get("elements") or []]
+
+    def is_legacy_genome(d: dict) -> bool:
+        path = resolve_file(d)
+        if path is None:
+            return False
+        with safe_open(str(path), framework="pt", device="cpu") as f:
+            return (f.metadata() or {}).get("format") is None
+
+    removable: dict[str, Path | None] = {}
+    for baseline in baselines:
+        path = resolve_file(baseline)
+        if any(kind != "lora" for kind in kernel_types(baseline, path)):
+            continue
+        dependants = [
+            d for d in node_data.values()
+            if d.get("type") == "individual" and d.get("baseline_grating_id") == baseline["id"]
+        ]
+        if any(is_legacy_genome(d) for d in dependants):
+            continue
+        removable[baseline["id"]] = path
+
+    if not removable:
+        return
+
+    def prune(value):
+        """Drops removed IDs from lists and clears them where they appear as a value."""
+        if isinstance(value, list):
+            return [prune(v) for v in value if not (isinstance(v, str) and v in removable)]
+        if isinstance(value, dict):
+            return {k: (None if isinstance(v, str) and v in removable else prune(v)) for k, v in value.items()}
+        return value
+
+    elements["nodes"] = [n for n in nodes if n.get("data", {}).get("id") not in removable]
+    elements["edges"] = [
+        e for e in elements.get("edges", [])
+        if e.get("data", {}).get("source") not in removable and e.get("data", {}).get("target") not in removable
+    ]
+    data = prune(data)
+
+    backup_file = project_path / "graph.json.pre-baseline-pruning"
+    if not backup_file.exists():
+        shutil.copy2(graph_file, backup_file)
+    temp_graph = project_path / f"graph.json.{uuid.uuid4().hex[:8]}.tmp"
+    with open(temp_graph, "w", encoding="utf-8") as f:
+        json.dump(data, f, separators=(",", ":"))
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(temp_graph, graph_file)
+
+    # Only files inside this project are deleted, and only when no remaining node still uses them
+    still_used = {resolve_file(d) for d in node_data.values() if d.get("id") not in removable}
+    for path in removable.values():
+        if path is not None and path.parent == generate_dir and path not in still_used:
+            try:
+                path.unlink()
+            except OSError as e:
+                print(f"Warning: could not remove baseline grating file {path.name}: {e}")
+
+    print(f"Removed {len(removable)} baseline grating(s) no longer needed in {project_path.name} (original graph kept at {backup_file.name})")
+
+
 def run_global_migrations(data_cache_root: Path) -> None:
     """
     Runs all startup global data cache migrations.
@@ -418,3 +538,4 @@ def run_project_migrations(project_path: Path) -> None:
     migrate_batch_to_group(project_path)
     migrate_baseline_references(project_path)
     migrate_genome_encoding(project_path)
+    migrate_prune_baselines(project_path)

@@ -1673,10 +1673,12 @@
       return
     }
 
-    // Filter out baseline nodes and edges connected to them to keep the visual graph clean
+    // Filter out baseline nodes and edges connected to them to keep the visual graph clean.
+    // Elements from the backend carry no group field, so nodes are told apart by having no source.
     const baselineNodeIds = new SvelteSet<string>()
     newElements = newElements.filter((ele: any): boolean => {
-      if (ele.group === 'nodes' && ele.data.type === 'grating' && ele.data.context?.is_baseline) {
+      const isNode = ele.group ? ele.group === 'nodes' : !ele.data?.source
+      if (isNode && ele.data.type === 'grating' && ele.data.context?.is_baseline) {
         baselineNodeIds.add(ele.data.id)
         return false
       }

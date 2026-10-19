@@ -185,8 +185,40 @@ class Engine(ABC):
         return await self.cluster_features(model_element, address, num_clusters)
 
     async def create_grating(self, model_element: GraphElement, name: str, elements: list) -> GraphElement:
+        grating = await self.build_grating(model_element, elements)
+
+        # Create output directory for the grating file
+        output_dir = self.data_root / "generate"
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Save Grating safetensors file
+        grating_uid = "grating_" + str(uuid.uuid4())[:8]
+        file_name = f"{grating_uid}.safetensors"
+        grating_path = output_dir / file_name
+        grating.save(str(grating_path))
+
+        # Add Grating Artifact to project graph
+        elements_config = [{
+            "address": element.address,
+            "kernel_type": element.kernel_type,
+            "metadata": element.metadata
+        } for element in grating._nodes]
+
+        asset = Asset(path=str(grating_path.resolve()), uid=grating_uid, extension=".safetensors")
+        grating_artifact = GratingArtifact(
+            id=grating_uid,
+            name=name,
+            context={},
+            file=asset,
+            base_model_id=model_element.id,
+            elements=elements_config
+        )
+        return grating_artifact
+
+    async def build_grating(self, model_element: GraphElement, elements: list) -> DiffractureGrating:
+        """Builds a freshly initialized Grating in memory from element configs, without saving it."""
         grating = DiffractureGrating()
-        
+
         # Build the elements
         for el_data in elements:
             addr = el_data.get("address")
@@ -211,32 +243,6 @@ class Engine(ABC):
             }
             element = el_cls.from_metadata(addr, metadata)
             grating.add_element(element)
-            
-        # Create output directory for the grating file
-        output_dir = self.data_root / "generate"
-        output_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Save Grating safetensors file
-        grating_uid = "grating_" + str(uuid.uuid4())[:8]
-        file_name = f"{grating_uid}.safetensors"
-        grating_path = output_dir / file_name
-        grating.save(str(grating_path))
-        
-        # Add Grating Artifact to project graph
-        elements_config = [{
-            "address": element.address,
-            "kernel_type": element.kernel_type,
-            "metadata": element.metadata
-        } for element in grating._nodes]
-        
-        asset = Asset(path=str(grating_path.resolve()), uid=grating_uid, extension=".safetensors")
-        grating_artifact = GratingArtifact(
-            id=grating_uid,
-            name=name,
-            context={},
-            file=asset,
-            base_model_id=model_element.id,
-            elements=elements_config
-        )
-        return grating_artifact
+
+        return grating
 
