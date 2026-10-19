@@ -1,3 +1,4 @@
+import dataclasses
 import unittest
 import random
 import torch
@@ -11,8 +12,8 @@ from evolution.genome import (
     LoRAGenome,
     express_to_grating,
 )
-from evolution.lora_genome import lora_scaled_noise_mutator, lora_noise_reference, get_lora_mutation_strategy
-from neutral_selection.variation.mutation import mutate, UniformMutation, attribute_mutator, bit_flip_mutator
+from evolution.lora_genome import get_lora_mutation_strategy, lora_gene_scales
+from neutral_selection.variation.mutation import mutate
 from neutral_selection.variation.recombination import RandomNPointCrossover, recombine
 from neutral_selection.representation.individual import Individual
 from neutral_selection.representation.population import Population
@@ -24,7 +25,7 @@ class TestLoRAEvolution(unittest.TestCase):
         torch.manual_seed(42)
 
     def test_gene_from_and_to_tensors(self) -> None:
-        """Verify initialization and scaling on reconstruction with LoRAGene."""
+        """Verify LoRAGene clones genotype tensors on creation and returns them unchanged."""
         self.assertIs(PerturbationGene, LoRAGene)
 
         address = "layer_test"
@@ -32,10 +33,7 @@ class TestLoRAEvolution(unittest.TestCase):
         lora_up = torch.randn(8, 2, dtype=torch.float64) * 5.0
 
         gene = LoRAGene.from_tensors(address, lora_down, lora_up, active=True)
-
-        # Check weights are saved
-        self.assertTrue(torch.allclose(gene.lora_down, lora_down))
-        self.assertTrue(torch.allclose(gene.lora_up, lora_up))
+        self.assertIsNot(gene.lora_down, lora_down)
 
         # Check reconstruction
         rec_down, rec_up = gene.to_tensors()
@@ -57,11 +55,19 @@ class TestLoRAEvolution(unittest.TestCase):
         grating.add_element(el1)
         grating.add_element(el2)
 
-        # Create genome
+        # Create genome: weights are encoded as genotype values against this (baseline) grating
         genome = LoRAGenome.from_grating(grating)
         self.assertEqual(len(genome), 2)
         self.assertEqual(genome[0].address, "module1")
         self.assertEqual(genome[1].address, "module2")
+        scales1 = lora_gene_scales(el1.params["lora_down"], el1.params["lora_up"])
+        scales2 = lora_gene_scales(el2.params["lora_down"], el2.params["lora_up"])
+        self.assertTrue(torch.allclose(genome[0].lora_down * scales1[0], el1.params["lora_down"]))
+
+        # An unchanged genome expresses back to the baseline's own weights
+        roundtrip = express_to_grating(genome, grating).nodes["module1"]
+        self.assertTrue(torch.allclose(roundtrip.params["lora_down"], el1.params["lora_down"]))
+        self.assertTrue(torch.allclose(roundtrip.params["lora_up"], el1.params["lora_up"]))
 
         # Mutate genome weights
         genome[0].lora_down.fill_(10.0)
@@ -72,13 +78,14 @@ class TestLoRAEvolution(unittest.TestCase):
         # Express back to new Grating
         new_grating = express_to_grating(genome, grating)
 
-        # Verify new Grating has updated parameters
+        # Verify new Grating holds the decoded (scaled) genotype values
         nodes = new_grating.nodes
         new_el1 = nodes["module1"]
         new_el2 = nodes["module2"]
 
-        self.assertTrue(torch.allclose(new_el1.params["lora_down"], torch.full_like(new_el1.params["lora_down"], 10.0)))
-        self.assertTrue(torch.allclose(new_el2.params["lora_down"], torch.full_like(new_el2.params["lora_down"], 5.0)))
+        self.assertTrue(torch.allclose(new_el1.params["lora_down"], torch.full_like(new_el1.params["lora_down"], 10.0 * scales1[0])))
+        self.assertTrue(torch.allclose(new_el1.params["lora_up"], torch.full_like(new_el1.params["lora_up"], scales1[1])))
+        self.assertTrue(torch.allclose(new_el2.params["lora_down"], torch.full_like(new_el2.params["lora_down"], 5.0 * scales2[0])))
 
     def test_n_point_crossover(self) -> None:
         """Verify NPoint crossover swaps segments correctly."""
@@ -127,17 +134,18 @@ class TestLoRAEvolution(unittest.TestCase):
             True
         )
 
+        # The activation (+1 for on) is a leaf after the weights; address and topology are not leaves
         leaves, treedef = flatten_hierarchy(gene)
-        self.assertEqual(leaves, [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0])
-        self.assertEqual(treedef.total_leaves, 8)
+        self.assertEqual(leaves, [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 1.0])
+        self.assertEqual(treedef.total_leaves, 9)
 
-        # Reconstruct with mutated leaves
-        mutated_leaves = [10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0]
+        # Reconstruct with mutated leaves, including a switched-off activation
+        mutated_leaves = [10.0, 20.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0, -1.0]
         reconstructed = unflatten_hierarchy(mutated_leaves, treedef)
 
         self.assertIsInstance(reconstructed, PerturbationGene)
         self.assertEqual(reconstructed.address, "layer_proto")
-        self.assertTrue(reconstructed.active)
+        self.assertFalse(reconstructed.active)
         self.assertTrue(torch.equal(reconstructed.lora_down, torch.tensor([[10.0, 20.0], [30.0, 40.0]])))
         self.assertTrue(torch.equal(reconstructed.lora_up, torch.tensor([[50.0, 60.0], [70.0, 80.0]])))
 
@@ -173,63 +181,39 @@ class TestLoRAEvolution(unittest.TestCase):
         self.assertTrue(torch.equal(child_a[1].lora_down, torch.full((1, 2), 20.0)))
         self.assertTrue(torch.equal(child_a[1].lora_up, torch.full((2, 1), 20.0)))
 
-    def test_mutation(self) -> None:
-        """Verify the scaled noise mutator perturbs weights and initializes zero tensors."""
-        gene = PerturbationGene("l1", torch.tensor([1.0, 0.0]), torch.tensor([0.0, 1.0]), True)
-
-        # Mutate using composed generic attribute mutators
-        gene_mutator = attribute_mutator({
-            "lora_down": lora_scaled_noise_mutator(noise_scale=0.1),
-            "lora_up": lora_scaled_noise_mutator(noise_scale=0.2),
-            "active": bit_flip_mutator(prob=0.0)
-        })
-        mutated = gene_mutator(gene)
-
-        # Check weights changed
-        self.assertFalse(torch.equal(mutated.lora_down, gene.lora_down))
-        self.assertFalse(torch.equal(mutated.lora_up, gene.lora_up))
-        self.assertTrue(mutated.active)
-
-        # Verify that mutating a zero weight gene initializes it with random weights
-        zero_gene = PerturbationGene("l1", torch.zeros(2, 2), torch.zeros(2, 2), True)
-        mutated_zero = gene_mutator(zero_gene)
-        self.assertFalse(torch.all(mutated_zero.lora_down == 0.0))
-        self.assertFalse(torch.all(mutated_zero.lora_up == 0.0))
-
-    def test_scaled_noise_is_relative(self) -> None:
-        """Verify noise std is noise_scale times the tensor's RMS, floored at 1/sqrt(fan_in)."""
+    def test_noise_is_uniform_in_genotype_and_scaled_at_expression(self) -> None:
+        """Verify mutation adds plain noise to genotype values, and expression turns it into a width-appropriate step."""
         torch.manual_seed(0)
-        mutator = lora_scaled_noise_mutator(noise_scale=0.1)
-
-        # Grown weights: steps follow the tensor's own RMS, whatever its absolute size
-        for magnitude in (0.5, 50.0):
-            big = torch.full((1, 4096), magnitude)
-            delta_std = (mutator(big) - big).std().item()
-            self.assertAlmostEqual(delta_std / (0.1 * magnitude), 1.0, delta=0.05)
-
-        # Zero lora_up (out=1536, rank=1): floor is 1/sqrt(rank), not 1/sqrt(out_features)
-        zero_up = torch.zeros(1536, 1)
-        self.assertAlmostEqual(lora_noise_reference(zero_up), 1.0)
-        self.assertAlmostEqual((mutator(zero_up) - zero_up).std().item(), 0.1, delta=0.01)
-
-        # Zero lora_down (rank=1, in=6144): floor is the 1/sqrt(fan_in) init scale
-        zero_down = torch.zeros(1, 6144)
-        self.assertAlmostEqual(lora_noise_reference(zero_down), 1.0 / 6144 ** 0.5)
-
-        # lora_up's floor follows lora_down, so a grown lora_down does not inflate the dW step
         strategy = get_lora_mutation_strategy(noise_scale=0.1, active_flips=0.0)
-        for down_scale in (1.0 / 6144 ** 0.5, 1.0):
-            down = torch.randn(1, 6144)
-            down = down / down.pow(2).mean().sqrt() * down_scale
-            genome = LoRAGenome([PerturbationGene("l1", down, torch.zeros(1536, 1), True)])
-            child = mutate(genome, strategy)
-            dw_rms = (child[0].lora_up @ genome[0].lora_down).pow(2).mean().sqrt().item()
-            # dW from a zero lora_up lands near noise_scale times the 1/sqrt(in) base weight scale
-            self.assertAlmostEqual(dw_rms * 6144 ** 0.5, 0.1, delta=0.01)
+
+        # A fresh baseline element: Kaiming lora_down (rank=1, in=6144) and zero lora_up (out=1536)
+        baseline = Grating()
+        baseline.add_element(LoRAElement("l1", rank=1, alpha=1.0, in_features=6144, out_features=1536))
+        genome = LoRAGenome.from_grating(baseline)
+        child = mutate(genome, strategy)
+
+        # Genotype steps have std noise_scale, whatever the layer's width
+        self.assertAlmostEqual((child[0].lora_down - genome[0].lora_down).std().item(), 0.1, delta=0.01)
+        self.assertAlmostEqual((child[0].lora_up - genome[0].lora_up).std().item(), 0.1, delta=0.01)
+
+        # In weight space, lora_down steps are noise_scale times its 1/sqrt(fan_in) init scale
+        parent_el = express_to_grating(genome, baseline).nodes["l1"]
+        child_el = express_to_grating(child, baseline).nodes["l1"]
+        down_step = child_el.params["lora_down"] - parent_el.params["lora_down"]
+        self.assertAlmostEqual(down_step.std().item() * 6144 ** 0.5, 0.1, delta=0.01)
+
+        # dW from a zero lora_up lands near noise_scale times the 1/sqrt(in) base weight scale
+        dw_rms = (child_el.params["lora_up"] @ parent_el.params["lora_down"]).pow(2).mean().sqrt().item()
+        self.assertAlmostEqual(dw_rms * 6144 ** 0.5, 0.1, delta=0.01)
+
+        # Steps are fixed in genotype units: grown values do not get larger steps
+        grown = LoRAGenome([LoRAGene("l1", torch.full((1, 4096), 50.0), torch.full((4096, 1), 50.0), True)])
+        grown_child = mutate(grown, strategy)
+        self.assertAlmostEqual((grown_child[0].lora_down - grown[0].lora_down).std().item(), 0.1, delta=0.01)
 
         # Half-precision tensors keep their dtype
-        half = torch.ones(4, 4, dtype=torch.float16)
-        self.assertEqual(mutator(half).dtype, torch.float16)
+        half = LoRAGenome([LoRAGene("l1", torch.ones(4, 4, dtype=torch.float16), torch.ones(4, 4, dtype=torch.float16), True)])
+        self.assertEqual(mutate(half, strategy)[0].lora_down.dtype, torch.float16)
 
     def test_lora_genome_mutation_strategy(self) -> None:
         """Verify LoRAMutation perturbs every active gene at mutation_rate=1.0 and preserves the genome type."""
@@ -283,6 +267,33 @@ class TestLoRAEvolution(unittest.TestCase):
         silenced = mutate(expressed, get_lora_mutation_strategy(noise_scale=0.5, active_flips=1.0))
         self.assertFalse(silenced[0].active)
         self.assertTrue(torch.equal(silenced[0].lora_down, expressed[0].lora_down))
+
+        # Without freezing, a switched-off gene keeps drifting
+        drifting = mutate(genome, get_lora_mutation_strategy(noise_scale=0.5, active_flips=0.0, freeze_inactive=False))
+        self.assertFalse(drifting[0].active)
+        self.assertFalse(torch.equal(drifting[0].lora_down, dormant.lora_down))
+
+    def test_activation_is_inherited_with_its_weights(self) -> None:
+        """Verify flattened crossover moves activations like any leaf, and mutation snaps blended ones to +/-1."""
+        from neutral_selection.variation.recombination import ArithmeticCrossover
+
+        on = LoRAGenome([PerturbationGene(f"l{i}", torch.zeros(1, 2), torch.zeros(2, 1), True) for i in range(4)])
+        off = LoRAGenome([PerturbationGene(f"l{i}", torch.ones(1, 2), torch.ones(2, 1), False) for i in range(4)])
+
+        # At gene granularity, each gene's activation travels with its weights from the same parent
+        with unittest.mock.patch("random.sample", return_value=[2]):
+            child_a, child_b = RandomNPointCrossover(num_cut_points=1, granularity="gene")(on, off)
+        self.assertEqual([g.active for g in child_a], [True, True, False, False])
+        self.assertEqual([g.active for g in child_b], [False, False, True, True])
+        for gene in child_a:
+            self.assertEqual(gene.active, bool(gene.lora_down.sum() == 0))
+
+        # A blend leaves activations between +1 and -1; the next mutation snaps them back
+        blended, _ = ArithmeticCrossover(alpha=0.75)(on, off)
+        self.assertAlmostEqual(blended[0].activation.item(), 0.5)
+        self.assertTrue(blended[0].active)
+        snapped = mutate(blended, get_lora_mutation_strategy(noise_scale=0.0, active_flips=0.0))
+        self.assertEqual([g.activation.item() for g in snapped], [1.0, 1.0, 1.0, 1.0])
 
     def test_active_flips_are_per_offspring(self) -> None:
         """Verify the expected number of flips per offspring is active_flips, independent of genome size."""
@@ -425,6 +436,59 @@ class TestLoRAEvolution(unittest.TestCase):
                 self.assertTrue(torch.allclose(orig_gene.lora_up, loaded_gene.lora_up))
                 self.assertEqual(orig_gene.active, loaded_gene.active)
 
+    def test_genome_carries_topology(self) -> None:
+        """Verify genes keep their element topology through save/load, hash it, and express without a baseline."""
+        import tempfile
+        import os
+        from utils.uid import XXH3_64
+
+        grating = Grating()
+        grating.add_element(LoRAElement("lora_a", rank=2, alpha=4.0, in_features=6, out_features=3))
+        grating.add_element(LoRAElement("lora_b", rank=1, alpha=1.0, in_features=5, out_features=2, reference_scale=0.5))
+        genome = LoRAGenome.from_grating(grating)
+        self.assertEqual(genome[0].topology["alpha"], 4.0)
+        self.assertEqual(genome[1].topology["reference_scale"], 0.5)
+        # Defaults are left out of the stored form
+        self.assertEqual(genome[0].compact_topology(), {"alpha": 4.0})
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "genome.safetensors")
+            genome.save(path)
+            loaded = LoRAGenome.load(path)
+        self.assertEqual([g.topology for g in loaded], [g.topology for g in genome])
+
+        # Expression needs no baseline, and rebuilds each element's kind, settings and shape
+        expressed = express_to_grating(loaded)
+        for address, original in grating.nodes.items():
+            rebuilt = expressed.nodes[address]
+            self.assertEqual(rebuilt.kernel_type, original.kernel_type)
+            self.assertEqual(rebuilt.metadata["alpha"], original.metadata["alpha"])
+            self.assertEqual(rebuilt.metadata["reference_scale"], original.metadata["reference_scale"])
+            self.assertTrue(torch.allclose(rebuilt.params["lora_down"], original.params["lora_down"], atol=1e-6))
+            self.assertEqual(rebuilt.params["lora_up"].shape, original.params["lora_up"].shape)
+
+        # Topology is part of the content address
+        uid_gen = XXH3_64()
+        retuned = LoRAGenome([dataclasses.replace(genome[0], topology={**genome[0].topology, "alpha": 8.0}), genome[1]])
+        self.assertNotEqual(uid_gen.from_state_dict(genome.get_state_dict()), uid_gen.from_state_dict(retuned.get_state_dict()))
+
+    def test_legacy_genome_file_is_rejected(self) -> None:
+        """Verify unversioned files, which store phenotype weights, fail to load until migrated."""
+        import json
+        import tempfile
+        import os
+        from safetensors.torch import save_file
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = os.path.join(tmpdir, "legacy.safetensors")
+            save_file(
+                {"l1.lora_down": torch.randn(2, 8), "l1.lora_up": torch.randn(4, 2)},
+                path,
+                metadata={"addresses": json.dumps(["l1"]), "gene_metadata": json.dumps({"l1": {"active": True}})},
+            )
+            with self.assertRaisesRegex(ValueError, "legacy"):
+                LoRAGenome.load(path)
+
     def test_express_to_grating_with_path(self) -> None:
         """Verify that express_to_grating works when passed a string path to a base grating."""
         import tempfile
@@ -448,10 +512,11 @@ class TestLoRAEvolution(unittest.TestCase):
             # Express using path
             expressed_grating = express_to_grating(genome, grating_path)
 
-            # Verify parameters were expressed correctly
+            # Verify parameters were decoded with the baseline element's scales
             new_el = expressed_grating.nodes["module1"]
-            self.assertTrue(torch.allclose(new_el.params["lora_down"], lora_down.to(new_el.params["lora_down"].dtype)))
-            self.assertTrue(torch.allclose(new_el.params["lora_up"], lora_up.to(new_el.params["lora_up"].dtype)))
+            down_scale, up_scale = lora_gene_scales(el1.params["lora_down"], el1.params["lora_up"])
+            self.assertTrue(torch.allclose(new_el.params["lora_down"], (lora_down * down_scale).to(new_el.params["lora_down"].dtype)))
+            self.assertTrue(torch.allclose(new_el.params["lora_up"], (lora_up * up_scale).to(new_el.params["lora_up"].dtype)))
 
     def test_load_genome_invalid_metadata_fail_fast(self) -> None:
         """Verify that loading an incompatible/malformed safetensors file fails fast with a ValueError."""

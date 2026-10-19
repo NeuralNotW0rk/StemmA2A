@@ -52,13 +52,12 @@ def express_individual_to_grating_artifact(
             baseline_grating_node = param_graph.get_element(baseline_grating_id)
             if not isinstance(baseline_grating_node, Grating):
                 return {"error": f"Baseline grating '{baseline_grating_id}' not found."}, 400
-            base_elements = baseline_grating_node.elements
             base_path = baseline_grating_node.file.path
         elif baseline_elements and baseline_file_path:
-            base_elements = baseline_elements
             base_path = baseline_file_path
         else:
-            return {"error": "Unable to resolve baseline grating configuration for this individual."}, 400
+            # Genomes carry their own topology, so an individual can be expressed without a baseline
+            base_path = None
 
         # Load LoRAGenome from individual file
         genome_path = param_graph.get_path_from_id(individual_node.id) or individual_node.file.path
@@ -79,7 +78,11 @@ def express_individual_to_grating_artifact(
             name=f"Expressed {individual_node.name}",
             file=Asset(path=str(expressed_grating_path), uid=grating_id, extension=".safetensors"),
             base_model_id=individual_node.base_model_id,
-            elements=base_elements,
+            elements=[{
+                "address": element.address,
+                "kernel_type": element.kernel_type,
+                "metadata": element.metadata
+            } for element in expressed_diff_grating._nodes],
             context=individual_node.context or {}
         )
 

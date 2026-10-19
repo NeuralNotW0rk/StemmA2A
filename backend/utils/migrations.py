@@ -223,6 +223,178 @@ def migrate_baseline_references(project_path: Path) -> None:
     print(f"Replaced copied baseline gratings with references in {graph_file} (original kept at {backup_file.name})")
 
 
+def migrate_genome_encoding(project_path: Path) -> None:
+    """
+    Converts unversioned LoRAGenome files, which store phenotype weights, to the current format, which
+    stores genotype values decoded with scales from their shapes (see lora_gene_scales), plus each gene's
+    topology, taken from the individual's baseline grating.
+
+    A genome's uid is the hash of its content, so each converted genome is re-addressed: it is saved under
+    the uid of its new content, and every reference to the old uid in graph.json (node IDs, edges, group
+    members, lineage) is rewritten. Each conversion is checked to decode back to its original weights first.
+    The new files are written before graph.json (whose original is kept as graph.json.pre-genome-migration),
+    and the old files are only removed after it, so an interrupted run leaves a loadable project.
+    Individuals whose baseline grating cannot be found are left unconverted and reported.
+    """
+    if not project_path or not project_path.is_dir():
+        return
+
+    graph_file = project_path / "graph.json"
+    if not graph_file.exists() or graph_file.stat().st_size == 0:
+        return
+
+    import json
+    import shutil
+    import uuid
+
+    try:
+        with open(graph_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except json.JSONDecodeError as e:
+        print(f"Warning: Could not parse {graph_file} for migration (invalid JSON): {e}")
+        return
+
+    nodes = data.get("graph", {}).get("elements", {}).get("nodes", [])
+    node_data = {node["data"]["id"]: node["data"] for node in nodes if "id" in node.get("data", {})}
+    individuals = [d for d in node_data.values() if d.get("type") == "individual"]
+    if not individuals:
+        return
+
+    generate_dir = project_path / "generate"
+
+    def resolve_file(d: dict) -> Path | None:
+        """
+        Finds a node's file, preferring the project's own generate folder so a copied or moved project
+        never rewrites the original's files, and falling back to the stored path.
+        """
+        file_info = d.get("file") if isinstance(d.get("file"), dict) else {}
+        candidates = []
+        if file_info.get("uid"):
+            candidates.append(generate_dir / f"{file_info['uid']}{file_info.get('extension') or '.safetensors'}")
+        candidates.append(file_info.get("path"))
+        for candidate in candidates:
+            if candidate and Path(candidate).is_file():
+                return Path(candidate)
+        return None
+
+    from safetensors import safe_open
+    from diffracture.topology.grating import Grating as DiffractureGrating
+    from evolution.lora_genome import GENOME_FORMAT, LoRAGene, LoRAGenome, lora_gene_scales
+    from utils.uid import XXH3_64
+
+    uid_gen = XXH3_64()
+    baseline_topology: dict[Path, dict[str, dict]] = {}
+    seen: set[Path] = set()
+    readdressed: dict[str, str] = {}
+    new_paths: dict[str, Path] = {}
+    old_files: list[Path] = []
+    unresolved: list[str] = []
+
+    for ind in individuals:
+        genome_path = resolve_file(ind)
+        old_uid = (ind.get("file") or {}).get("uid") or ind["id"]
+        if genome_path is None or genome_path in seen:
+            continue
+        seen.add(genome_path)
+
+        with safe_open(str(genome_path), framework="pt", device="cpu") as f:
+            metadata = f.metadata() or {}
+            if metadata.get("format") is not None or "addresses" not in metadata:
+                continue
+            tensors = {key: f.get_tensor(key) for key in f.keys()}
+
+        # Legacy files hold no topology; it comes from the baseline the individual was bred from
+        baseline_path = resolve_file(node_data.get(ind.get("baseline_grating_id")) or {})
+        if baseline_path is None:
+            unresolved.append(ind.get("name") or ind["id"])
+            continue
+        if baseline_path not in baseline_topology:
+            baseline = DiffractureGrating.load(str(baseline_path))
+            baseline_topology[baseline_path] = {
+                address: LoRAGene.from_element(el).topology
+                for address, el in baseline.nodes.items()
+                if "lora_down" in el.params and "lora_up" in el.params
+            }
+        topologies = baseline_topology[baseline_path]
+
+        gene_metadata = json.loads(metadata["gene_metadata"])
+        genes = []
+        for address in json.loads(metadata["addresses"]):
+            weights = (tensors[f"{address}.lora_down"], tensors[f"{address}.lora_up"])
+            scales = lora_gene_scales(*weights)
+            encoded = [w / scale for w, scale in zip(weights, scales)]
+            for name, value, scale, ref in zip(("lora_down", "lora_up"), encoded, scales, weights):
+                decoded_error = (value * scale - ref).abs().max().item()
+                if decoded_error > 1e-5 * max(1.0, ref.abs().max().item()):
+                    raise RuntimeError(f"Genome {genome_path.name} does not round-trip at {address}.{name} (error {decoded_error}).")
+            genes.append(LoRAGene(
+                address=address,
+                lora_down=encoded[0].contiguous(),
+                lora_up=encoded[1].contiguous(),
+                activation=bool(gene_metadata[address]["active"]),
+                topology=topologies.get(address, {}),
+            ))
+        genome = LoRAGenome(genes)
+
+        generate_dir.mkdir(exist_ok=True)
+        temp_path = generate_dir / f"genome_migration.{uuid.uuid4().hex[:8]}.tmp"
+        genome.save(temp_path)
+        # The same hash every operation uses when it mints an individual's uid
+        new_uid = uid_gen.from_state_dict(genome.get_state_dict())
+        if new_uid != old_uid and (new_uid in node_data or new_uid in new_paths):
+            temp_path.unlink()
+            print(f"Warning: converted genome '{old_uid}' matches existing node '{new_uid}'; left unconverted.")
+            continue
+
+        new_path = generate_dir / f"{new_uid}.safetensors"
+        os.replace(temp_path, new_path)
+        readdressed[old_uid] = new_uid
+        new_paths[new_uid] = new_path
+        if genome_path != new_path and genome_path.parent == generate_dir:
+            old_files.append(genome_path)
+
+    if readdressed:
+        def swap(value):
+            """Replaces old uids wherever they appear whole, including either end of an edge ID like a->b."""
+            if isinstance(value, str):
+                if value in readdressed:
+                    return readdressed[value]
+                if "->" in value:
+                    return "->".join(readdressed.get(part, part) for part in value.split("->"))
+                return value
+            if isinstance(value, list):
+                return [swap(v) for v in value]
+            if isinstance(value, dict):
+                return {swap(k): swap(v) for k, v in value.items()}
+            return value
+
+        data = swap(data)
+        for node in data.get("graph", {}).get("elements", {}).get("nodes", []):
+            file_info = node.get("data", {}).get("file")
+            if isinstance(file_info, dict) and file_info.get("uid") in new_paths:
+                file_info["path"] = str(new_paths[file_info["uid"]])
+
+        backup_file = project_path / "graph.json.pre-genome-migration"
+        if not backup_file.exists():
+            shutil.copy2(graph_file, backup_file)
+        temp_graph = project_path / f"graph.json.{uuid.uuid4().hex[:8]}.tmp"
+        with open(temp_graph, "w", encoding="utf-8") as f:
+            json.dump(data, f, separators=(",", ":"))
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temp_graph, graph_file)
+
+        for old_file in old_files:
+            try:
+                old_file.unlink()
+            except OSError as e:
+                print(f"Warning: could not remove migrated genome file {old_file.name}: {e}")
+
+        print(f"Converted and re-addressed {len(readdressed)} genome(s) in {project_path.name} to genotype format {GENOME_FORMAT} (original graph kept at {backup_file.name})")
+    if unresolved:
+        print(f"Warning: {len(unresolved)} genome(s) in {project_path.name} have no baseline grating to take topology from and were not converted: {', '.join(unresolved[:5])}")
+
+
 def run_global_migrations(data_cache_root: Path) -> None:
     """
     Runs all startup global data cache migrations.
@@ -245,3 +417,4 @@ def run_project_migrations(project_path: Path) -> None:
     migrate_sharded_cache(project_path)
     migrate_batch_to_group(project_path)
     migrate_baseline_references(project_path)
+    migrate_genome_encoding(project_path)

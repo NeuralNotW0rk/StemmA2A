@@ -92,11 +92,42 @@
     {
       "name": "mutation_rate",
       "type": "float",
-      "label": "Mutation Rate",
+      "label": "Mutation Rate (fraction of layers perturbed)",
+      "description": "Chance that each layer of an offspring gets noise added. The unit is a whole layer, not a single weight: at 0.01 a genome with 200 layers has about 2 perturbed layers per offspring, and a small genome will often have none. Strength is set separately below.",
       "defaultValue": 0.01,
       "min": 0.0,
       "max": 1.0,
       "step": 0.001,
+      "allowSequence": false
+    },
+    {
+      "name": "noise_scale",
+      "type": "float",
+      "label": "Mutation Strength (σ, in units of each layer's natural scale)",
+      "description": "How much each perturbed layer changes. Gaussian noise with standard deviation σ is added in units of the layer's natural weight scale, which is set from the layer's width, so the same σ moves wide and narrow layers comparably. A fresh layer's weights are about 0.6 in these units, so 0.05 is a small step.",
+      "defaultValue": 0.05,
+      "min": 0.0,
+      "max": 2.0,
+      "step": 0.01,
+      "allowSequence": false
+    },
+    {
+      "name": "active_flips",
+      "type": "float",
+      "label": "Expected On/Off Toggles per Offspring",
+      "description": "Average number of layers per offspring whose on/off state is toggled. Each toggle switches one layer from its parent's state, on to off or off to on. Whether a switched-off layer keeps changing is set by Freeze Switched-Off Layers.",
+      "defaultValue": 1.0,
+      "min": 0.0,
+      "max": 20.0,
+      "step": 0.5,
+      "allowSequence": false
+    },
+    {
+      "name": "freeze_inactive",
+      "type": "boolean",
+      "label": "Freeze Switched-Off Layers",
+      "description": "When on, a layer that is switched off gets no noise, so switching it back on restores exactly the weights it was selected with. When off, switched-off layers keep drifting unheard, and come back changed.",
+      "defaultValue": true,
       "allowSequence": false
     },
     {

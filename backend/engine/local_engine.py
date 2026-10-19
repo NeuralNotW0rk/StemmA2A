@@ -295,16 +295,15 @@ class LocalEngine(Engine):
 
                 # 2. Apply dynamic in-memory expressed genomes (individual_elements)
                 if individual_elements:
+                    # Genomes carry their own topology; a baseline only adds elements that are not genes
                     baseline_grating = kwargs.get("baseline_grating")
-                    if not baseline_grating:
-                        raise RuntimeError("individual_elements passed but no baseline_grating was provided.")
 
                     for i, ind_element in enumerate(individual_elements):
                         strength = individual_strengths[i] if individual_strengths and i < len(individual_strengths) else 1.0
                         print(f"Engine: Dynamically expressing genome '{ind_element.id}' with strength {strength}...")
 
                         genome = LoRAGenome.load(ind_element.file.path)
-                        grating = express_to_grating(genome, baseline_grating.file.path)
+                        grating = express_to_grating(genome, baseline_grating.file.path if baseline_grating else None)
 
                         # Apply overrides for individuals if any were passed
                         individuals_input = kwargs.get("individuals") or []

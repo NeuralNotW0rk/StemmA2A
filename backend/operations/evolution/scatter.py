@@ -84,6 +84,7 @@ def scatter_evolution_task(
     noise_scale: float,
     active_flips: float,
     mutation_rate: float = 1.0,
+    freeze_inactive: bool = True,
     generation_context: Optional[dict[str, Any]] = None,
     generate_exemplars: bool = False,
     param_graph: Any = None,
@@ -227,7 +228,8 @@ def scatter_evolution_task(
         mutation_strategy = get_lora_mutation_strategy(
             noise_scale=noise_scale,
             active_flips=active_flips,
-            mutation_rate=mutation_rate
+            mutation_rate=mutation_rate,
+            freeze_inactive=freeze_inactive
         )
 
         job_ids: list[str] = []
@@ -272,6 +274,7 @@ def scatter_evolution_task(
                 "noise_scale": noise_scale,
                 "active_flips": active_flips,
                 "mutation_rate": mutation_rate,
+                "freeze_inactive": freeze_inactive,
                 "parent_id": selected_parent.id,
                 "generation": next_generation
             }
@@ -502,6 +505,12 @@ async def dispatch_scatter_operation(
             else 1.0
         )
     )
+    freeze_inactive = data.get("freeze_inactive")
+    if freeze_inactive is None:
+        freeze_inactive = params.get("freeze_inactive", True)
+    if isinstance(freeze_inactive, str):
+        freeze_inactive = freeze_inactive.lower() in ("true", "1", "yes")
+    freeze_inactive = bool(freeze_inactive)
     generation_context = data.get("generation_context") or params.get("generation_context") or {}
     merged_generation_context = {**params, **generation_context}
 
@@ -544,6 +553,7 @@ async def dispatch_scatter_operation(
             noise_scale=noise_scale,
             active_flips=active_flips,
             mutation_rate=mutation_rate,
+            freeze_inactive=freeze_inactive,
             generation_context=merged_generation_context,
             generate_exemplars=generate_exemplars,
             param_graph=param_graph,
@@ -591,6 +601,7 @@ class ScatterOperation(Operation):
             noise_scale=kwargs.get("noise_scale", 0.1),
             active_flips=kwargs.get("active_flips", 1.0),
             mutation_rate=kwargs.get("mutation_rate", 1.0),
+            freeze_inactive=kwargs.get("freeze_inactive", True),
             generation_context=kwargs.get("generation_context", {}),
             generate_exemplars=kwargs.get("generate_exemplars", False),
             param_graph=kwargs.get("param_graph"),

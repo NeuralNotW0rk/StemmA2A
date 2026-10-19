@@ -287,10 +287,14 @@ def recombine_evolution_task(
         noise_scale = float(mutation_cfg.get("noise_scale", merged_context.get("noise_scale", 0.05)))
         active_flips = float(mutation_cfg.get("active_flips", merged_context.get("active_flips", 1.0)))
         mutation_rate = float(mutation_cfg.get("mutation_rate", 0.1))
+        freeze_inactive = mutation_cfg.get("freeze_inactive", True)
+        if isinstance(freeze_inactive, str):
+            freeze_inactive = freeze_inactive.lower() in ("true", "1", "yes")
         mutation_strat = get_lora_mutation_strategy(
             noise_scale=noise_scale,
             active_flips=active_flips,
-            mutation_rate=mutation_rate
+            mutation_rate=mutation_rate,
+            freeze_inactive=bool(freeze_inactive)
         )
 
         offspring_records: list[RecombinedOffspring] = recombine_offspring(
@@ -549,13 +553,21 @@ async def dispatch_recombine_operation(
 
     selection_cfg = data.get("selection") or params.get("selection") or {"type": s_type, "tournament_size": 2}
     crossover_cfg = data.get("crossover") or params.get("crossover") or {"type": c_type}
+    def _numeric_param(key: str, default: float) -> float:
+        # Checks for None rather than truthiness so an explicit 0 is not replaced by the default
+        value = data.get(key)
+        if value is None:
+            value = params.get(key)
+        return float(value) if value is not None else default
+
     mutation_cfg = data.get("mutation") or params.get("mutation") or {
-        "mutation_rate": float(data.get("mutation_rate") or params.get("mutation_rate") or 0.1),
-        "noise_scale": float(data.get("noise_scale") or params.get("noise_scale") or 0.05),
-        "active_flips": float(data.get("active_flips") or params.get("active_flips") or 1.0)
+        "mutation_rate": _numeric_param("mutation_rate", 0.1),
+        "noise_scale": _numeric_param("noise_scale", 0.05),
+        "active_flips": _numeric_param("active_flips", 1.0),
+        "freeze_inactive": data.get("freeze_inactive") if data.get("freeze_inactive") is not None else params.get("freeze_inactive", True)
     }
 
-    crossover_prob = float(data.get("crossover_prob") or params.get("crossover_prob") or 1.0)
+    crossover_prob = _numeric_param("crossover_prob", 1.0)
     elitism = int(data.get("elitism") or params.get("elitism") or 0)
     default_fitness = float(data.get("default_fitness") or params.get("default_fitness") or 0.0)
 

@@ -10,7 +10,7 @@ backend_dir = Path(__file__).resolve().parent.parent
 if str(backend_dir) not in sys.path:
     sys.path.insert(0, str(backend_dir))
 
-from utils.migrations import migrate_batch_to_group, migrate_baseline_references
+from utils.migrations import migrate_batch_to_group, migrate_baseline_references, migrate_genome_encoding
 
 
 class TestMigrations(unittest.TestCase):
@@ -142,6 +142,91 @@ class TestMigrations(unittest.TestCase):
             before = graph_file.read_bytes()
             migrate_baseline_references(project_path)
             self.assertEqual(graph_file.read_bytes(), before)
+        finally:
+            shutil.rmtree(tmp_dir)
+
+    def test_genome_encoding_migration(self):
+        import torch
+        from safetensors import safe_open
+        from safetensors.torch import save_file
+        from diffracture.topology.grating import Grating as DiffractureGrating
+        from diffracture.topology.lora import LoRAElement
+        from evolution.lora_genome import GENOME_FORMAT, LoRAGenome, express_to_grating
+        from utils.uid import XXH3_64
+
+        tmp_dir = tempfile.mkdtemp()
+        project_path = Path(tmp_dir)
+        generate = project_path / "generate"
+        generate.mkdir()
+
+        try:
+            baseline = DiffractureGrating()
+            baseline.add_element(LoRAElement("l1", rank=2, alpha=2.0, in_features=8, out_features=4))
+            baseline_path = generate / "base.safetensors"
+            baseline.save(str(baseline_path))
+
+            # Legacy genomes store phenotype weights directly
+            down, up = torch.randn(2, 8) * 3.0, torch.randn(4, 2)
+            legacy_meta = {"addresses": json.dumps(["l1"]), "gene_metadata": json.dumps({"l1": {"active": True}})}
+            save_file({"l1.lora_down": down, "l1.lora_up": up}, str(generate / "ind_a.safetensors"), metadata=legacy_meta)
+            save_file({"l1.lora_down": down * 2.0, "l1.lora_up": up}, str(generate / "ind_orphan.safetensors"), metadata=legacy_meta)
+
+            def file_info(uid):
+                # Stored paths may be stale (e.g. from another machine), so the uid fallback is exercised
+                return {"path": f"/elsewhere/{uid}.safetensors", "uid": uid, "extension": ".safetensors"}
+
+            graph_data = {"graph": {"elements": {"nodes": [
+                {"data": {"id": "base", "type": "grating", "file": file_info("base")}},
+                {"data": {"id": "ind_a", "type": "individual", "baseline_grating_id": "base", "file": file_info("ind_a"), "value": "ind_a"}},
+                {"data": {"id": "ind_orphan", "type": "individual", "baseline_grating_id": None, "file": file_info("ind_orphan")}},
+                {"data": {"id": "grp", "type": "group", "member_ids": ["ind_a", "ind_orphan"]}},
+                {"data": {"id": "aud", "type": "audio", "context": {"individuals": [{"id": "ind_a", "strength": 1.0}]}}},
+            ], "edges": [
+                {"data": {"id": "base->ind_a", "source": "base", "target": "ind_a", "relation": "parent"}},
+            ]}}}
+            graph_file = project_path / "graph.json"
+            graph_file.write_text(json.dumps(graph_data), encoding="utf-8")
+
+            migrate_genome_encoding(project_path)
+
+            migrated = json.loads(graph_file.read_text(encoding="utf-8"))["graph"]["elements"]
+            nodes = {n["data"]["id"]: n["data"] for n in migrated["nodes"]}
+            self.assertNotIn("ind_a", nodes)
+            new_id = next(i for i, d in nodes.items() if d["type"] == "individual" and d["baseline_grating_id"] == "base")
+
+            # The converted genome is stored under the hash of its new content, and the old file is gone
+            converted = generate / f"{new_id}.safetensors"
+            self.assertFalse((generate / "ind_a.safetensors").exists())
+            self.assertEqual(nodes[new_id]["file"]["uid"], new_id)
+            self.assertEqual(nodes[new_id]["value"], new_id)
+            self.assertEqual(Path(nodes[new_id]["file"]["path"]), converted)
+            genome = LoRAGenome.load(str(converted))
+            self.assertEqual(XXH3_64().from_state_dict(genome.get_state_dict()), new_id)
+            with safe_open(str(converted), framework="pt") as f:
+                self.assertEqual(f.metadata()["format"], GENOME_FORMAT)
+
+            # It carries the baseline's topology, and expresses back to its original weights without the baseline
+            self.assertEqual(genome[0].topology["alpha"], 2.0)
+            expressed = express_to_grating(genome).nodes["l1"]
+            self.assertEqual(expressed.metadata["alpha"], 2.0)
+            self.assertTrue(torch.allclose(expressed.params["lora_down"], down, atol=1e-6))
+            self.assertTrue(torch.allclose(expressed.params["lora_up"], up, atol=1e-6))
+
+            # Without a baseline there is no topology to take, so the genome is left as it was
+            with safe_open(str(generate / "ind_orphan.safetensors"), framework="pt") as f:
+                self.assertIsNone(f.metadata().get("format"))
+
+            # Every reference follows the re-addressed genome
+            self.assertEqual(nodes["grp"]["member_ids"], [new_id, "ind_orphan"])
+            self.assertEqual(nodes["aud"]["context"]["individuals"][0]["id"], new_id)
+            self.assertEqual(migrated["edges"][0]["data"]["id"], f"base->{new_id}")
+            self.assertEqual(migrated["edges"][0]["data"]["target"], new_id)
+            self.assertTrue((project_path / "graph.json.pre-genome-migration").exists())
+
+            # A second run changes nothing
+            before = graph_file.read_bytes(), converted.read_bytes()
+            migrate_genome_encoding(project_path)
+            self.assertEqual((graph_file.read_bytes(), converted.read_bytes()), before)
         finally:
             shutil.rmtree(tmp_dir)
 
