@@ -2,8 +2,8 @@
 import sys
 from pathlib import Path
 
-# Add sibling NeutralSelection directory to sys.path dynamically
-sibling_neutral_selection = Path(__file__).parent.parent.parent / "NeutralSelection"
+# Add sibling neutral-selection directory to sys.path dynamically
+sibling_neutral_selection = Path(__file__).parent.parent.parent / "neutral-selection"
 if sibling_neutral_selection.exists() and str(sibling_neutral_selection.resolve()) not in sys.path:
     sys.path.insert(0, str(sibling_neutral_selection.resolve()))
 

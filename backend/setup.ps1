@@ -153,7 +153,7 @@ if ($CudaVersion) {
 
 # 7. Install Diffracture (if available)
 Write-Host "Step 7: Checking for Diffracture locally..."
-$DiffracturePath = (Resolve-Path (Join-Path $ProjectRoot "../Diffracture") -ErrorAction SilentlyContinue).Path
+$DiffracturePath = (Resolve-Path (Join-Path $ProjectRoot "../diffracture") -ErrorAction SilentlyContinue).Path
 if ($DiffracturePath) {
     $SetupPy = Join-Path $DiffracturePath "setup.py"
     $PyProject = Join-Path $DiffracturePath "pyproject.toml"
@@ -182,13 +182,13 @@ if ($DiffracturePath) {
     }
 }
 else {
-    Write-Host "Diffracture not found at ../Diffracture. Skipping."
+    Write-Host "Diffracture not found at ../diffracture. Skipping."
 }
 
 
 # 8. Install NeutralSelection (if available)
 Write-Host "Step 8: Checking for NeutralSelection locally..."
-$NeutralSelectionPath = (Resolve-Path (Join-Path $ProjectRoot "../NeutralSelection") -ErrorAction SilentlyContinue).Path
+$NeutralSelectionPath = (Resolve-Path (Join-Path $ProjectRoot "../neutral-selection") -ErrorAction SilentlyContinue).Path
 if ($NeutralSelectionPath) {
     $SetupPy = Join-Path $NeutralSelectionPath "setup.py"
     $PyProject = Join-Path $NeutralSelectionPath "pyproject.toml"
@@ -217,7 +217,7 @@ if ($NeutralSelectionPath) {
     }
 }
 else {
-    Write-Host "NeutralSelection not found at ../NeutralSelection. Skipping."
+    Write-Host "NeutralSelection not found at ../neutral-selection. Skipping."
 }
 
 Write-Host "Backend setup completed successfully!"
