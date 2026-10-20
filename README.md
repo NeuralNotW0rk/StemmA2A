@@ -1,73 +1,127 @@
-# stemma2a
+# StemmA2A
 
-An Electron application with Svelte and TypeScript
+**StemmA2A** is a desktop workbench for exploring generative models (Stable Audio, StyleGAN2) through a node graph. You can generate audio and images, bend a model's internals with *gratings*, and evolve model modifications by ear: you listen, score, and breed the variants you like. Every artifact, model and modification is a node, and the edges between nodes record where each one came from.
 
-## Recommended IDE Setup
+StemmA2A is built on two companion libraries:
 
-- [VSCode](https://code.visualstudio.com/) + [ESLint](https://marketplace.visualstudio.com/items?itemName=dbaeumer.vscode-eslint) + [Prettier](https://marketplace.visualstudio.com/items?itemName=esbenp.prettier-vscode) + [Svelte](https://marketplace.visualstudio.com/items?itemName=svelte.svelte-vscode)
+- [Diffracture](https://github.com/NeuralNotW0rk/Diffracture) handles model interventions: LoRA, network bending, and gratings.
+- [Neutral Selection](https://github.com/NeuralNotW0rk/NeutralSelection) handles the evolutionary operators.
 
-## Project Setup
+> **Status:** early alpha (`1.0.0` in `package.json`). Developed and tested on Windows. Project files are migrated automatically, but other behavior may change between versions.
 
-### Backend Setup
+---
 
-1. **Configure Compute Backend**:
-   Before installing the dependencies, you need to configure the compute backend for PyTorch. Run the following command:
-   ```bash
-   $ npm run backend:configure
-   ```
-   This will guide you through selecting the appropriate backend for your hardware (e.g., CPU, CUDA).
+## Contents
 
-2. **Install Dependencies**:
-   After configuring the backend, you can set up the Python environment and install the dependencies:
-   ```bash
-   $ npm run backend:setup
-   ```
+- [Installation](#installation)
+- [Core concepts](#core-concepts)
+- [Quickstart](#quickstart)
+- [Documentation](#documentation)
+- [Scripts and tests](#scripts-and-tests)
+- [Known limitations](#known-limitations)
+- [Related projects](#related-projects)
+- [License](#license)
 
-3. **Docker Deployment (CPU Host to GPU Machine)**:
-   If you need to build the Docker image on a CPU machine (e.g., due to network issues on the GPU machine) and deploy it to a GPU machine, run:
-   ```bash
-   $ npm run docker:build-gpu
-   ```
-   This will build the Docker container targeting GPU architectures and export it to `execution-engine.tar` at the project root.
+---
 
-   Once built, deploy and run the image on the GPU machine with the following steps:
+## Installation
 
-   1. **Transfer the TAR archive** to the GPU machine (replace `user@gpu-host` with your actual login and `/path/to/destination/` with the target folder):
-      ```bash
-      scp execution-engine.tar user@gpu-host:/path/to/destination/
-      ```
-
-   2. **SSH / Log in** to the GPU machine and import the Docker image:
-      ```bash
-      docker load -i /path/to/destination/execution-engine.tar
-      ```
-
-   3. **Launch the container stack** from the `StemmA2A` project root directory:
-      ```bash
-      docker compose up -d
-      ```
-
-### Install
+Clone StemmA2A next to its two companion libraries:
 
 ```bash
-$ npm install
+git clone https://github.com/NeuralNotW0rk/StemmA2A.git
+git clone https://github.com/NeuralNotW0rk/Diffracture.git diffracture
+git clone https://github.com/NeuralNotW0rk/NeutralSelection.git neutral-selection
 ```
 
-### Development
+Then install the dependencies and start the app in development mode:
 
-```bash
-$ npm run dev
+```powershell
+cd StemmA2A
+npm.cmd install
+npm.cmd run backend:setup   # creates backend/.venv with PyTorch, requirements, and both libraries
+npm.cmd run dev
 ```
 
-### Build
+**Requirements:**
+- Node.js
+- Python 3.10, available as `py -3.10`
+- An NVIDIA GPU (recommended)
 
-```bash
-# For windows
-$ npm run build:win
+[Getting started](docs/getting-started.md) has the full setup, including the optional `.env` settings.
 
-# For macOS
-$ npm run build:mac
+---
 
-# For Linux
-$ npm run build:linux
-```
+## Core concepts
+
+| Concept | Role |
+|---|---|
+| **Project** | A folder containing `graph.json` and its generated files. |
+| **Model** | An imported generator, through either the Stable Audio Tools adapter or the StyleGAN2 adapter. |
+| **Grating** | A Diffracture intervention on a model's layers, applied at generation time with a strength. |
+| **Individual** | A candidate in an evolutionary run. It carries a per-layer LoRA genome. |
+| **Exemplar** | Audio or an image generated with an individual's genome applied. This is how you judge the individual. |
+| **Scatter / Recombine** | Mutation-only offspring, or selection plus crossover plus mutation from parents you scored. |
+| **Room** | A sub-view of the graph that you create with **Break Out**. |
+
+The [Core concepts](docs/concepts.md) page has the full glossary.
+
+---
+
+## Quickstart
+
+1. **File ▾ → New Project...**: create a project.
+2. **+ Import Model**: import a model, either from local files or from `backend/shared_models.json`.
+3. Right-click the model, choose **Generate**, then **Run**.
+4. Right-click a clip you like, choose **Scatter**, and listen to the children.
+5. **Score** the children you like, then **Recombine** them into the next generation.
+
+---
+
+## Documentation
+
+| Guide | Audience |
+|---|---|
+| [Getting started](docs/getting-started.md) | Everyone |
+| [Core concepts](docs/concepts.md) | Everyone |
+| [The interface](docs/user-guide/interface.md) · [Workflows](docs/user-guide/workflows.md) · [Operations reference](docs/user-guide/operations-reference.md) | Users |
+| [Architecture](docs/developer/architecture.md) · [Extending](docs/developer/extending.md) · [Remote GPU engine](docs/developer/remote-engine.md) | Developers |
+| [Documentation style](docs/STYLE.md) | Contributors |
+
+---
+
+## Scripts and tests
+
+| Command | Description |
+|---|---|
+| `npm.cmd run dev` | Starts the app with hot reload. Also starts the Python backend. |
+| `npm.cmd test` | Runs the backend unit tests and the frontend typecheck. |
+| `npm.cmd run test:backend` | Runs the backend `unittest` suite from `backend/`. |
+| `npm.cmd run typecheck` | Runs `tsc` and `svelte-check`. |
+| `npm.cmd run build:win` | Builds the installer. `build:mac` and `build:linux` are the other platforms. |
+| `npm.cmd run docker:build-gpu` | Builds the remote engine image and exports it to `execution-engine.tar`. See [Remote GPU engine](docs/developer/remote-engine.md). |
+
+On PowerShell, use `npm.cmd` rather than `npm` so the execution policy doesn't block the scripts.
+
+---
+
+## Known limitations
+
+- **Packaged installers don't include the Python backend yet.** Run from source with `npm.cmd run dev`.
+- **The setup scripts and the backend launch path assume Windows.**
+- **The Cluster view and the host DSP operations are currently broken.**
+
+[Known issues](docs/developer/known-issues.md) has the full list.
+
+---
+
+## Related projects
+
+- [Diffracture](https://github.com/NeuralNotW0rk/Diffracture): a modular PyTorch library for model interventions (LoRA, DoRA, network bending). It provides StemmA2A's gratings.
+- [Neutral Selection](https://github.com/NeuralNotW0rk/NeutralSelection): a typed, composable evolutionary-computation framework. It provides StemmA2A's selection, crossover and mutation.
+
+---
+
+## License
+
+StemmA2A is released under the [MIT License](LICENSE).
