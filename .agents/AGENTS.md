@@ -25,3 +25,24 @@
 - **Do Not Mask Failures:** Avoid implementing silent fallback blocks or catch-default statements that hide underlying errors (e.g., catching file loading errors and returning random or empty data).
 - **Raise Errors Immediately:** If a resource (like a model weight file or configuration) is missing, malformed, or incompatible, raise an explicit exception immediately during the validation/import phase so that the developer gets instant feedback.
 - **Fail Fast over Graceful Degradation:** Prefer throwing descriptive errors early rather than attempting to recover silently with degraded or mocked behaviors, which complicates downstream debugging.
+
+## 5. Architectural Boundaries & Data Conventions
+- **Preserve Storage Conventions:** Never change storage layout conventions, filename structures, or content-addressable storage (CAS) patterns (such as moving between CAS `path_from_uid` paths and temporary `temp_{job_id}` paths) without explicitly reviewing and updating all distributed services, endpoints, and download handlers (e.g., `/download_asset`) that depend on those assumptions.
+- **CAS for Downloadable Assets:** Retain content-addressable storage (CAS) based on deterministic content hashes (`path_from_uid`) for all generated, downloadable, and cached assets. This ensures efficient distributed access, verification, and deduplication across engine boundaries.
+- **Cross-Boundary Verification:** Ensure any changes modifying interfaces or shared file assumptions between `app.py` and `engine_service.py` are fully synchronized and validated on both sides of the host/container or client/server boundary.
+
+## 6. Python Environment & Backend Execution
+- **Dedicated Virtual Environment:** The relevant Python executable and all installed dependencies (PyTorch, torchaudio, numpy, diffusers, etc.) reside in `backend/.venv`.
+- **Always Target `.venv`:** Never use global `python`, `py`, or system commands. Always run commands using the virtual environment executable:
+  - Windows: `backend\.venv\Scripts\python.exe` (or `.\.venv\Scripts\python.exe` when working inside `backend/`).
+- **Working Directory for Backend Tasks:** When running backend scripts, migrations, or tests, ensure the working directory is `backend/` (or that `backend/` is on `PYTHONPATH`) so local packages (such as `param_graph`, `engine`, `utils`, `operations`) resolve cleanly.
+
+## 7. Canonical Test Commands & Automation
+- **Single-Command Test Entry Points:** Always use the standardized root `npm` scripts or direct virtualenv paths rather than ad-hoc search:
+  - **Run Full Test Suite (Frontend + Backend):** `npm.cmd test` (from project root).
+  - **Run Backend Tests (Full Suite):** `npm.cmd run test:backend` (from root) OR `.\.venv\Scripts\python.exe -m unittest discover -s tests` (from `backend/`).
+  - **Run Single Backend Test File:** `.\.venv\Scripts\python.exe -m unittest tests/test_<name>.py` (from `backend/`).
+  - **Run Frontend Typecheck & Svelte Diagnostics:** `npm.cmd run typecheck` (or `npm.cmd run test:frontend` from root).
+- **Execution Policy on Windows:** Always run `npm.cmd` rather than `npm` when invoking shell commands in PowerShell to avoid script execution policy blocks.
+
+

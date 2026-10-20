@@ -16,7 +16,7 @@ from tqdm import tqdm
 from k_diffusion.sampling import get_sigmas_karras
 
 from .base_adapter import ModelAdapter, operation
-from param_graph.elements.base_elements import Asset
+from param_graph.elements.base_elements import Asset, GraphElement
 from param_graph.elements.artifacts.audio_element import Audio
 from param_graph.elements.artifacts.latent_element import Latent
 from param_graph.elements.models.stable_audio_element import StableAudioModel
@@ -88,22 +88,39 @@ class StableAudioAdapter(ModelAdapter):
         )
 
         encoder_asset = None
-        if encoder_path:
-            encoder_dir = Path(encoder_path)
-            if encoder_dir.is_dir():
-                if not encoder_uid:
-                    encoder_uid = self.uid_generator.from_directory(encoder_dir)
-                if not encoder_size:
-                    encoder_size = get_path_size(encoder_dir)
+        if encoder_path or encoder_uid:
+            if encoder_path:
+                encoder_path_obj = Path(encoder_path)
+                if encoder_path_obj.is_dir():
+                    if not encoder_uid:
+                        encoder_uid = self.uid_generator.from_directory(encoder_path_obj)
+                    if not encoder_size:
+                        encoder_size = get_path_size(encoder_path_obj)
+                    encoder_asset = Asset(
+                        path=str(encoder_path_obj).replace("\\", "/"),
+                        uid=encoder_uid,
+                        size=encoder_size
+                    )
+                elif encoder_path_obj.is_file():
+                    if not encoder_uid:
+                        encoder_uid = self.uid_generator.from_string(encoder_path)
+                    if not encoder_size:
+                        encoder_size = os.path.getsize(encoder_path_obj)
+                    encoder_asset = Asset(
+                        path=str(encoder_path_obj).replace("\\", "/"),
+                        uid=encoder_uid,
+                        size=encoder_size
+                    )
+            elif encoder_uid:
                 encoder_asset = Asset(
-                    path=str(encoder_dir).replace("\\", "/"),
+                    path="",
                     uid=encoder_uid,
                     size=encoder_size
                 )
-                # Combine checkpoint UID and encoder UID to form the overall Model ID
-                model_id = self.uid_generator.from_uids([checkpoint_uid, encoder_uid])
-            else:
-                model_id = checkpoint_uid
+
+        if encoder_asset and encoder_asset.uid:
+            # Combine checkpoint UID and encoder UID to form the overall Model ID
+            model_id = self.uid_generator.from_uids([checkpoint_uid, encoder_asset.uid])
         else:
             model_id = checkpoint_uid
 
@@ -162,16 +179,19 @@ class StableAudioAdapter(ModelAdapter):
                 checkpoint_uid = info.checkpoint.uid
 
             # 2. Verify Encoder Asset (if present)
-            if encoder_asset and actual_encoder_path and actual_encoder_path.exists():
-                enc_size = get_path_size(actual_encoder_path)
-                if encoder_asset.size == enc_size:
-                    encoder_uid = encoder_asset.uid
+            if encoder_asset:
+                if actual_encoder_path and actual_encoder_path.exists():
+                    enc_size = get_path_size(actual_encoder_path)
+                    if encoder_asset.size == enc_size:
+                        encoder_uid = encoder_asset.uid
+                    else:
+                        print(f"Size mismatch or missing for encoder {actual_encoder_path}. Hashing directory...")
+                        encoder_uid = self.uid_generator.from_directory(actual_encoder_path)
+                    
+                    if encoder_uid != encoder_asset.uid:
+                        raise UIDMismatchError("Model encoder UID mismatch")
                 else:
-                    print(f"Size mismatch or missing for encoder {actual_encoder_path}. Hashing directory...")
-                    encoder_uid = self.uid_generator.from_directory(actual_encoder_path)
-                
-                if encoder_uid != encoder_asset.uid:
-                    raise UIDMismatchError("Model encoder UID mismatch")
+                    encoder_uid = encoder_asset.uid
                 
                 expected_id = self.uid_generator.from_uids([checkpoint_uid, encoder_uid])
             else:
@@ -212,7 +232,7 @@ class StableAudioAdapter(ModelAdapter):
         name="generate",
         is_standard=True,
         description="Generate audio from a generative model",
-        initiator_types=["model", "grating", "latent", "audio"],
+        initiator_types=["model", "grating", "latent", "audio", "individual"],
         context_overrides={
             "audio": {
                 "name": "audio-to-audio",
@@ -225,6 +245,10 @@ class StableAudioAdapter(ModelAdapter):
             "latent": {
                 "name": "generate from latent",
                 "description": "Generate audio guided by the selected latent structure"
+            },
+            "individual": {
+                "name": "generate exemplar",
+                "description": "Generate an audio exemplar expressing the selected individual's genome"
             },
             "model": {
                 "name": "Generate Audio",
@@ -609,10 +633,15 @@ class StableAudioAdapter(ModelAdapter):
         # Filter context
         context = {}
         for k, v in kwargs.items():
+            if k in ("job_id", "execution_mode"):
+                continue
             if k.endswith('_element'):
                 context[k.replace('_element', '_id')] = v.id
             elif k.endswith('_elements'):
                 context[k.replace('_elements', '_ids')] = [el.id for el in v]
+            elif isinstance(v, GraphElement):
+                # Other element arguments (e.g. baseline_grating) are referenced by ID, not serialized whole
+                context[f"{k}_id"] = v.id
             else:
                 context[k] = v
 
@@ -630,8 +659,14 @@ class StableAudioAdapter(ModelAdapter):
     @operation(
         name="invert",
         is_standard=True,
-        description="Invert audio to a latent representation",
-        initiator_types=["audio"]
+        description="Invert an audio or image artifact into the selected model's latent space",
+        initiator_types=["model", "audio"],
+        context_overrides={
+            "audio": {
+                "name": "Invert Audio",
+                "description": "Invert the selected audio into a latent with a Stable Audio model"
+            }
+        }
     )
     def invert(self, **kwargs) -> tuple[Latent, torch.Tensor]:
         model = self.model.to(self.device)
@@ -912,10 +947,15 @@ class StableAudioAdapter(ModelAdapter):
         # Filter context metadata properties
         context = {}
         for k, v in kwargs.items():
+            if k in ("job_id", "execution_mode"):
+                continue
             if k.endswith('_element'):
                 context[k.replace('_element', '_id')] = v.id
             elif k.endswith('_elements'):
                 context[k.replace('_elements', '_ids')] = [el.id for el in v]
+            elif isinstance(v, GraphElement):
+                # Other element arguments (e.g. baseline_grating) are referenced by ID, not serialized whole
+                context[f"{k}_id"] = v.id
             else:
                 context[k] = v
 

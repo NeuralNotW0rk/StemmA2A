@@ -7,12 +7,14 @@ export interface FormFieldOption {
 
 export interface FormField {
   name: string;
-  label:string;
-  type: 'string' | 'number' | 'boolean' | 'textarea' | 'select' | 'file' | 'directory' | 'node';
+  label: string;
+  type: 'string' | 'number' | 'boolean' | 'textarea' | 'select' | 'file' | 'directory' | 'node' | 'node-list';
   defaultValue?: any;
   filter?: NodeFilter;
   options?: FormFieldOption[];
   placeholder?: string;
+  minItems?: number;
+  itemLabel?: string;
   validation?: {
     required?: boolean;
     min?: number;
@@ -25,6 +27,14 @@ export interface FormField {
   conditionalDefaults?: {
     show_if: Record<string, any>;
     value: any;
+  }[];
+  description?: string;
+  // First matching entry overrides label/placeholder/description
+  conditionalProps?: {
+    show_if: Record<string, any>;
+    label?: string;
+    placeholder?: string;
+    description?: string;
   }[];
   allowSequence?: boolean;
 }
@@ -49,17 +59,67 @@ export interface AudioData {
   [key: string]: unknown
 }
 
-export interface BatchData {
+export interface GroupData {
   id: string
   name?: string
-  type: 'batch'
+  type: 'group'
   member_type: string
   member_ids: string[]
   alias?: string
   [key: string]: unknown
 }
 
-export type NodeData = ModelData | AudioData | BatchData
+export interface BundleData {
+  id: string
+  name: string
+  type: 'bundle'
+  member_type: string
+  member_ids: string[]
+  alias?: string
+  context: Record<string, unknown>
+  [key: string]: unknown
+}
+
+export interface GratingElementMetadata {
+  indices?: number[]
+  cluster?: number | null
+  cluster_map?: unknown
+  radius?: number
+  scale_factor?: number
+  angle?: number
+  offset_x?: number
+  offset_y?: number
+  factor?: number
+  multiplier?: number
+  scale_x?: number
+  scale_y?: number
+  threshold?: number
+  [key: string]: unknown
+}
+
+export interface GratingElement {
+  address: string
+  kernel_type: string
+  metadata?: GratingElementMetadata
+  params?: Record<string, unknown>
+  indices?: number[]
+  perform_clustering?: boolean
+  num_clusters?: number | null
+  cluster?: number | null
+  [key: string]: unknown
+}
+
+export interface GratingData {
+  id: string
+  name?: string
+  type: 'grating'
+  elements?: GratingElement[]
+  base_model_id?: string
+  alias?: string
+  [key: string]: unknown
+}
+
+export type NodeData = ModelData | AudioData | GroupData | BundleData | GratingData
 
 export function initializeFormData(
   fields: FormConfig,
@@ -102,11 +162,42 @@ export function initializeFormData(
       if (field.filter.type === initiatorNode.type) {
         formData[field.name] = initiatorNode
       } else if (
-        initiatorNode.type === 'batch' &&
+        initiatorNode.type === 'group' &&
         field.filter.type === initiatorNode.member_type
       ) {
         formData[field.name] = initiatorNode
       }
+    }
+    if (formData[field.name] === undefined && field.type === 'node-list') {
+      const listItems: Array<{ id: number; node: any }> = []
+      if (initiatorNode) {
+        if (Array.isArray(initiatorNode.selectedNodes) && initiatorNode.selectedNodes.length > 0) {
+          initiatorNode.selectedNodes.forEach((n: any, idx: number) => {
+            if (n && !n.source && !n.target) {
+              if (!field.filter || !field.filter.type || n.type === field.filter.type) {
+                listItems.push({ id: idx, node: n })
+              }
+            }
+          })
+        } else if (initiatorNode.type === 'group' && Array.isArray(initiatorNode.member_ids) && initiatorNode.member_ids.length > 0) {
+          initiatorNode.member_ids.forEach((mId: string, idx: number) => {
+            if (typeof mId === 'string' && !mId.includes('->')) {
+              listItems.push({ id: idx, node: mId })
+            }
+          })
+        } else if (initiatorNode.type === 'group' && Array.isArray(initiatorNode.members) && initiatorNode.members.length > 0) {
+          initiatorNode.members.forEach((n: any, idx: number) => {
+            if (n && !n.source && !n.target) {
+              if (!field.filter || !field.filter.type || n.type === field.filter.type) {
+                listItems.push({ id: idx, node: n })
+              }
+            }
+          })
+        } else if (!initiatorNode.source && !initiatorNode.target && (!field.filter || !field.filter.type || initiatorNode.type === field.filter.type)) {
+          listItems.push({ id: 0, node: initiatorNode })
+        }
+      }
+      formData[field.name] = listItems
     }
     if (formData[field.name] === undefined) {
       let val = field.defaultValue;

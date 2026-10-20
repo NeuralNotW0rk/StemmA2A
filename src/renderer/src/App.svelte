@@ -10,7 +10,7 @@
   import ImportModelView from './components/views/ImportModelView.svelte'
   import RemovalView from './components/views/RemovalView.svelte'
   import NewProjectView from './components/views/NewProjectView.svelte'
-  import BatchingView from './components/views/BatchingView.svelte'
+  import GroupingView from './components/views/GroupingView.svelte'
   import JobStatusView from './components/views/JobStatusView.svelte'
   import OperationView from './components/views/OperationView.svelte'
   import BendingView from './components/views/BendingView.svelte'
@@ -30,24 +30,40 @@
     jobStore,
     addJob,
     updateJob,
+    pollJobStatus,
     clearDismissableJobs,
     cancelAllJobs
   } from './utils/job-management'
-  import type { ActionPanelView, ElementData, ErrorInfo } from './utils/types'
+  import type {
+    ActionPanelView,
+    ForkResult,
+    ElementData,
+    ErrorInfo,
+    ProjectOrigin
+  } from './utils/types'
+  import { flattenElements, roomPath } from './utils/rooms'
 
   let graphData: any = $state(null)
   let currentProject: string | null = $state(null)
+  // Set for a forked project: the project it was copied from
+  let projectOrigin: ProjectOrigin | null = $state(null)
+  // The room being viewed, or null for the main graph
+  let activeRoom: string | null = $state(null)
+  let roomCrumbs = $derived(roomPath(flattenElements(graphData), activeRoom))
   let viewMode: 'batch' | 'cluster' = $state('batch')
   let audioSrc: string | null = $state(null)
   let audioTitle: string | null = $state(null)
   let showSpringEdges = $state(false)
   let showDetailedLabelsToggle = $state(false)
   let chronologicalConstraint = $state(false)
+  let hideEvolutionaryEdges = $state(false)
+  let hideAllEdges = $state(false)
   let isPeekPressed = $state(false)
   let showDetailedLabels = $derived(showDetailedLabelsToggle || isPeekPressed)
   let selectedElementData: ElementData | null = $state(null)
   let actionPanelView: ActionPanelView = $state('none')
   let activeModelElement: any = $state(null)
+  let activeAudioElement: ElementData | null = $state(null)
   let errorInInfoPanel: ErrorInfo | null = $state(null)
   let allOperations: any[] = $state([])
   let toolbarComponent: Toolbar
@@ -65,15 +81,25 @@
   )
 
   let knownJobIds = new SvelteSet<string>()
+  let refreshGraphTimeout: number | null = null
 
-  $effect(() => {
+  function debouncedRefreshGraphData(delayMs = 350): void {
+    if (refreshGraphTimeout !== null) {
+      window.clearTimeout(refreshGraphTimeout)
+    }
+    refreshGraphTimeout = window.setTimeout((): void => {
+      refreshGraphTimeout = null
+      void refreshGraphData()
+    }, delayMs)
+  }
+
+  $effect((): (() => void) => {
     const unsub = jobStore.subscribe((jobs) => {
       let shouldRefresh = false
 
       for (const job of jobs) {
         if (!knownJobIds.has(job.id)) {
           knownJobIds.add(job.id)
-          shouldRefresh = true
         }
         if (job.status === 'success' && !job.result?.viewed) {
           shouldRefresh = true
@@ -84,16 +110,23 @@
       }
 
       if (shouldRefresh) {
-        refreshGraphData()
+        debouncedRefreshGraphData(350)
       }
     })
-    return unsub
+    return (): void => {
+      unsub()
+      if (refreshGraphTimeout !== null) {
+        window.clearTimeout(refreshGraphTimeout)
+      }
+    }
   })
 
-  onMount(async () => {
-    await initialHealthCheck()
+  onMount(async (): Promise<void> => {
+    const ready = await initialHealthCheck()
     setupHealthCheckPolling()
-    await loadOperations()
+    if (ready) {
+      await loadOperations()
+    }
   })
 
   async function loadOperations(): Promise<void> {
@@ -102,72 +135,83 @@
       if (res && res.success && Array.isArray(res.operations)) {
         allOperations = res.operations
       }
-    } catch (error) {
+    } catch (error: unknown) {
       console.error('Failed to pre-load operations:', error)
     }
   }
 
-  onDestroy(() => {
+  onDestroy((): void => {
     if (healthCheckInterval) {
       clearInterval(healthCheckInterval)
     }
   })
 
-  async function initialHealthCheck(): Promise<void> {
+  async function initialHealthCheck(): Promise<boolean> {
     try {
       const status = await window.api.getHealth()
-      backendStatus.set(status)
-      serverInstanceId = status.server_instance_id || null
-      console.log('Backend status:', status)
-      isWaitingForBackend = false
-    } catch (error) {
-      console.error('Failed to get backend health:', error)
-      const MAX_RETRIES = 20
-      const RETRY_INTERVAL = 3000
-      for (let i = 0; i < MAX_RETRIES; i++) {
-        await new Promise((resolve) => setTimeout(resolve, RETRY_INTERVAL))
-        try {
-          const status = await window.api.getHealth()
+      if (status && status.status === 'healthy') {
+        backendStatus.set(status)
+        serverInstanceId = status.server_instance_id || null
+        console.log('Backend status:', status)
+        isWaitingForBackend = false
+        return true
+      }
+    } catch {
+      // Backend not yet ready; proceed to retry loop
+    }
+
+    const MAX_RETRIES = 20
+    const RETRY_INTERVAL = 1500
+    for (let i = 0; i < MAX_RETRIES; i++) {
+      await new Promise((resolve): number => window.setTimeout(resolve, RETRY_INTERVAL))
+      try {
+        const status = await window.api.getHealth()
+        if (status && status.status === 'healthy') {
           backendStatus.set(status)
           serverInstanceId = status.server_instance_id || null
+          console.log(`Backend connected after ${i + 1} attempt(s):`, status)
           isWaitingForBackend = false
-          return
-        } catch (e) {
-          console.error(`Backend connection attempt ${i + 1} failed:`, e)
+          return true
         }
-      }
-      isWaitingForBackend = false
-      errorInInfoPanel = {
-        title: 'Backend Connection Failed',
-        message:
-          'Could not connect to the backend server. Please ensure it is running and accessible.'
+      } catch {
+        // Suppress noisy logs during normal startup retries
       }
     }
+    isWaitingForBackend = false
+    errorInInfoPanel = {
+      title: 'Backend Connection Failed',
+      message:
+        'Could not connect to the backend server. Please ensure it is running and accessible.'
+    }
+    return false
   }
 
   function setupHealthCheckPolling(): void {
     if (healthCheckInterval) {
       clearInterval(healthCheckInterval)
     }
-    healthCheckInterval = window.setInterval(async () => {
+    healthCheckInterval = window.setInterval(async (): Promise<void> => {
       try {
         const status = await window.api.getHealth()
-        backendStatus.set(status)
+        if (status && status.status === 'healthy') {
+          backendStatus.set(status)
 
-        if (serverInstanceId && status.server_instance_id !== serverInstanceId) {
-          console.warn('Backend has restarted. Resetting project state.')
-          handleBackendRestart()
+          if (serverInstanceId && status.server_instance_id !== serverInstanceId) {
+            console.warn('Backend has restarted. Resetting project state.')
+            handleBackendRestart()
+          }
+          serverInstanceId = status.server_instance_id || null
         }
-        serverInstanceId = status.server_instance_id || null
-      } catch (error) {
-        console.error('Health check poll failed:', error)
-        // Optionally handle polling errors, e.g., show a banner
+      } catch (error: unknown) {
+        console.debug('Health check poll failed:', error)
       }
     }, 3000) // Poll every 3 seconds
   }
 
   function handleBackendRestart(): void {
     currentProject = null
+    projectOrigin = null
+    activeRoom = null
     graphData = null
     selectedElementData = null
     audioSrc = null
@@ -229,26 +273,32 @@
     contextStore.set(null)
     selectedForRemoval.set(null)
     selectedOperation.set(null)
+    activeAudioElement = null
   }
 
   async function handleProjectLoad(data: {
     project_path?: string
     project_name?: string
-  }): Promise<void> {
+  }): Promise<boolean> {
     try {
       const projectName = data.project_name || data.project_path?.split(/[/\\]/).pop()
       console.log(`Loading project: ${projectName}`)
-      await window.api.loadProject(data)
+      const loaded = await window.api.loadProject(data)
       await loadOperations()
       graphData = await window.api.getGraphData(viewMode)
       currentProject = projectName || null
+      projectOrigin = loaded.origin ?? null
+      // Loading a project resets the backend to its main graph
+      activeRoom = null
       if (data.project_path) {
         await window.api.addRecentProject(data.project_path)
       }
       console.log(`Successfully loaded project: ${projectName}`)
+      return true
     } catch (error) {
       console.error('Failed to load project:', error)
       errorInInfoPanel = { title: 'Project Load Failed', message: error.message }
+      return false
     }
   }
 
@@ -262,6 +312,8 @@
     await loadOperations()
     graphData = await window.api.getGraphData(viewMode)
     currentProject = projectName || null
+    projectOrigin = null
+    activeRoom = null
     if (data.project_path) {
       await window.api.addRecentProject(data.project_path)
     }
@@ -293,26 +345,30 @@
   }
 
   async function handleExpandPath(pathNodeId: string): Promise<void> {
-    // 1. Register the job locally before the backend blocks
-    const job = addJob('Expand Directory', { pathNodeId }, 'running')
-
     try {
       const response = await window.api.expandPath(pathNodeId)
-
-      // 2. When the backend finally unblocks, mark it successful
-      job.status = 'success'
-      job.result = { id: response.directory_id, viewed: false }
-      updateJob(job)
-
+      if (response && response.job_id) {
+        addJob('Expand Directory', { pathNodeId }, 'running', response.job_id)
+        await pollJobStatus(response.job_id)
+      }
       await refreshGraphData()
     } catch (error: any) {
       console.error('Error expanding path:', error)
       errorInInfoPanel = { title: 'Expand Path Failed', message: error.message || String(error) }
+    }
+  }
 
-      // 3. Capture any failures
-      job.status = 'error'
-      job.error = { title: 'Expansion Failed', message: error.message || String(error) }
-      updateJob(job)
+  async function handleRescanSource(sourceName: string): Promise<void> {
+    try {
+      const response = await window.api.rescanSource(sourceName)
+      if (response && response.job_id) {
+        addJob('Rescan Source', { sourceName }, 'running', response.job_id)
+        await pollJobStatus(response.job_id)
+      }
+      await refreshGraphData()
+    } catch (error: any) {
+      console.error('Error rescanning source:', error)
+      errorInInfoPanel = { title: 'Rescan Source Failed', message: error.message || String(error) }
     }
   }
 
@@ -434,53 +490,139 @@
     actionPanelView = 'removal'
   }
 
-  function handleStartBatching(nodeData: any): void {
-    initiatorNodeStore.set(nodeData)
-    actionPanelView = 'batching'
+  async function enterRoom(roomId: string | null): Promise<void> {
+    try {
+      // The backend places new elements in the viewed room
+      await window.api.setViewRoom(roomId)
+      activeRoom = roomId
+    } catch (error: unknown) {
+      console.error('Failed to change room:', error)
+      const message = error instanceof Error ? error.message : String(error)
+      errorInInfoPanel = { title: 'Changing Room Failed', message }
+    }
   }
 
-  async function handleExport(data: { names: string[] }): Promise<void> {
+  async function handleBreakout(elementIds: string[]): Promise<void> {
+    try {
+      await window.api.createRoom(elementIds)
+      await refreshGraphData()
+    } catch (error: unknown) {
+      console.error('Break out failed:', error)
+      const message = error instanceof Error ? error.message : String(error)
+      errorInInfoPanel = { title: 'Break Out Failed', message }
+    }
+  }
+
+  async function handleDissolveRoom(roomId: string): Promise<void> {
+    try {
+      // Leaving a room that is about to disappear: go to the view it rejoins
+      const crumbIndex = roomCrumbs.findIndex((crumb) => crumb.id === roomId)
+      if (crumbIndex >= 0) {
+        await enterRoom(crumbIndex > 0 ? roomCrumbs[crumbIndex - 1].id : null)
+      }
+      await window.api.dissolveRoom(roomId)
+      await refreshGraphData()
+    } catch (error: unknown) {
+      console.error('Rejoin failed:', error)
+      const message = error instanceof Error ? error.message : String(error)
+      errorInInfoPanel = { title: 'Rejoin Failed', message }
+    }
+  }
+
+  async function handleForkProject(elementIds: string[]): Promise<void> {
+    let result: ForkResult
+    try {
+      result = await window.api.forkProject(elementIds)
+    } catch (error: unknown) {
+      console.error('Fork to project failed:', error)
+      const message = error instanceof Error ? error.message : String(error)
+      errorInInfoPanel = { title: 'Fork to Project Failed', message }
+      return
+    }
+
+    // Switch to the fork right away; the original is one click back
+    if (!(await handleProjectLoad({ project_path: result.project_path }))) return
+    await toolbarComponent.refreshRecentProjects()
+    // Spring edges are not carried over; rebuild them for the fork
+    await handleUpdateEmbeddings()
+
+    const converted = result.converted_exemplars.length
+    if (converted) {
+      errorInInfoPanel = {
+        title: 'Forked to Project',
+        message: `${converted} exemplar(s) were forked without their individual and are now plain audio. Their lineage is kept in their context.`
+      }
+    }
+  }
+
+  async function handleReturnToOrigin(): Promise<void> {
+    if (!projectOrigin) return
+    if (await handleProjectLoad({ project_path: projectOrigin.project_path })) {
+      await toolbarComponent.refreshRecentProjects()
+    }
+  }
+
+  function handleStartGrouping(nodeData: any): void {
+    initiatorNodeStore.set(nodeData)
+    actionPanelView = 'grouping'
+  }
+
+  async function handleExport(data: { names: string[]; isGroup?: boolean }): Promise<void> {
     try {
       let customPath: string | null = null
-      if (data.names.length === 1) {
-        customPath = await window.api.selectSavePath(`${data.names[0]}.wav`)
+      if (!data.isGroup && data.names.length === 1) {
+        const defaultName = data.names[0].endsWith('.wav') ? data.names[0] : `${data.names[0]}.wav`
+        customPath = await window.api.selectSavePath(defaultName)
       } else {
         customPath = await window.api.selectDirectory()
       }
       if (!customPath) return // User cancelled
 
       const response = await window.api.exportAudio(data.names, customPath)
-
+      let exportPath = response?.export_path || customPath
+      if (response && response.job_id) {
+        addJob(
+          'Export Audio',
+          { count: data.names.length, target: customPath },
+          'running',
+          response.job_id
+        )
+        const jobResult = (await pollJobStatus(response.job_id)) as {
+          result?: { export_path?: string }
+        }
+        exportPath = jobResult?.result?.export_path || customPath
+      }
       errorInInfoPanel = {
         title: 'Export Successful',
-        message: `Successfully exported to: ${response?.export_path || 'project export folder'}`
+        message: `Successfully exported to: ${exportPath}`
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Export failed:', error)
-      errorInInfoPanel = { title: 'Export Failed', message: error.message || String(error) }
+      const message = error instanceof Error ? error.message : String(error)
+      errorInInfoPanel = { title: 'Export Failed', message }
     }
   }
 
-  async function handleChangeBatchMembership(
+  async function handleChangeGroupMembership(
     _nodeId: string,
-    oldBatchId: string | null,
+    oldGroupId: string | null,
     oldMembers: string[],
-    newBatchId: string | null,
+    newGroupId: string | null,
     newMembers: string[]
   ): Promise<void> {
     try {
-      // Unlink from the old batch if applicable
-      if (oldBatchId) {
-        await window.api.updateBatch(oldBatchId, oldMembers)
+      // Unlink from the old group if applicable
+      if (oldGroupId) {
+        await window.api.updateGroup(oldGroupId, oldMembers)
       }
-      // Link to the new batch if applicable
-      if (newBatchId) {
-        await window.api.updateBatch(newBatchId, newMembers)
+      // Link to the new group if applicable
+      if (newGroupId) {
+        await window.api.updateGroup(newGroupId, newMembers)
       }
       await refreshGraphData()
     } catch (error: any) {
-      console.error('Error changing batch membership:', error)
-      errorInInfoPanel = { title: 'Batch Update Failed', message: error.message || String(error) }
+      console.error('Error changing group membership:', error)
+      errorInInfoPanel = { title: 'Group Update Failed', message: error.message || String(error) }
     }
   }
 
@@ -492,6 +634,10 @@
     try {
       await loadOperations()
       graphData = await window.api.getGraphData(viewMode)
+      // The viewed room may have been removed
+      if (activeRoom && roomCrumbs.length === 0) {
+        await enterRoom(null)
+      }
       console.log(`Graph data refreshed for view mode ${viewMode}`)
     } catch (error) {
       console.error('Failed to get graph data:', error)
@@ -502,7 +648,7 @@
   function getInitiatorOutputType(): string | null {
     const node = $initiatorNodeStore
     if (!node) return null
-    if (node.type === 'batch') {
+    if (node.type === 'group') {
       const memberIds = node.member_ids || []
       if (memberIds.length > 0 && graphData && graphData.elements) {
         let elements: any[] = []
@@ -536,13 +682,13 @@
     if (actionPanelView === 'removal') {
       return 'Confirm Removal'
     }
-    if (actionPanelView === 'batching') {
+    if (actionPanelView === 'grouping') {
       const initNode = $initiatorNodeStore
-      if (initNode?.type === 'batch') {
+      if (initNode?.type === 'group') {
         const memberIds = (initNode as any).member_ids || []
-        return memberIds.length === 0 ? 'Create Batch' : 'Update Batch'
+        return memberIds.length === 0 ? 'Create Group' : 'Update Group'
       }
-      return 'Create Batch'
+      return 'Create Group'
     }
     if (actionPanelView === 'operation') {
       if ($selectedOperation) {
@@ -643,11 +789,17 @@
     onupdateEmbeddings={handleUpdateEmbeddings}
     onupdateLabels={handleUpdateLabels}
     onrepairEdges={handleRepairEdges}
+    onreturnToOrigin={handleReturnToOrigin}
+    onnavigateRoom={enterRoom}
     {currentProject}
+    {projectOrigin}
+    {roomCrumbs}
     {viewMode}
     bind:showSpringEdges
     bind:showDetailedLabels={showDetailedLabelsToggle}
     bind:chronologicalConstraint
+    bind:hideEvolutionaryEdges
+    bind:hideAllEdges
   />
 
   {#if errorInInfoPanel}
@@ -699,15 +851,15 @@
             errorInInfoPanel = error
           }}
         />
-      {:else if actionPanelView === 'batching'}
-        <BatchingView
+      {:else if actionPanelView === 'grouping'}
+        <GroupingView
           onclose={closeActionPanel}
           onrefresh={() => {
             closeActionPanel()
             refreshGraphData()
           }}
           onerror={(error) => {
-            console.error('Batching error:', error)
+            console.error('Grouping error:', error)
             closeActionPanel()
             errorInInfoPanel = error
           }}
@@ -785,13 +937,21 @@
     onexport={handleExport}
     onedgeSelect={handleElementSelect}
     onElementRemove={handleElementRemove}
-    onstartBatching={handleStartBatching}
+    onbreakout={handleBreakout}
+    onforkProject={handleForkProject}
+    onenterRoom={enterRoom}
+    ondissolveRoom={handleDissolveRoom}
+    {activeRoom}
+    onstartGrouping={handleStartGrouping}
     onsavePositions={handleSavePositions}
     onexpandPath={handleExpandPath}
+    onrescanSource={handleRescanSource}
     ontoggleFavorite={handleToggleFavorite}
     {showDetailedLabels}
     {chronologicalConstraint}
-    onchangeBatchMembership={handleChangeBatchMembership}
+    {hideEvolutionaryEdges}
+    {hideAllEdges}
+    onchangeGroupMembership={handleChangeGroupMembership}
     onselectOperation={handleSelectOperation}
     onrefresh={refreshGraphData}
   />

@@ -1,7 +1,7 @@
-# backend/engine_service.py
 import json
 import os
 import traceback
+import threading
 from pathlib import Path
 import logging
 
@@ -11,8 +11,10 @@ import torch
 from pydantic import ValidationError
 
 from engine.engine_provider import EngineProvider
+from engine.results import map_result_elements
 from utils.uid import path_from_uid
 from utils.migrations import run_global_migrations
+from utils.log_capture import start_log_capture
 from param_graph.registry import resolve_element
 
 
@@ -145,11 +147,46 @@ async def execute():
 
         resolved_params = _resolve_and_collect(params)
 
-        required_uids = {uid for element in all_elements.values() for uid in element.get_uids()}
-        missing_uids = [uid for uid in required_uids if not (data_cache_root / path_from_uid(uid)).exists()]
+        required_assets = {}
+        for element in all_elements.values():
+            if hasattr(element, 'get_assets'):
+                for asset in element.get_assets():
+                    required_assets[asset.uid] = asset
+
+        import zipfile
+
+        missing_uids = []
+        for uid in {uid for element in all_elements.values() for uid in element.get_uids()}:
+            cache_file = data_cache_root / path_from_uid(uid)
+            asset = required_assets.get(uid)
+            if not cache_file.exists():
+                missing_uids.append(uid)
+            elif cache_file.stat().st_size == 0:
+                print(f"[Engine Service] Warning: Zero-byte cached asset '{uid}'. Evicting from cache.")
+                try:
+                    cache_file.unlink()
+                except Exception as e:
+                    pass
+                missing_uids.append(uid)
+            elif asset and asset.size and asset.size > 0:
+                size_matches = (cache_file.stat().st_size == asset.size)
+                is_valid_archive = False
+                if not size_matches:
+                    try:
+                        is_valid_archive = zipfile.is_zipfile(cache_file)
+                    except Exception:
+                        is_valid_archive = False
+
+                if not size_matches and not is_valid_archive:
+                    print(f"[Engine Service] Warning: Corrupt or incomplete cached asset '{uid}' (expected {asset.size} bytes, found {cache_file.stat().st_size} bytes). Evicting from cache.")
+                    try:
+                        cache_file.unlink()
+                    except Exception as e:
+                        print(f"Failed to remove corrupt cache file {cache_file}: {e}")
+                    missing_uids.append(uid)
         
         if missing_uids:
-            print(f"Missing assets: {missing_uids}")
+            print(f"[Engine Service] Requesting missing/corrupt assets from client: {missing_uids}")
             return jsonify({"error": "Missing assets", "missing_uids": missing_uids}), 422
         
         def _anchor_elements(val):
@@ -191,13 +228,11 @@ async def get_job_status(job_id):
         engine = engine_provider.get_engine()
         status = await engine.get_job_status(job_id)
 
-        # De-anchor completed results before sending them over the wire
-        if status.get("status") == "completed" and "result" in status:
-            result_data = status.get("result")
-            if result_data and "id" in result_data:
-                element = resolve_element(result_data)
-                de_anchored_element = element.de_anchor()
-                status["result"] = de_anchored_element.to_dict()
+        # De-anchor completed results (every artifact of a multi-artifact result) before sending them over the wire
+        if status.get("status") == "completed" and status.get("result"):
+            status["result"] = map_result_elements(
+                status["result"], lambda data: resolve_element(data).de_anchor().to_dict()
+            )
 
         return jsonify(status)
     except Exception as e:
@@ -223,6 +258,17 @@ async def cancel_job(job_id):
         return jsonify({"error": str(e)}), 500
 
 
+def _format_bytes(num_bytes: int | float) -> str:
+    if num_bytes < 1024:
+        return f"{num_bytes:.0f} B"
+    elif num_bytes < 1024 * 1024:
+        return f"{num_bytes / 1024:.2f} KB"
+    elif num_bytes < 1024 * 1024 * 1024:
+        return f"{num_bytes / (1024 * 1024):.2f} MB"
+    else:
+        return f"{num_bytes / (1024 * 1024 * 1024):.2f} GB"
+
+
 @app.route("/download_asset/<asset_id>", methods=["GET"])
 def download_asset(asset_id):
     """Downloads a generated asset file from the content-addressable cache."""
@@ -235,18 +281,32 @@ def download_asset(asset_id):
             # A more robust solution might store extensions or check for common types.
             asset_path = asset_path.with_suffix('.wav')
             if not asset_path.exists():
-                 return jsonify({"error": f"Asset not found for id {asset_id}"}), 404
-            
+                print(f"[Engine Service] Warning: [Download] Asset not found: {asset_id}")
+                return jsonify({"error": f"Asset not found for id {asset_id}"}), 404
+        
+        file_size = os.path.getsize(asset_path)
+        print(f"[Engine Service] [Download] Serving asset '{asset_id}' ({_format_bytes(file_size)}) to client...")
         return send_file(str(asset_path), as_attachment=True)
     except Exception as e:
+        print(f"[Engine Service] [Download Error] Failed to serve asset '{asset_id}': {e}")
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
+
+
+_upload_locks: dict[str, threading.Lock] = {}
+_locks_mutex = threading.Lock()
+
+def _get_upload_lock(uid: str) -> threading.Lock:
+    with _locks_mutex:
+        if uid not in _upload_locks:
+            _upload_locks[uid] = threading.Lock()
+        return _upload_locks[uid]
 
 
 @app.route("/upload", methods=["POST"])
 def upload():
     """
-    Uploads a file to the engine's local data store.
+    Uploads a file to the engine's local data store using atomic staging.
     """
     if 'file' not in request.files:
         return jsonify({"error": "No file part"}), 400
@@ -262,22 +322,39 @@ def upload():
 
     if file:
         destination = data_cache_root / path_from_uid(uid)
+        staging_path = data_cache_root / f"{path_from_uid(uid)}.part"
         destination.parent.mkdir(parents=True, exist_ok=True)
         
-        mode = 'wb' if chunk_index == 0 else 'ab'
-        with open(destination, mode) as f:
-            f.write(file.read())
-            
-        if chunk_index == total_chunks - 1:
-            # Verify the fully reassembled file size matches the original
-            if total_size > 0:
-                reconstructed_size = os.path.getsize(destination)
-                if reconstructed_size != total_size:
-                    os.remove(destination)  # Clean up the corrupted file
-                    return jsonify({"error": f"Size mismatch for {uid}. Expected {total_size}, got {reconstructed_size}"}), 400
+        chunk_data = file.read()
+        chunk_len = len(chunk_data)
+        
+        lock = _get_upload_lock(uid)
+        with lock:
+            mode = 'wb' if chunk_index == 0 else 'ab'
+            with open(staging_path, mode) as f:
+                f.write(chunk_data)
+                
+            if total_chunks > 1:
+                print(f"[Engine Service] [Upload] Received chunk {chunk_index + 1}/{total_chunks} for '{uid}' ({_format_bytes(chunk_len)})")
+
+            if chunk_index == total_chunks - 1:
+                # Verify the fully reassembled file size matches the original
+                reconstructed_size = os.path.getsize(staging_path)
+                if total_size > 0 and reconstructed_size != total_size:
+                    if staging_path.exists():
+                        os.remove(staging_path)  # Clean up the corrupted file
+                    err_msg = f"Size mismatch for '{uid}'. Expected {_format_bytes(total_size)}, got {_format_bytes(reconstructed_size)}"
+                    print(f"[Engine Service] [Upload Error] {err_msg}")
+                    return jsonify({"error": err_msg}), 400
                     
-            return jsonify({"message": f"File {uid} uploaded successfully"})
-        return jsonify({"message": f"Chunk {chunk_index} of {uid} uploaded"})
+                # Atomically promote staging file to final CAS destination
+                if destination.exists():
+                    os.remove(destination)
+                staging_path.replace(destination)
+
+                print(f"[Engine Service] [Upload] Completed '{uid}' ({_format_bytes(reconstructed_size)}, {total_chunks} chunk(s)) saved to cache.")
+                return jsonify({"message": f"File {uid} uploaded successfully"})
+            return jsonify({"message": f"Chunk {chunk_index} of {uid} uploaded"})
 
     return jsonify({"error": "File upload failed"}), 500
 
@@ -286,6 +363,8 @@ def upload():
 # --------------------
 
 if __name__ == "__main__":
+    # Started here rather than at import so test runs do not write to the service log
+    start_log_capture(data_cache_root / "logs", "engine_service")
     print(f"Starting StemmA2A Engine Service on device: {device_accelerator}")
     app.run(
         host="0.0.0.0",

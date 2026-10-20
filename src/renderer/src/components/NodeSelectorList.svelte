@@ -2,16 +2,10 @@
 <script lang="ts">
   import { onDestroy, type Snippet } from 'svelte'
   import NodeSelector from './NodeSelector.svelte'
-  import { selectionStore } from '../utils/stores'
-  import type { NodeData } from '../utils/forms'
-  import type { NodeFilter } from '../utils/types'
-
-  export interface NodeListItem {
-    id: number | string
-    node: NodeData | string | null
-    strength?: number
-    [key: string]: any
-  }
+  import { selectionStore, cyInstanceStore } from '../utils/stores'
+  import type { NodeData, GroupData } from '../utils/forms'
+  import type { NodeFilter, NodeListItem } from '../utils/types'
+  import { parseSequence, numericSequenceError } from '../utils/sequence'
 
   let {
     title = 'Items',
@@ -19,11 +13,8 @@
     filter = {},
     items = $bindable([]),
     idPrefix = 'list-item',
-    minItems = 0,
     showStrengths = false,
-    strengthMin = 0.0,
-    strengthMax = 1.0,
-    strengthStep = 0.01,
+    strengthStep = 0.1,
     defaultStrength = 1.0,
     onAdd,
     itemExtra
@@ -35,12 +26,10 @@
     idPrefix?: string
     minItems?: number
     showStrengths?: boolean
-    strengthMin?: number
-    strengthMax?: number
     strengthStep?: number
     defaultStrength?: number
     onAdd?: () => void
-    itemExtra?: Snippet<[any, number]>
+    itemExtra?: Snippet<[NodeListItem, number]>
   }>()
 
   let nextId = $state(0)
@@ -73,12 +62,70 @@
           items = items.filter((item) => item.id !== newItem.id)
           return
         }
-        const item = items.find((i) => i.id === newItem.id)
-        if (item) {
-          item.node = selected as NodeData
+
+        const selectedNode = selected as NodeData
+        const cy = $cyInstanceStore
+
+        // If a group node was selected, unpack its member nodes into individual top-level items
+        if (selectedNode.type === 'group' && (selectedNode as unknown as GroupData).member_ids && cy) {
+          const memberIds = (selectedNode as unknown as GroupData).member_ids
+          const memberNodes = memberIds
+            .map((mId) => cy.$id(mId).data() as NodeData)
+            .filter(Boolean)
+            .filter((m) => !filter?.type || m.type === filter.type)
+
+          // Remove the placeholder item
+          items = items.filter((item) => item.id !== newItem.id)
+
+          if (memberNodes.length > 0) {
+            for (const member of memberNodes) {
+              items.push({ id: nextId++, node: member, strength: defaultStrength })
+            }
+          }
+        } else {
+          const item = items.find((i) => i.id === newItem.id)
+          if (item) {
+            item.node = selectedNode
+          }
         }
       })
     }
+  }
+
+  function handleChildNodeSelect(selectedNode: NodeData, index: number): void {
+    const cy = $cyInstanceStore
+    if (selectedNode.type === 'group' && (selectedNode as unknown as GroupData).member_ids && cy) {
+      const memberIds = (selectedNode as unknown as GroupData).member_ids
+      const memberNodes = memberIds
+        .map((mId) => cy.$id(mId).data() as NodeData)
+        .filter(Boolean)
+        .filter((m) => !filter?.type || m.type === filter.type)
+
+      if (memberNodes.length > 0) {
+        items[index].node = memberNodes[0]
+        for (let i = 1; i < memberNodes.length; i++) {
+          items.push({ id: nextId++, node: memberNodes[i], strength: defaultStrength })
+        }
+      } else {
+        items[index].node = null
+      }
+    }
+  }
+
+  function toggleStrengthBatch(item: NodeListItem): void {
+    if (item.strengthBatch) {
+      // Leaving sequence mode: keep the first value of the sequence
+      let first: unknown
+      try {
+        first = parseSequence(String(item.strength ?? ''))[0]
+      } catch {
+        first = undefined
+      }
+      item.strength = typeof first === 'number' && isFinite(first) ? first : defaultStrength
+    } else {
+      item.strength = String(item.strength ?? defaultStrength)
+    }
+    item.strengthBatch = !item.strengthBatch
   }
 
   function handleRemove(id: number | string): void {
@@ -104,33 +151,59 @@
       <div class="list-item-container">
         <div class="member-row">
           <div class="member-selector">
-            <NodeSelector {filter} bind:node={items[index].node} id={`${idPrefix}-${item.id}`} />
+            <NodeSelector
+              {filter}
+              bind:node={items[index].node}
+              allowBatchToggle={false}
+              id={`${idPrefix}-${item.id}`}
+              onNodeSelect={(selectedNode: NodeData): void => {
+                handleChildNodeSelect(selectedNode, index)
+              }}
+            />
           </div>
-          {#if index >= minItems}
-            <button
-              type="button"
-              class="remove-button"
-              onclick={() => handleRemove(item.id)}
-              title="Remove item"
-              aria-label="Remove item"
-            >
-              ✕
-            </button>
-          {/if}
+          <button
+            type="button"
+            class="remove-button"
+            onclick={() => handleRemove(item.id)}
+            title="Remove item"
+            aria-label="Remove item"
+          >
+            ✕
+          </button>
         </div>
         {#if showStrengths && items[index].node}
           <div class="strength-control">
             <span class="strength-label">Strength</span>
-            <input
-              type="range"
-              min={strengthMin}
-              max={strengthMax}
-              step={strengthStep}
-              bind:value={items[index].strength}
-              title={`Strength: ${items[index].strength}`}
-            />
-            <span class="strength-value">{Number(items[index].strength).toFixed(2)}</span>
+            {#if items[index].strengthBatch}
+              <input
+                type="text"
+                bind:value={items[index].strength}
+                placeholder="e.g. -1, 0.5, 1..2:0.5"
+                title="Sequence of strengths to sweep"
+              />
+            {:else}
+              <input
+                type="number"
+                step={strengthStep}
+                bind:value={items[index].strength}
+                title="Negative values invert the effect, values above 1 exaggerate it"
+              />
+            {/if}
+            <button
+              type="button"
+              class="batch-toggle"
+              onclick={() => toggleStrengthBatch(items[index])}
+              title="Toggle sequence mode"
+            >
+              {items[index].strengthBatch ? '−' : '+'}
+            </button>
           </div>
+          {#if items[index].strengthBatch}
+            {@const sequenceError = numericSequenceError(String(items[index].strength ?? ''))}
+            {#if sequenceError}
+              <span class="strength-error">{sequenceError}</span>
+            {/if}
+          {/if}
         {/if}
         {#if itemExtra && items[index].node}
           {@render itemExtra(items[index], index)}
@@ -200,15 +273,43 @@
     font-size: 0.85rem;
     color: var(--color-text-muted);
   }
-  .strength-control input[type="range"] {
+  .strength-control input {
     flex-grow: 1;
-    accent-color: var(--color-primary);
+    min-width: 0;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--color-overlay-border-primary, rgba(255, 255, 255, 0.1));
+    color: var(--color-overlay-text);
+    padding: 0.35rem;
+    border-radius: 0.25rem;
+    font-size: 0.8rem;
+    box-sizing: border-box;
   }
-  .strength-value {
-    font-size: 0.85rem;
-    min-width: 2.5rem;
-    text-align: right;
-    color: var(--color-text-muted);
+  .strength-error {
+    padding-left: 0.25rem;
+    font-size: 0.75rem;
+    color: var(--color-error);
+  }
+  .batch-toggle {
+    flex-shrink: 0;
+    background: none;
+    border: 1px solid var(--color-overlay-border-primary, rgba(255, 255, 255, 0.2));
+    color: var(--color-overlay-text);
+    cursor: pointer;
+    width: 20px;
+    height: 20px;
+    min-width: 20px;
+    min-height: 20px;
+    border-radius: 50%;
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    transition: all 0.2s ease;
+  }
+  .batch-toggle:hover {
+    background: rgba(255, 255, 255, 0.1);
+    border-color: var(--color-overlay-text);
   }
   .remove-button {
     flex-shrink: 0;

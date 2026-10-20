@@ -1,0 +1,66 @@
+{
+  "name": "scatter",
+  "description": "Scatter variant offspring across the parameter space",
+  "category": "evolution",
+  "execution": "queued",
+  "initiator_types": ["individual", "group", "audio"],
+  "context_overrides": {},
+  "form_config": [
+    {
+      "name": "parents",
+      "type": "node-list",
+      "label": "Seed Individual(s)",
+      "filter": {
+        "type": "individual"
+      },
+      "required": true,
+      "minItems": 1
+    },
+    {
+      "name": "offspring_size",
+      "type": "integer",
+      "label": "Scatter Count (N)",
+      "defaultValue": 10,
+      "min": 1,
+      "max": 100,
+      "allowSequence": false
+    },
+    {
+      "name": "noise_scale",
+      "type": "float",
+      "label": "Mutation Strength (σ, in units of each layer's natural scale)",
+      "description": "How much each layer changes. Every layer that is on gets Gaussian noise with standard deviation σ in units of the layer's natural weight scale, which is set from the layer's width, so the same σ moves wide and narrow layers comparably. A fresh layer's weights are about 0.6 in these units, so 0.1 is a small step.",
+      "defaultValue": 0.1,
+      "min": 0.0,
+      "max": 2.0,
+      "step": 0.01,
+      "allowSequence": false
+    },
+    {
+      "name": "active_flips",
+      "type": "float",
+      "label": "Expected On/Off Toggles per Offspring",
+      "description": "Average number of layers per offspring whose on/off state is toggled. Each toggle switches one layer from its parent's state, on to off or off to on. Layers in a new grating start on with no learned change yet, so toggles do nothing useful until a lineage has developed.",
+      "defaultValue": 0.0,
+      "min": 0.0,
+      "max": 20.0,
+      "step": 0.5,
+      "allowSequence": false
+    },
+    {
+      "name": "freeze_inactive",
+      "type": "boolean",
+      "label": "Freeze Switched-Off Layers",
+      "description": "When on, a layer that is switched off gets no noise, so switching it back on restores exactly the weights it was selected with. When off, switched-off layers keep drifting unheard, and come back changed.",
+      "defaultValue": true,
+      "allowSequence": false
+    },
+    {
+      "name": "generate_exemplars",
+      "type": "boolean",
+      "label": "Auto-Generate Exemplars",
+      "defaultValue": true,
+      "allowSequence": false
+    }
+  ]
+}

@@ -1,6 +1,8 @@
 <script lang="ts">
   import type { FormConfig, FormField, ModelData, AudioData } from '../utils/forms'
+  import type { NodeListItem } from '../utils/types'
   import NodeSelector from './NodeSelector.svelte'
+  import NodeSelectorList from './NodeSelectorList.svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import { untrack } from 'svelte'
 
@@ -68,23 +70,18 @@
   })
 
   let lastConfigProcessed: FormConfig | null = null
-  let previousConditionValues: Record<string, any> = {}
+  let previousConditionValues: Record<string, unknown> = {}
 
   $effect(() => {
     // Collect all condition target keys from config's conditionalDefaults
-    const targetKeys = new Set<string>()
-    for (const field of config) {
-      if (field.conditionalDefaults) {
-        for (const condDefault of field.conditionalDefaults) {
-          for (const key in condDefault.show_if) {
-            targetKeys.add(key)
-          }
-        }
-      }
-    }
+    const targetKeys = new Set<string>(
+      config.flatMap((field) =>
+        (field.conditionalDefaults ?? []).flatMap((condDefault) => Object.keys(condDefault.show_if))
+      )
+    )
 
     // Touch condition keys to establish reactive dependencies
-    const currentConditionValues: Record<string, any> = {}
+    const currentConditionValues: Record<string, unknown> = {}
     for (const key of targetKeys) {
       const val =
         formData[key] !== undefined ? formData[key] : contextData ? contextData[key] : null
@@ -115,7 +112,7 @@
       untrack(() => {
         for (const field of config) {
           if (field.conditionalDefaults) {
-            let matchedDefaultValue: any = undefined
+            let matchedDefaultValue: unknown = undefined
             let conditionsMet = false
 
             for (const condDefault of field.conditionalDefaults) {
@@ -153,12 +150,18 @@
   })
 
   $effect(() => {
-    isFormValid = visibleFields.every(
-      (f) =>
+    isFormValid = visibleFields.every((f) => {
+      if (f.type === 'node-list') {
+        const items = formData[f.name] as unknown[]
+        const minCount = f.minItems ?? (f.validation?.required ? 1 : 0)
+        return Array.isArray(items) && items.length >= minCount
+      }
+      return (
         !f.validation?.required ||
         (formData[f.name] != null &&
           (typeof formData[f.name] !== 'string' || String(formData[f.name]).trim() !== ''))
-    )
+      )
+    })
   })
 
   export function getPayload(): Record<string, unknown> {
@@ -170,6 +173,14 @@
       if (value !== undefined && value !== null) {
         if (field.type === 'node' && typeof value === 'object' && value && 'id' in value) {
           payload[fieldName] = value.id
+        } else if (field.type === 'node-list' && Array.isArray(value)) {
+          payload[fieldName] = value
+            .map((item: NodeListItem) =>
+              typeof item.node === 'object' && item.node && 'id' in item.node
+                ? item.node.id
+                : item.node
+            )
+            .filter(Boolean)
         } else {
           payload[fieldName] = value
         }
@@ -199,72 +210,64 @@
       formData[fieldName] = path
     }
   }
-  const visibleFields = $derived.by(() => {
-    // Collect all condition target keys from config's show_if
-    const targetKeys = new Set<string>()
-    for (const field of config) {
-      if (field.show_if) {
-        if (Array.isArray(field.show_if)) {
-          for (const condSet of field.show_if) {
-            for (const key in condSet) {
-              targetKeys.add(key)
-            }
-          }
-        } else {
-          for (const key in field.show_if) {
-            targetKeys.add(key)
-          }
-        }
+  function matchesConditions(
+    condSet: Record<string, unknown>,
+    data: Record<string, unknown>
+  ): boolean {
+    for (const key in condSet) {
+      const condition = condSet[key]
+      if (condition === 'exists') {
+        if (!data[key]) return false
+      } else if (data[key] !== condition) {
+        return false
       }
     }
+    return true
+  }
+
+  const visibleFields = $derived.by(() => {
+    // Collect all condition target keys from config's show_if and conditionalProps
+    const targetKeys = new Set<string>(
+      config.flatMap((field) => {
+        const condSets = field.show_if
+          ? Array.isArray(field.show_if)
+            ? field.show_if
+            : [field.show_if]
+          : []
+        const propConds = (field.conditionalProps ?? []).map((p) => p.show_if)
+        return [...condSets, ...propConds].flatMap((condSet) => Object.keys(condSet))
+      })
+    )
 
     // Touch condition keys to establish reactive dependencies
     for (const key of targetKeys) {
-      const _dummy1 = formData[key]
-      const _dummy2 = contextData ? contextData[key] : null
+      void formData[key]
+      void contextData?.[key]
     }
 
-    return config.filter((field: FormField) => {
-      if (!field.show_if) {
-        return true
-      }
+    // Combine context and form data, with form data taking precedence.
+    const data = { ...contextData, ...formData }
 
-      // Combine context and form data, with form data taking precedence.
-      const data = { ...contextData, ...formData }
-
-      if (Array.isArray(field.show_if)) {
-        return field.show_if.some((condSet) => {
-          for (const key in condSet) {
-            const condition = condSet[key]
-            if (condition === 'exists') {
-              if (!data[key]) {
-                return false
-              }
-            } else {
-              if (data[key] !== condition) {
-                return false
-              }
-            }
-          }
+    return config
+      .filter((field: FormField) => {
+        if (!field.show_if) {
           return true
-        })
-      }
-
-      for (const key in field.show_if) {
-        const condition = field.show_if[key]
-        if (condition === 'exists') {
-          if (!data[key]) {
-            return false
-          }
-        } else {
-          if (data[key] !== condition) {
-            return false
-          }
         }
-      }
-
-      return true
-    })
+        if (Array.isArray(field.show_if)) {
+          return field.show_if.some((condSet) => matchesConditions(condSet, data))
+        }
+        return matchesConditions(field.show_if, data)
+      })
+      .map((field: FormField): FormField => {
+        const override = field.conditionalProps?.find((p) => matchesConditions(p.show_if, data))
+        if (!override) return field
+        return {
+          ...field,
+          label: override.label ?? field.label,
+          placeholder: override.placeholder ?? field.placeholder,
+          description: override.description ?? field.description
+        }
+      })
   })
 </script>
 
@@ -289,7 +292,7 @@
               type="text"
               bind:value={formData[field.name]}
               id={field.name}
-              placeholder="e.g. 1, 2, 5-10:2"
+              placeholder="e.g. 1, 2, 5..10:2"
             />
           {:else}
             <input
@@ -360,7 +363,7 @@
               type="text"
               bind:value={formData[field.name]}
               id={field.name}
-              placeholder="e.g. 0.5, 1.2, 2.0-3.0:0.5"
+              placeholder="e.g. -0.5, 1.2, 2.0..3.0:0.5"
             />
           {:else}
             <input
@@ -516,6 +519,15 @@
           }}
           id={field.name}
         />
+      {:else if field.type === 'node-list'}
+        <NodeSelectorList
+          title={field.label}
+          addButtonText={`Add ${field.itemLabel || 'Item'}`}
+          filter={field.filter}
+          bind:items={formData[field.name] as NodeListItem[]}
+          idPrefix={field.name}
+          minItems={field.minItems || 0}
+        />
       {:else}
         <label for={field.name}>{field.label}</label>
         <div class="input-row">
@@ -582,6 +594,9 @@
           </div>
         </div>
       {/if}
+      {#if field.description}
+        <p class="field-description">{field.description}</p>
+      {/if}
     </div>
   {/each}
 </form>
@@ -631,6 +646,13 @@
     display: block;
     font-weight: 500;
     margin-bottom: 0.5rem;
+  }
+
+  .field-description {
+    margin: 0.375rem 0 0;
+    font-size: 0.8rem;
+    line-height: 1.4;
+    opacity: 0.7;
   }
 
   .input-row > input[type='text'],

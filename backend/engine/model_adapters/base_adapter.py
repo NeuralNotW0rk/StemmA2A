@@ -14,11 +14,22 @@ def operation(name: str, is_standard: bool = True, description: str = "", initia
     from dataclasses import replace
     from param_graph.elements.base_elements import Artifact
 
+    from ..results import OperationResult
+
+    def with_operation(artifact):
+        if not isinstance(artifact, Artifact):
+            return artifact
+        new_context = dict(artifact.context) if artifact.context is not None else {}
+        new_context["operation"] = name
+        return replace(artifact, context=new_context)
+
     def decorator(func):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
             res = func(*args, **kwargs)
-            if isinstance(res, tuple) and len(res) > 0:
+            if isinstance(res, OperationResult):
+                res = replace(res, outputs=[(with_operation(a), data) for a, data in res.outputs])
+            elif isinstance(res, tuple) and len(res) > 0:
                 artifact = res[0]
                 if isinstance(artifact, Artifact):
                     new_context = dict(artifact.context) if artifact.context is not None else {}

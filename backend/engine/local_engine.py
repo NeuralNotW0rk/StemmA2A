@@ -2,6 +2,7 @@ import io
 import os
 import tempfile
 import queue
+import shutil
 import threading
 import uuid
 import asyncio
@@ -15,8 +16,10 @@ import torchaudio
 from param_graph.elements.base_elements import GraphElement
 from .engine import Engine
 from .model_cache import ModelCache
+from .results import OperationResult, serialize_result
 from utils.uid import path_from_uid
 from utils.audio import save_audio
+from evolution.genome import LoRAGenome, express_to_grating
 
 from diffracture import Actant
 from diffracture.topology.grating import Grating as DiffractureGrating
@@ -206,10 +209,29 @@ class LocalEngine(Engine):
         return shared_models_dict
 
     def _resolve_model_element(self, model_element: GraphElement) -> GraphElement:
-        """If the model ID matches a shared model, return the shared model with absolute paths."""
+        """If the model ID or checkpoint/encoder UIDs match a shared model, return the shared model with absolute paths."""
+        # 1. Try exact Model ID match
         shared_model = next((m for m in self.shared_models if m.id == model_element.id), None)
         if shared_model:
             return shared_model
+
+        # 2. Try matching by checkpoint UID and encoder UID
+        model_ckpt = getattr(model_element, "checkpoint", None)
+        model_enc = getattr(model_element, "encoder", None)
+        if model_ckpt and getattr(model_ckpt, "uid", None):
+            for sm in self.shared_models:
+                sm_ckpt = getattr(sm, "checkpoint", None)
+                sm_enc = getattr(sm, "encoder", None)
+                if sm_ckpt and sm_ckpt.uid == model_ckpt.uid:
+                    # If both have encoders, check if encoder UIDs match
+                    if model_enc and sm_enc:
+                        if model_enc.uid == sm_enc.uid:
+                            return sm
+                    elif not model_enc and not sm_enc:
+                        return sm
+                    elif sm_enc and not model_enc:
+                        # Server has encoder configured for this checkpoint, use server's shared model
+                        return sm
         return model_element
 
     async def register_model(self, adapter_name: str, **kwargs) -> GraphElement:
@@ -233,52 +255,76 @@ class LocalEngine(Engine):
         adapter_class = self._get_adapter_class(model_element.adapter)
         adapter = self.model_cache.get(model_element, adapter_class)
 
-        # Engine-level Grating intervention orchestration
+        # Engine-level Grating/Genome intervention orchestration
         grating_elements = kwargs.get("grating_elements", [])
         grating_strengths = kwargs.get("grating_strengths", [])
-        if grating_elements:
-            if not hasattr(adapter, 'model') or adapter.model is None:
-                raise RuntimeError(f"Adapter '{model_element.adapter}' does not expose a loaded 'model' for grating injection.")
-            
-            if not hasattr(adapter, 'actant'):
-                adapter.actant = Actant(adapter.model)
-                
-            model_device = next(adapter.model.parameters()).device
-            
-            for i, grating_element in enumerate(grating_elements):
-                strength = grating_strengths[i] if grating_strengths and i < len(grating_strengths) else 1.0
-                print(f"Engine: Applying Grating '{grating_element.id}' with strength {strength}...")
-                grating = DiffractureGrating.load(grating_element.file.path)
-                
-                # Apply dynamic overrides if present in the payload and resolve cluster indices
+        individual_elements = kwargs.get("individual_elements", [])
+        individual_strengths = kwargs.get("individual_strengths", [])
+        
+        has_intervention = bool(grating_elements or individual_elements)
+
+        try:
+            if has_intervention:
+                if not hasattr(adapter, 'model') or adapter.model is None:
+                    raise RuntimeError(f"Adapter '{model_element.adapter}' does not expose a loaded 'model' for grating/genome injection.")
+
+                if not hasattr(adapter, 'actant'):
+                    adapter.actant = Actant(adapter.model)
+
+                model_device = next(adapter.model.parameters()).device
+
+                # 1. Apply physical Grating elements. Hooks chain in list order, so each
+                # grating bends the activations already bent by the ones before it.
                 gratings_input = kwargs.get("gratings") or []
-                for g_in in gratings_input:
-                    if g_in.get("id") == grating_element.id:
-                        overrides = g_in.get("overrides")
-                        if overrides is None:
-                            overrides = []
-                            g_in["overrides"] = overrides
-                        
-                        override_map = {o.get("address"): o for o in overrides}
-                        
-                        # Process all overrides to apply them to grating first
-                        for override in overrides:
-                            addr = override.get("address")
-                            meta_overrides = override.get("metadata") or {}
-                            override["metadata"] = meta_overrides
-                            
-                            # Apply the override to grating first so we get the merged values
-                            if addr in grating.nodes:
-                                grating.nodes[addr].metadata.update(meta_overrides)
-                
-                grating.to(model_device)
-                adapter.actant.activate(grating, injection_strategy="hook", strength=strength)
+                for i, grating_element in enumerate(grating_elements):
+                    strength = grating_strengths[i] if grating_strengths and i < len(grating_strengths) else 1.0
+                    print(f"Engine: Applying Grating '{grating_element.id}' with strength {strength}...")
+                    grating = DiffractureGrating.load(grating_element.file.path)
 
-        artifact, tensor = adapter.generate(**kwargs)
+                    # Overrides are matched by position (the dispatcher keeps grating_elements aligned
+                    # with the payload) so the same grating can be mixed in several times with different settings
+                    g_in = gratings_input[i] if i < len(gratings_input) and isinstance(gratings_input[i], dict) else {}
+                    for override in g_in.setdefault("overrides", []):
+                        addr = override.get("address")
+                        meta_overrides = override.setdefault("metadata", {})
+                        if addr in grating.nodes:
+                            grating.nodes[addr].metadata.update(meta_overrides)
 
-        if grating_elements:
-            # Revert the model to its original state so it can remain safely in the cache
-            adapter.actant.deactivate()
+                    grating.to(model_device)
+                    adapter.actant.activate(grating, injection_strategy="hook", strength=strength)
+
+                # 2. Apply dynamic in-memory expressed genomes (individual_elements)
+                if individual_elements:
+                    # Genomes carry their own topology; a baseline only adds elements that are not genes
+                    baseline_grating = kwargs.get("baseline_grating")
+
+                    for i, ind_element in enumerate(individual_elements):
+                        strength = individual_strengths[i] if individual_strengths and i < len(individual_strengths) else 1.0
+                        print(f"Engine: Dynamically expressing genome '{ind_element.id}' with strength {strength}...")
+
+                        genome = LoRAGenome.load(ind_element.file.path)
+                        grating = express_to_grating(genome, baseline_grating.file.path if baseline_grating else None)
+
+                        # Apply overrides for individuals if any were passed
+                        individuals_input = kwargs.get("individuals") or []
+                        for ind_in in individuals_input:
+                            if ind_in.get("id") == ind_element.id:
+                                overrides = ind_in.get("overrides") or []
+                                for override in overrides:
+                                    addr = override.get("address")
+                                    meta_overrides = override.get("metadata") or {}
+                                    if addr in grating.nodes:
+                                        grating.nodes[addr].metadata.update(meta_overrides)
+
+                        grating.to(model_device)
+                        adapter.actant.activate(grating, injection_strategy="hook", strength=strength)
+
+            artifact, tensor = adapter.generate(**kwargs)
+        finally:
+            # Always revert the model to its original state, even on failure, so stale
+            # hooks don't leak into later generations from the cached adapter
+            if has_intervention and hasattr(adapter, 'actant'):
+                adapter.actant.deactivate()
 
         local_path = self.data_root / path_from_uid(artifact.id)
         local_path.parent.mkdir(parents=True, exist_ok=True)
@@ -322,29 +368,43 @@ class LocalEngine(Engine):
         """
         return await self._generate_logic(**kwargs)
 
-    async def _invert_logic(self, **kwargs) -> GraphElement:
+    def _persist_output(self, artifact: GraphElement, data) -> GraphElement:
+        """Saves an operation output's file into the data root and points the artifact at it."""
+        local_path = self.data_root / path_from_uid(artifact.id)
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if data is None:
+            # The adapter already wrote the artifact's file (e.g. a grating's safetensors)
+            shutil.copyfile(artifact.file.path, local_path)
+        else:
+            # Save the latent tensor file
+            torch.save(data.cpu(), local_path)
+
+        # Update the artifact with the persistent path
+        new_file_asset = replace(artifact.file, path=str(local_path))
+        return replace(artifact, file=new_file_asset)
+
+    async def _invert_logic(self, **kwargs):
         """
-        The actual inversion logic. Gets a cached model adapter and uses it to perform DDIM inversion.
-        Saves the resulting latent tensor to a persistent location.
+        The actual inversion logic. Gets a cached model adapter and uses it to invert a source artifact
+        (DDIM inversion to a latent, or StyleGAN pivotal tuning to a pivot latent and its grating).
+        Saves the results to a persistent location.
         """
         model_element = kwargs["model_element"]
         model_element = self._resolve_model_element(model_element)
         adapter_class = self._get_adapter_class(model_element.adapter)
         adapter = self.model_cache.get(model_element, adapter_class)
 
-        artifact, tensor = adapter.invert(**kwargs)
+        result = adapter.invert(**kwargs)
 
-        local_path = self.data_root / path_from_uid(artifact.id)
-        local_path.parent.mkdir(parents=True, exist_ok=True)
+        if isinstance(result, OperationResult):
+            return {
+                "artifacts": [self._persist_output(artifact, data) for artifact, data in result.outputs],
+                "links": result.links,
+            }
 
-        # Save the latent tensor file
-        torch.save(tensor.cpu(), local_path)
-
-        # Update the artifact with the persistent path
-        new_file_asset = replace(artifact.file, path=str(local_path))
-        artifact = replace(artifact, file=new_file_asset)
-
-        return artifact
+        artifact, tensor = result
+        return self._persist_output(artifact, tensor)
 
     async def invert(self, **kwargs) -> GraphElement:
         return await self._invert_logic(**kwargs)
@@ -386,7 +446,7 @@ class LocalEngine(Engine):
                 
                 func = getattr(self, operation_id)
                 
-                # We need to run the async function in the current thread's event loop
+                # Run the async operation function in the current thread's event loop
                 result = asyncio.run(func(**op_kwargs))
 
                 self.job_statuses[job_id] = {"status": "completed", "result": result}
@@ -428,11 +488,9 @@ class LocalEngine(Engine):
         if not status:
             return {"status": "not_found"}
         
-        # If the result is a GraphElement, convert it to a dict for the response
+        # Convert the result (one element, or several from a multi-artifact operation) to dicts for the response
         if status.get("status") == "completed":
-            result = status.get("result")
-            if isinstance(result, GraphElement):
-                status["result"] = result.to_dict()
+            status["result"] = serialize_result(status.get("result"))
 
         return status
 

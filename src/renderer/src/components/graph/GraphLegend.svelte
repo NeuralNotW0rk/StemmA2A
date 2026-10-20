@@ -12,6 +12,10 @@
     <span>Batches</span>
   </div>
   <div class="legend-item">
+    <div class="legend-color genome"></div>
+    <span>Genomes</span>
+  </div>
+  <div class="legend-item">
     <div class="legend-color external"></div>
     <span>External</span>
   </div>
@@ -55,6 +59,9 @@
   }
   .batch {
     background-color: var(--graph-batch);
+  }
+  .genome {
+    background-color: var(--graph-genome);
   }
   .external {
     background-color: var(--graph-gradient-2);

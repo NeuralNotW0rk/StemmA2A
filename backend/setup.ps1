@@ -37,8 +37,7 @@ else {
     Write-Host "Step 2: Virtual environment already exists."
 }
 
-# Define paths to venv executables
-$PipExe = Join-Path $VenvPath "Scripts/pip.exe"
+# Define path to venv python executable
 $PythonExe = Join-Path $VenvPath "Scripts/python.exe"
 
 # 3. Upgrade pip/wheel
@@ -154,7 +153,7 @@ if ($CudaVersion) {
 
 # 7. Install Diffracture (if available)
 Write-Host "Step 7: Checking for Diffracture locally..."
-$DiffracturePath = (Resolve-Path (Join-Path $ProjectRoot "../Diffracture") -ErrorAction SilentlyContinue).Path
+$DiffracturePath = (Resolve-Path (Join-Path $ProjectRoot "../diffracture") -ErrorAction SilentlyContinue).Path
 if ($DiffracturePath) {
     $SetupPy = Join-Path $DiffracturePath "setup.py"
     $PyProject = Join-Path $DiffracturePath "pyproject.toml"
@@ -162,10 +161,10 @@ if ($DiffracturePath) {
         Write-Host "Found Diffracture at $DiffracturePath. Installing in editable mode..."
         try {
             if ($CudaVersion) {
-                & $PythonExe -m pip install -e $DiffracturePath --extra-index-url $IndexUrl
+                & $PythonExe -m pip install -e $DiffracturePath --config-settings editable_mode=compat --extra-index-url $IndexUrl
             }
             else {
-                & $PythonExe -m pip install -e $DiffracturePath --extra-index-url "https://download.pytorch.org/whl/cpu"
+                & $PythonExe -m pip install -e $DiffracturePath --config-settings editable_mode=compat --extra-index-url "https://download.pytorch.org/whl/cpu"
             }
             if ($LASTEXITCODE -ne 0) {
                 throw "pip install failed with exit code $LASTEXITCODE"
@@ -183,7 +182,42 @@ if ($DiffracturePath) {
     }
 }
 else {
-    Write-Host "Diffracture not found at ../Diffracture. Skipping."
+    Write-Host "Diffracture not found at ../diffracture. Skipping."
+}
+
+
+# 8. Install NeutralSelection (if available)
+Write-Host "Step 8: Checking for NeutralSelection locally..."
+$NeutralSelectionPath = (Resolve-Path (Join-Path $ProjectRoot "../neutral-selection") -ErrorAction SilentlyContinue).Path
+if ($NeutralSelectionPath) {
+    $SetupPy = Join-Path $NeutralSelectionPath "setup.py"
+    $PyProject = Join-Path $NeutralSelectionPath "pyproject.toml"
+    if ((Test-Path $SetupPy) -or (Test-Path $PyProject)) {
+        Write-Host "Found NeutralSelection at $NeutralSelectionPath. Installing in editable mode..."
+        try {
+            if ($CudaVersion) {
+                & $PythonExe -m pip install -e $NeutralSelectionPath --config-settings editable_mode=compat --extra-index-url $IndexUrl
+            }
+            else {
+                & $PythonExe -m pip install -e $NeutralSelectionPath --config-settings editable_mode=compat --extra-index-url "https://download.pytorch.org/whl/cpu"
+            }
+            if ($LASTEXITCODE -ne 0) {
+                throw "pip install failed with exit code $LASTEXITCODE"
+            }
+            Write-Host "NeutralSelection installed successfully."
+        }
+        catch {
+            Write-Error "ERROR: Failed to install NeutralSelection."
+            Write-Error "PIP ERROR: $_"
+            exit 1
+        }
+    }
+    else {
+        Write-Host "NeutralSelection directory found, but no setup.py or pyproject.toml present. Skipping."
+    }
+}
+else {
+    Write-Host "NeutralSelection not found at ../neutral-selection. Skipping."
 }
 
 Write-Host "Backend setup completed successfully!"

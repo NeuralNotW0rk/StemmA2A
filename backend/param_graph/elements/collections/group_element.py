@@ -1,10 +1,10 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from param_graph.elements.base_elements import Collection
 from param_graph.registry import register
 
-@register('batch')
+@register('group')
 @dataclass(kw_only=True)
-class Batch(Collection):
+class Group(Collection):
     member_type: str | None = None
-    type: str = 'batch'
+    type: str = 'group'

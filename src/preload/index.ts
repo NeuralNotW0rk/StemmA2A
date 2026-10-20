@@ -5,7 +5,9 @@ import { electronAPI } from '@electron-toolkit/preload'
 const api = {
   getHealth: (): Promise<any> => ipcRenderer.invoke('getHealth'),
   openProject: (): Promise<string | null> => ipcRenderer.invoke('dialog:openProject'),
-  newProject: (): Promise<string | null> => ipcRenderer.invoke('dialog:newProject'),
+  newProject: (defaultPath?: string): Promise<string | null> =>
+    ipcRenderer.invoke('dialog:newProject', defaultPath),
+  getDefaultProjectLocation: (): Promise<string> => ipcRenderer.invoke('getDefaultProjectLocation'),
   selectDirectory: (): Promise<string | null> => ipcRenderer.invoke('dialog:selectDirectory'),
   selectSavePath: (defaultName?: string): Promise<string | null> =>
     ipcRenderer.invoke('dialog:selectSavePath', defaultName),
@@ -17,6 +19,13 @@ const api = {
   loadProject: (projectData: any): Promise<any> => ipcRenderer.invoke('loadProject', projectData),
   createProject: (projectData: any): Promise<any> =>
     ipcRenderer.invoke('createProject', projectData),
+  forkProject: (elementIds: string[]): Promise<unknown> =>
+    ipcRenderer.invoke('forkProject', elementIds),
+  createRoom: (elementIds: string[]): Promise<unknown> =>
+    ipcRenderer.invoke('createRoom', elementIds),
+  dissolveRoom: (roomId: string): Promise<unknown> => ipcRenderer.invoke('dissolveRoom', roomId),
+  setViewRoom: (roomId: string | null): Promise<unknown> =>
+    ipcRenderer.invoke('setViewRoom', roomId),
   getGraphData: (viewMode: 'batch' | 'cluster'): Promise<any> =>
     ipcRenderer.invoke('getGraphData', viewMode),
   get_generate_form_config: (adapterName: string): Promise<any> =>
@@ -37,8 +46,12 @@ const api = {
   registerGrating: (data: unknown) => ipcRenderer.invoke('registerGrating', data),
   getModelLayers: (modelId: string) => ipcRenderer.invoke('getModelLayers', modelId),
   createGrating: (data: unknown) => ipcRenderer.invoke('createGrating', data),
+  startEvolution: (data: unknown) => ipcRenderer.invoke('startEvolution', data),
+  expressIndividual: (data: unknown) => ipcRenderer.invoke('expressIndividual', data),
   getOperations: (): Promise<any> => ipcRenderer.invoke('getOperations'),
   executeOperation: (data: unknown): Promise<any> => ipcRenderer.invoke('executeOperation', data),
+  getExemplarPresets: (individualIds: string[]): Promise<any> =>
+    ipcRenderer.invoke('getExemplarPresets', individualIds),
   removeElement: (elementId: string, keepChildren?: boolean): Promise<any> =>
     ipcRenderer.invoke('removeElement', elementId, keepChildren),
   removeElements: (elementIds: string[], keepChildren?: boolean): Promise<any> =>
@@ -48,14 +61,20 @@ const api = {
   repairEdges: (): Promise<any> => ipcRenderer.invoke('repairEdges'),
   updateEmbeddings: (): Promise<any> => ipcRenderer.invoke('updateEmbeddings'),
   pollJobStatus: (jobId: string): Promise<any> => ipcRenderer.invoke('pollJobStatus', jobId),
-  batchElements: (memberIds: string[]): Promise<any> => ipcRenderer.invoke('batchElements', memberIds),
-  updateBatch: (batchId: string, memberIds: string[]): Promise<any> =>
-    ipcRenderer.invoke('updateBatch', batchId, memberIds),
-  addExternalSource: (sourcePath: string): Promise<any> => ipcRenderer.invoke('addExternalSource', sourcePath),
+  groupElements: (memberIds: string[]): Promise<any> =>
+    ipcRenderer.invoke('groupElements', memberIds),
+  updateGroup: (groupId: string, memberIds: string[]): Promise<any> =>
+    ipcRenderer.invoke('updateGroup', groupId, memberIds),
+  addExternalSource: (sourcePath: string): Promise<any> =>
+    ipcRenderer.invoke('addExternalSource', sourcePath),
+  rescanSource: (sourceName: string): Promise<any> =>
+    ipcRenderer.invoke('rescanSource', sourceName),
   expandPath: (pathNodeId: string): Promise<any> => ipcRenderer.invoke('expandPath', pathNodeId),
   cancelJob: (jobId: string): Promise<any> => ipcRenderer.invoke('cancel-job', jobId),
-  saveNodePositions: (projectName: string, positions: Record<string, { x: number; y: number }>): Promise<void> =>
-    ipcRenderer.invoke('saveNodePositions', projectName, positions),
+  saveNodePositions: (
+    projectName: string,
+    positions: Record<string, { x: number; y: number }>
+  ): Promise<void> => ipcRenderer.invoke('saveNodePositions', projectName, positions),
   updateElement: (elementName: string, attributes: Record<string, any>): Promise<any> =>
     ipcRenderer.invoke('updateElement', elementName, attributes),
   exportSharedModel: (modelId: string): Promise<unknown> =>

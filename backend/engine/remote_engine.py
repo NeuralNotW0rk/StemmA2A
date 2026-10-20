@@ -2,14 +2,53 @@ import aiohttp
 import asyncio
 import os
 import json
+import threading
+import time
 from pathlib import Path
 import tempfile
 from typing import Any
 from param_graph.elements.base_elements import GraphElement
 
 from .engine import Engine
+from .results import is_multi_result
 from param_graph.registry import resolve_element
 from utils.uid import path_from_uid
+
+# The engine service sits behind a proxy (Cloudflare) that drops any single request still running after
+# about 100 s. Assets are therefore sent in small chunks, a few assets at a time, so each request gets
+# enough of the upload bandwidth to finish quickly however many jobs are queued at once.
+UPLOAD_CHUNK_SIZE = 4 * 1024 * 1024
+MAX_CONCURRENT_UPLOADS = int(os.environ.get("REMOTE_ENGINE_MAX_UPLOADS", 2))
+# Attempts per asset; a failed asset is re-sent from its first chunk, which restarts it on the server
+UPLOAD_ATTEMPTS = 3
+# Rounds of uploading missing assets before giving up on an /execute request
+MAX_UPLOAD_ROUNDS = 3
+
+
+def _request_error(e: Exception) -> Exception:
+    """Describes a failed engine service request, telling an unreachable server apart from a failed request."""
+    if isinstance(e, aiohttp.ClientResponseError):
+        hint = " (timed out in transit through the proxy)" if e.status == 524 else ""
+        return Exception(f"Engine service request to {e.request_info.url} failed: {e.status} {e.message}{hint}")
+    return Exception("Cannot reach engine service. Please verify that the remote server is running.")
+
+
+def _format_bytes(num_bytes: int | float) -> str:
+    if num_bytes < 1024:
+        return f"{num_bytes:.0f} B"
+    elif num_bytes < 1024 * 1024:
+        return f"{num_bytes / 1024:.2f} KB"
+    elif num_bytes < 1024 * 1024 * 1024:
+        return f"{num_bytes / (1024 * 1024):.2f} MB"
+    else:
+        return f"{num_bytes / (1024 * 1024 * 1024):.2f} GB"
+
+
+class _TransferTracker:
+    """Thread-safe state tracker for an in-flight upload or download transfer."""
+    def __init__(self) -> None:
+        self.done_event = threading.Event()
+        self.success: bool = False
 
 
 class RemoteEngine(Engine):
@@ -19,6 +58,24 @@ class RemoteEngine(Engine):
         self.timeout = timeout
         self.cf_client_id = os.environ.get("CF_ACCESS_CLIENT_ID")
         self.cf_client_secret = os.environ.get("CF_ACCESS_CLIENT_SECRET")
+        # In-flight transfer tracking to deduplicate concurrent uploads and downloads across threads and event loops
+        self._active_uploads: dict[str, _TransferTracker] = {}
+        self._active_downloads: dict[str, _TransferTracker] = {}
+        self._transfer_lock = threading.Lock()
+        # Upload slots shared by every thread and event loop (see MAX_CONCURRENT_UPLOADS)
+        self._upload_slots = threading.BoundedSemaphore(MAX_CONCURRENT_UPLOADS)
+
+    async def _wait_for_transfer(self, tracker: _TransferTracker, timeout: float | None = 600.0) -> bool:
+        """
+        Asynchronously waits for an in-flight transfer tracker to complete across any event loop or thread.
+        A timeout of None waits until the transfer finishes.
+        """
+        start_time = time.time()
+        while not tracker.done_event.is_set():
+            if timeout is not None and time.time() - start_time > timeout:
+                return False
+            await asyncio.sleep(0.02)
+        return tracker.success
 
     async def register_model(self, adapter_name: str, **kwargs) -> GraphElement:
         """Register a model by providing absolute paths to its files."""
@@ -95,6 +152,7 @@ class RemoteEngine(Engine):
 
         try:
             async with aiohttp.ClientSession(headers=auth_headers, timeout=timeout) as session:
+                upload_rounds = 0
                 while True:
                     async with session.post(f"{self.remote_url}/execute", data=json.dumps(payload),
                                              headers={'Content-Type': 'application/json'}) as response:
@@ -103,10 +161,18 @@ class RemoteEngine(Engine):
                             missing_uids = error_details.get("missing_uids", [])
                             if not missing_uids:
                                 response.raise_for_status()
-                            
-                            can_retry = await self.upload_missing_assets(missing_uids, local_assets, session)
-                            if not can_retry:
-                                response.raise_for_status()
+                            if upload_rounds >= MAX_UPLOAD_ROUNDS:
+                                raise Exception(
+                                    f"Engine service still reports missing assets after {upload_rounds} upload "
+                                    f"rounds: {', '.join(missing_uids)}"
+                                )
+
+                            upload_rounds += 1
+                            if not await self.upload_missing_assets(missing_uids, local_assets, session):
+                                raise Exception(
+                                    f"Could not upload asset(s) required by the engine service "
+                                    f"({', '.join(missing_uids)}); see the backend log for details."
+                                )
                             continue
                         
                         response.raise_for_status()
@@ -119,7 +185,7 @@ class RemoteEngine(Engine):
                             
                         return job_id
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-            raise Exception("Cannot reach engine service. Please verify that the remote server is running.") from e
+            raise _request_error(e) from e
 
     async def cancel_job(self, job_id: str) -> None:
         """Sends a cancellation request to the remote engine."""
@@ -136,10 +202,104 @@ class RemoteEngine(Engine):
                 else:
                     print(f"Successfully requested cancellation for remote job {job_id}.")
 
+    async def _download_single_asset(self, asset_id: str, local_path: Path, session: aiohttp.ClientSession) -> bool:
+        """Downloads a single asset from the remote server with atomic staging and progress reporting."""
+        local_staging_path = local_path.with_suffix(local_path.suffix + ".part")
+        try:
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+            async with session.get(f"{self.remote_url}/download_asset/{asset_id}") as file_response:
+                if file_response.status == 200:
+                    total_size = int(file_response.headers.get("Content-Length", 0))
+                    dl_start = time.time()
+                    print(f"[RemoteEngine Download] Downloading result asset '{asset_id}'" + (f" ({_format_bytes(total_size)})..." if total_size > 0 else "..."))
+                    
+                    downloaded_bytes = 0
+                    chunk_size = 1024 * 1024  # 1 MB
+                    
+                    with open(local_staging_path, "wb") as f:
+                        async for chunk in file_response.content.iter_chunked(chunk_size):
+                            f.write(chunk)
+                            downloaded_bytes += len(chunk)
+                            if total_size > 5 * 1024 * 1024:
+                                pct = (downloaded_bytes / total_size) * 100
+                                print(f"  -> Download progress: {_format_bytes(downloaded_bytes)} / {_format_bytes(total_size)} ({pct:.1f}%)")
+
+                    # Atomically promote staging file to destination
+                    if local_path.exists():
+                        local_path.unlink()
+                    local_staging_path.replace(local_path)
+                    
+                    dl_elapsed = max(time.time() - dl_start, 0.001)
+                    dl_speed = (downloaded_bytes / (1024 * 1024)) / dl_elapsed
+                    print(f"[RemoteEngine Download] Downloaded '{asset_id}' ({_format_bytes(downloaded_bytes)}) in {dl_elapsed:.2f}s ({dl_speed:.2f} MB/s)")
+                    return True
+                else:
+                    error_text = await file_response.text()
+                    print(f"[RemoteEngine Download] Failed to download asset {asset_id}. Status: {file_response.status}. Body: {error_text}")
+                    return False
+        except Exception as e:
+            print(f"[RemoteEngine Download] Error downloading asset '{asset_id}': {e}")
+            return False
+        finally:
+            if local_staging_path.exists():
+                try:
+                    local_staging_path.unlink()
+                except Exception:
+                    pass
+
+    async def _fetch_result_element(self, element_dict: dict, session: aiohttp.ClientSession) -> dict:
+        """
+        Downloads a result element's asset (with transfer deduplication) and returns the element anchored
+        to the local download directory. Raises if the download fails.
+        """
+        result_element = resolve_element(element_dict)
+
+        # Save the file to a stable temporary location that won't be auto-deleted.
+        tmp_root = Path(__file__).parent.parent / "tmp"
+        tmp_root.mkdir(exist_ok=True)
+
+        # Construct the path from the UID to save locally.
+        base_path = path_from_uid(result_element.id)
+        local_path = tmp_root / base_path
+
+        # Download asset if not already cached locally
+        if not (local_path.exists() and local_path.stat().st_size > 0):
+            tracker: _TransferTracker | None = None
+            is_initiator = False
+
+            with self._transfer_lock:
+                if result_element.id in self._active_downloads:
+                    print(f"[RemoteEngine Download] Asset '{result_element.id}' is already being downloaded. Joining in-flight transfer...")
+                    tracker = self._active_downloads[result_element.id]
+                    is_initiator = False
+                else:
+                    tracker = _TransferTracker()
+                    self._active_downloads[result_element.id] = tracker
+                    is_initiator = True
+
+            if is_initiator:
+                success = False
+                try:
+                    success = await self._download_single_asset(result_element.id, local_path, session)
+                finally:
+                    with self._transfer_lock:
+                        tracker.success = success
+                        tracker.done_event.set()
+                        if self._active_downloads.get(result_element.id) is tracker:
+                            del self._active_downloads[result_element.id]
+            else:
+                success = await self._wait_for_transfer(tracker, timeout=float(self.timeout))
+
+            if not success:
+                raise Exception(f"Failed to download asset {result_element.id}.")
+
+        # Anchor the element's path to the root of our stable temp directory.
+        return result_element.anchor(str(tmp_root), with_extension=False).to_dict()
+
     async def get_job_status(self, job_id: str) -> dict[str, Any]:
         """
         Polls the remote server for the status of a job.
-        If the job is complete, it downloads the resulting file.
+        If the job is complete, it downloads the resulting file(s) with transfer deduplication.
         """
         auth_headers = self._get_auth_headers()
         timeout = aiohttp.ClientTimeout(total=self.timeout)
@@ -151,61 +311,39 @@ class RemoteEngine(Engine):
 
                     status_info = await response.json()
 
-                    # If the job is complete and has a result, we need to download the file.
+                    # If the job is complete and has a result, we need to download its file(s).
                     if status_info.get("status") == "completed" and "result" in status_info:
-                        result_dict = status_info["result"]
+                        result = status_info["result"]
 
-                        # The result from the service IS the element dictionary.
-                        element_dict = result_dict
-                        if not element_dict or not isinstance(element_dict, dict) or "id" not in element_dict:
+                        # The result from the service IS the element dictionary (or a multi-artifact result of them).
+                        if is_multi_result(result):
+                            elements = result["artifacts"]
+                        elif result and isinstance(result, dict) and "id" in result:
+                            elements = [result]
+                        else:
                             return status_info  # Return as-is if there's no valid element
 
-                        result_element = resolve_element(element_dict)
+                        try:
+                            fetched = [await self._fetch_result_element(element, session) for element in elements]
+                        except Exception as e:
+                            print(f"Error: {e}")
+                            status_info["status"] = "failed"
+                            status_info["error"] = str(e)
+                            return status_info
 
-                        async with session.get(f"{self.remote_url}/download_asset/{result_element.id}") as file_response:
-                            if file_response.status == 200:
-                                file_data = await file_response.read()
-
-                                # Save the file to a stable temporary location that won't be auto-deleted.
-                                tmp_root = Path(__file__).parent.parent / "tmp"
-                                tmp_root.mkdir(exist_ok=True)
-
-                                # Construct the path from the UID to save locally.
-                                base_path = path_from_uid(result_element.id)
-                                local_path = tmp_root / base_path
-
-                                local_path.parent.mkdir(parents=True, exist_ok=True)
-                                local_path.write_bytes(file_data)
-
-                                # Anchor the element's path to the root of our stable temp directory.
-                                anchored_element = result_element.anchor(str(tmp_root), with_extension=False)
-
-                                # Replace the dict result with the anchored element's dict representation.
-                                status_info["result"] = anchored_element.to_dict()
-                            else:
-                                # If download fails, update status to reflect that
-                                status_info["status"] = "failed"
-                                status_info["error"] = f"Failed to download asset {result_element.id}"
+                        # Replace the dict result with the anchored elements' dict representations.
+                        status_info["result"] = {**result, "artifacts": fetched} if is_multi_result(result) else fetched[0]
 
                     return status_info
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-            raise Exception("Cannot reach engine service. Please verify that the remote server is running.") from e
+            raise _request_error(e) from e
 
-    async def upload_missing_assets(self, missing_uids: list[str], local_assets: dict[str, str], session: aiohttp.ClientSession) -> bool:
-        paths_to_upload = []
-        for asset_uid in missing_uids:
-            asset_path = local_assets.get(asset_uid)
-            if not asset_path:
-                print(f"Warning: could not find path for missing uid {asset_uid}")
-                return False
-            paths_to_upload.append((asset_uid, asset_path))
-
-        chunk_size = 10 * 1024 * 1024  # 10 MB
-        for asset_uid, asset_path in paths_to_upload:
-            temp_zip_path = None
+    async def _upload_single_asset(self, asset_uid: str, asset_path: str, session: aiohttp.ClientSession) -> bool:
+        """Uploads a single asset file or directory archive to the remote engine."""
+        temp_zip_path = None
+        try:
             if os.path.isdir(asset_path):
-                print(f"Archiving directory {asset_path} for upload...")
-                import tempfile
+                print(f"[RemoteEngine Upload] Archiving directory '{asset_path}' for upload...")
                 import shutil
                 # Create a temporary zip archive path
                 temp_fd, temp_zip_path = tempfile.mkstemp(suffix=".zip")
@@ -219,30 +357,126 @@ class RemoteEngine(Engine):
             else:
                 upload_path = asset_path
 
-            file_size = os.path.getsize(upload_path)
-            total_chunks = max(1, (file_size + chunk_size - 1) // chunk_size)
-            
-            try:
-                with open(upload_path, 'rb') as f:
-                    for i in range(total_chunks):
-                        chunk_data = f.read(chunk_size)
-                        data = aiohttp.FormData()
-                        data.add_field('uid', asset_uid)
-                        data.add_field('chunk_index', str(i))
-                        data.add_field('total_chunks', str(total_chunks))
-                        data.add_field('total_size', str(file_size))
-                        data.add_field('file', chunk_data, filename=asset_uid, content_type='application/octet-stream')
+            if not os.path.exists(upload_path):
+                print(f"[RemoteEngine Upload] File not found for upload: '{upload_path}'")
+                return False
 
-                        async with session.post(f"{self.remote_url}/upload", data=data) as response:
-                            response.raise_for_status()
-            finally:
-                if temp_zip_path and os.path.exists(temp_zip_path):
+            file_size = os.path.getsize(upload_path)
+            total_chunks = max(1, (file_size + UPLOAD_CHUNK_SIZE - 1) // UPLOAD_CHUNK_SIZE)
+
+            # Wait for an upload slot without blocking this event loop
+            while not self._upload_slots.acquire(blocking=False):
+                await asyncio.sleep(0.05)
+            try:
+                for attempt in range(1, UPLOAD_ATTEMPTS + 1):
                     try:
-                        os.remove(temp_zip_path)
-                    except Exception as e:
-                        print(f"Warning: failed to clean up temp zip file {temp_zip_path}: {e}")
+                        await self._send_asset_chunks(asset_uid, upload_path, file_size, total_chunks, session)
+                        return True
+                    except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+                        if attempt == UPLOAD_ATTEMPTS:
+                            raise
+                        print(f"[RemoteEngine Upload] Attempt {attempt}/{UPLOAD_ATTEMPTS} for '{asset_uid}' failed ({e}); retrying...")
+                        await asyncio.sleep(2 * attempt)
+            finally:
+                self._upload_slots.release()
+        except Exception as e:
+            print(f"[RemoteEngine Upload] Error uploading asset '{asset_uid}': {e}")
+            return False
+        finally:
+            if temp_zip_path and os.path.exists(temp_zip_path):
+                try:
+                    os.remove(temp_zip_path)
+                except Exception as e:
+                    print(f"Warning: failed to clean up temp zip file {temp_zip_path}: {e}")
+
+    async def _send_asset_chunks(
+        self,
+        asset_uid: str,
+        upload_path: str,
+        file_size: int,
+        total_chunks: int,
+        session: aiohttp.ClientSession,
+    ) -> None:
+        """Sends a file to the engine service chunk by chunk, starting from the first chunk."""
+        asset_start = time.time()
+        uploaded_asset_bytes = 0
+
+        print(f"[RemoteEngine Upload] Uploading asset '{asset_uid}' ({_format_bytes(file_size)}, {total_chunks} chunk(s))...")
+
+        with open(upload_path, 'rb') as f:
+            for i in range(total_chunks):
+                chunk_data = f.read(UPLOAD_CHUNK_SIZE)
+                chunk_len = len(chunk_data)
+                uploaded_asset_bytes += chunk_len
+
+                data = aiohttp.FormData()
+                data.add_field('uid', asset_uid)
+                data.add_field('chunk_index', str(i))
+                data.add_field('total_chunks', str(total_chunks))
+                data.add_field('total_size', str(file_size))
+                data.add_field('file', chunk_data, filename=asset_uid, content_type='application/octet-stream')
+
+                chunk_start = time.time()
+                async with session.post(f"{self.remote_url}/upload", data=data) as response:
+                    response.raise_for_status()
+                chunk_duration = max(time.time() - chunk_start, 0.001)
+                chunk_speed = (chunk_len / (1024 * 1024)) / chunk_duration
+
+                pct = (uploaded_asset_bytes / file_size) * 100 if file_size > 0 else 100
+                print(f"  -> Chunk {i + 1}/{total_chunks} sent: {_format_bytes(uploaded_asset_bytes)} / {_format_bytes(file_size)} ({pct:.1f}%) @ {chunk_speed:.2f} MB/s")
+
+        asset_elapsed = max(time.time() - asset_start, 0.001)
+        asset_speed = (file_size / (1024 * 1024)) / asset_elapsed
+        print(f"[RemoteEngine Upload] Uploaded '{asset_uid}' in {asset_elapsed:.2f}s (avg {asset_speed:.2f} MB/s)")
+
+    async def upload_missing_assets(self, missing_uids: list[str], local_assets: dict[str, str], session: aiohttp.ClientSession) -> bool:
+        """Synchronizes missing assets to the remote engine, deduplicating parallel in-flight uploads across threads and event loops."""
+        initiator_tasks: list[tuple[str, _TransferTracker, str]] = []
+        waiter_trackers: list[tuple[str, _TransferTracker]] = []
         
-        return True
+        for asset_uid in missing_uids:
+            asset_path = local_assets.get(asset_uid)
+            if not asset_path:
+                print(f"[RemoteEngine] Warning: could not find path for missing asset '{asset_uid}'")
+                return False
+            
+            with self._transfer_lock:
+                if asset_uid in self._active_uploads:
+                    print(f"[RemoteEngine] Asset '{asset_uid}' is already being transferred by another task. Joining in-flight transfer...")
+                    tracker = self._active_uploads[asset_uid]
+                    waiter_trackers.append((asset_uid, tracker))
+                else:
+                    tracker = _TransferTracker()
+                    self._active_uploads[asset_uid] = tracker
+                    initiator_tasks.append((asset_uid, tracker, asset_path))
+
+        async def _do_upload(asset_uid: str, tracker: _TransferTracker, asset_path: str) -> bool:
+            success = False
+            try:
+                success = await self._upload_single_asset(asset_uid, asset_path, session)
+                return success
+            except Exception as e:
+                print(f"[RemoteEngine] Error uploading asset '{asset_uid}': {e}")
+                return False
+            finally:
+                with self._transfer_lock:
+                    tracker.success = success
+                    tracker.done_event.set()
+                    if self._active_uploads.get(asset_uid) is tracker:
+                        del self._active_uploads[asset_uid]
+
+        upload_coros = [_do_upload(uid, tr, pth) for uid, tr, pth in initiator_tasks]
+        # The uploading task always settles its tracker (its requests time out and retries are bounded),
+        # so waiters follow it rather than timing out while it is queued for an upload slot
+        wait_coros = [self._wait_for_transfer(tr, timeout=None) for _, tr in waiter_trackers]
+
+        all_success = True
+        if upload_coros or wait_coros:
+            results = await asyncio.gather(*(upload_coros + wait_coros))
+            if not all(results):
+                all_success = False
+
+        return all_success
 
     async def get_model_layers(self, model_element: GraphElement) -> list[dict]:
         """Inspects the model element locally to extract layers, avoiding remote queries for anonymized CAS."""

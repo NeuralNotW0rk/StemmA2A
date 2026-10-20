@@ -3,9 +3,15 @@
 set -e
 
 # Check if the Diffracture directory is mounted and contains a Python package definition
-if [ -d "/Diffracture" ] && { [ -f "/Diffracture/setup.py" ] || [ -f "/Diffracture/pyproject.toml" ]; }; then
+if [ -d "/diffracture" ] && { [ -f "/diffracture/setup.py" ] || [ -f "/diffracture/pyproject.toml" ]; }; then
     echo "Found Diffracture mount. Installing in editable mode..."
-    pip install -e /Diffracture
+    pip install -e /diffracture
+fi
+
+# Check if the NeutralSelection directory is mounted and contains a Python package definition
+if [ -d "/neutral-selection" ] && { [ -f "/neutral-selection/setup.py" ] || [ -f "/neutral-selection/pyproject.toml" ]; }; then
+    echo "Found NeutralSelection mount. Installing in editable mode..."
+    pip install -e /neutral-selection
 fi
 
 # Run CUDA and system diagnostics to check for common container bottleneck issues

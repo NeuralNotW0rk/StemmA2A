@@ -3,42 +3,52 @@
   /* eslint-disable @typescript-eslint/no-explicit-any */
   import { onMount, onDestroy } from 'svelte'
   import { SvelteSet } from 'svelte/reactivity'
-  import cytoscape, { type EventObject, type Singular } from 'cytoscape'
+  import cytoscape, { type EventObject } from 'cytoscape'
   import fcose from 'cytoscape-fcose'
   import cxtmenu from 'cytoscape-cxtmenu'
   import popper from 'cytoscape-popper'
   import { createPopper } from '@popperjs/core'
   import graphStyle from './Style'
   import layoutConfig from './Layout'
+  import NodePropertyPopper from './NodePropertyPopper.svelte'
   import { cyInstanceStore, selectionStore } from '../../utils/stores'
-  import { BATCHING_CONFIG } from '../../utils/app-config'
+  import { GROUPING_CONFIG } from '../../utils/app-config'
+  import { projectRoomView } from '../../utils/rooms'
 
   interface Props {
     graphData?: {
       elements: cytoscape.ElementDefinition[] | cytoscape.ElementsDefinition
     } | null
     viewMode?: 'batch' | 'cluster'
+    // The room being viewed, or null for the main graph
+    activeRoom?: string | null
     showSpringEdges?: boolean
     showDetailedLabels?: boolean
     chronologicalConstraint?: boolean
+    hideEvolutionaryEdges?: boolean
+    hideAllEdges?: boolean
     operations?: any[]
     onaudioSelect?: (data: any) => void
-    onexport?: (data: { names: string[] }) => void
+    onexport?: (data: { names: string[]; isGroup?: boolean }) => void
     onimportGrating?: (data: any) => void
     onbendModel?: (data: any) => void
     onrescanSource?: (name: string) => void
     onnodeSelect?: (data: any) => void
     onedgeSelect?: (data: any) => void
     onElementRemove?: (data: any) => void
-    onstartBatching?: (data: any) => void
+    onbreakout?: (elementIds: string[]) => void
+    onforkProject?: (elementIds: string[]) => void
+    onenterRoom?: (roomId: string) => void
+    ondissolveRoom?: (roomId: string) => void
+    onstartGrouping?: (data: any) => void
     onsavePositions?: (positions: Record<string, { x: number; y: number }>) => void | Promise<void>
     onexpandPath?: (id: string) => void
     ontoggleFavorite?: (data: any, isFavorite: boolean) => void
-    onchangeBatchMembership?: (
+    onchangeGroupMembership?: (
       nodeId: string,
-      oldBatchId: string | null,
+      oldGroupId: string | null,
       oldMembers: string[],
-      newBatchId: string | null,
+      newGroupId: string | null,
       newMembers: string[]
     ) => void | Promise<void>
     onselectOperation?: (op: any, initiatorNode: any, useContext?: boolean) => void
@@ -47,9 +57,12 @@
 
   let {
     graphData = null,
+    activeRoom = null,
     showSpringEdges = false,
     showDetailedLabels = true,
     chronologicalConstraint = false,
+    hideEvolutionaryEdges = false,
+    hideAllEdges = false,
     operations: operationsProp = [],
     onaudioSelect,
     onimportGrating,
@@ -59,11 +72,15 @@
     onnodeSelect,
     onedgeSelect,
     onElementRemove,
-    onstartBatching,
+    onbreakout,
+    onforkProject,
+    onenterRoom,
+    ondissolveRoom,
+    onstartGrouping,
     onsavePositions,
     onexpandPath,
     ontoggleFavorite,
-    onchangeBatchMembership,
+    onchangeGroupMembership,
     onselectOperation,
     onrefresh
   }: Props = $props()
@@ -90,10 +107,27 @@
   let loadingOperations = $state(false)
   let operationsError: string | null = $state(null)
   let lastCxtTapPosition = { x: 0, y: 0 }
+  // The room whose view is on screen; positions carried between rebuilds only apply within one view
+  let renderedRoom: string | null | undefined = undefined
+
+  // --- Inline Node Property Popper State ---
+  interface NodePropertyPopperConfig {
+    targetNode: cytoscape.NodeSingular
+    title: string
+    inputType?: 'number' | 'text'
+    initialValue?: string | number | null
+    placeholder?: string
+    submitLabel?: string
+    allowClear?: boolean
+    clearLabel?: string
+    step?: string
+    onsubmit: (value: string | number | null) => Promise<void> | void
+  }
+  let activePropertyPopper = $state<NodePropertyPopperConfig | null>(null)
 
   const displayType = $derived(
     targetNode
-      ? targetNode.data('type') === 'batch'
+      ? targetNode.data('type') === 'group'
         ? targetNode.data('member_type')
         : targetNode.data('type')
       : null
@@ -101,7 +135,7 @@
 
   const outputType = $derived.by(() => {
     if (!targetNode) return null
-    if (targetNode.data('type') === 'batch') {
+    if (targetNode.data('type') === 'group') {
       const memberIds = targetNode.data('member_ids') || []
       if (memberIds.length > 0 && cy) {
         const firstMember = cy.getElementById(memberIds[0])
@@ -113,11 +147,38 @@
     return targetNode.data('output_type') || null
   })
 
+  function hasAssociatedModel(node: any): boolean {
+    if (!node) return false
+    const data = typeof node.data === 'function' ? node.data() : node
+    if (!data) return false
+    if (data.context?.model_id || data.context?.model || data.base_model_id) {
+      return true
+    }
+    if (
+      typeof node.predecessors === 'function' &&
+      node.predecessors('node[type = "model"]').length > 0
+    ) {
+      return true
+    }
+    if (
+      data.type === 'group' &&
+      Array.isArray(data.member_ids) &&
+      data.member_ids.length > 0 &&
+      cy
+    ) {
+      const firstMember = cy.getElementById(data.member_ids[0])
+      if (firstMember && firstMember.length > 0) {
+        return hasAssociatedModel(firstMember)
+      }
+    }
+    return false
+  }
+
   let filteredOperations = $derived.by(() => {
     const initiatorType = targetNode ? targetNode.data('type') : null
     let ops = operations
     if (initiatorType) {
-      const filterType = initiatorType === 'batch' ? targetNode.data('member_type') : initiatorType
+      const filterType = initiatorType === 'group' ? targetNode.data('member_type') : initiatorType
       if (filterType) {
         ops = operations.filter((op) => {
           return (
@@ -128,6 +189,22 @@
         })
       }
     }
+
+    // Filter out 'scatter' if target audio node does not have an associated generative model
+    if (targetNode && (initiatorType === 'audio' || targetNode.data('member_type') === 'audio')) {
+      if (!hasAssociatedModel(targetNode)) {
+        ops = ops.filter((op) => op.name !== 'scatter')
+      }
+    }
+
+    // Float the node type's pinned operations to the top of the palette
+    const pinned = (initiatorType && PINNED_OPERATIONS[initiatorType]) || []
+    if (pinned.length > 0) {
+      ops = [...ops].sort(
+        (a, b) => Number(pinned.includes(b.name)) - Number(pinned.includes(a.name))
+      )
+    }
+
     if (!searchQuery) return ops
     const q = searchQuery.toLowerCase()
     return ops.filter((op) => {
@@ -175,6 +252,16 @@
       .split(/[\s-_]+/)
       .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
       .join(' ')
+  }
+
+  // Operations surfaced directly on a node type's radial menu. Keep these to the
+  // one primary action per type; everything else is reached via "Operations...".
+  const PINNED_OPERATIONS: Record<string, string[]> = {
+    model: ['generate'],
+    grating: ['generate'],
+    latent: ['generate'],
+    individual: ['scatter'],
+    group: ['recombine']
   }
 
   async function openOperationsMenu(node: any): Promise<void> {
@@ -225,11 +312,62 @@
     }
   }
 
+  function getSelectedIndividuals(
+    clickedEle?: cytoscape.NodeSingular | cytoscape.EdgeSingular
+  ): any[] {
+    const selectedEles = cy ? cy.$(':selected') : null
+    const candidates: any[] = []
+    const collect = (d: any): void => {
+      if (d.type === 'individual') {
+        candidates.push(d)
+      } else if (d.type === 'group' && Array.isArray(d.member_ids)) {
+        d.member_ids.forEach((mid: string) => {
+          const m = cy?.getElementById(mid)
+          if (m && m.length > 0 && m.isNode() && m.data('type') === 'individual') {
+            candidates.push(m.data())
+          }
+        })
+      }
+    }
+    if (
+      selectedEles &&
+      selectedEles.length > 0 &&
+      (!clickedEle || selectedEles.contains(clickedEle))
+    ) {
+      selectedEles.forEach((e) => {
+        if (e.isNode()) collect(e.data())
+      })
+    } else if (clickedEle && clickedEle.isNode()) {
+      collect(clickedEle.data())
+    }
+    return Array.from(new Map(candidates.map((item) => [item.id, item])).values())
+  }
+
+  const MULTI_INITIATOR_OPERATIONS = new Set([
+    'recombine',
+    'scatter',
+    'generate',
+    'express'
+  ])
+
+  function buildInitiatorData(op: any, ele: cytoscape.NodeSingular): any {
+    if (!MULTI_INITIATOR_OPERATIONS.has(op.name)) return ele.data()
+    const individuals = getSelectedIndividuals(ele)
+    const isIndividualOrGroup =
+      ele.isNode() && (ele.data('type') === 'individual' || ele.data('type') === 'group')
+    const fallback = isIndividualOrGroup ? [ele.data()] : []
+    const baseInitiator = isIndividualOrGroup ? ele.data() : individuals[0] || ele.data()
+    return {
+      ...baseInitiator,
+      selectedNodes: individuals.length > 0 ? individuals : fallback
+    }
+  }
+
   function selectOp(op: any): void {
-    const nodeData = targetNode ? targetNode.data() : null
+    const node = targetNode
     closeOperationsMenu()
-    if (onselectOperation && nodeData) {
-      onselectOperation(op, nodeData)
+    if (onselectOperation && node) {
+      onselectOperation(op, buildInitiatorData(op, node))
     }
   }
 
@@ -281,10 +419,55 @@
     return undefined
   })
 
-  function matchesFilter(node: cytoscape.NodeSingular, filter: Record<string, any>): boolean {
+  function openScorePopper(node: cytoscape.NodeSingular): void {
+    const currentFitness = node.data('fitness')
+    activePropertyPopper = {
+      targetNode: node,
+      title: 'Fitness Score',
+      inputType: 'number',
+      initialValue: currentFitness !== undefined && currentFitness !== null ? currentFitness : null,
+      placeholder: 'Score (e.g. 1.0, 0.85)',
+      submitLabel: 'Set Score',
+      allowClear: true,
+      onsubmit: async (val: string | number | null): Promise<void> => {
+        const numVal = val !== null && val !== '' ? Number(val) : null
+        node.data('fitness', numVal)
+        await window.api.updateElement(node.id(), { fitness: numVal })
+        onnodeSelect?.(node.data())
+      }
+    }
+  }
+
+  function openRenamePopper(node: cytoscape.NodeSingular): void {
+    const currentName = (node.data('name') || node.data('alias') || node.id()) as string
+    activePropertyPopper = {
+      targetNode: node,
+      title: 'Rename Node',
+      inputType: 'text',
+      initialValue: currentName,
+      placeholder: 'Enter new name...',
+      submitLabel: 'Rename',
+      allowClear: false,
+      onsubmit: async (val: string | number | null): Promise<void> => {
+        const newName = val == null ? '' : String(val).trim()
+        if (!newName) {
+          throw new Error('Name cannot be empty.')
+        }
+        node.data('name', newName)
+        await window.api.updateElement(node.id(), { name: newName })
+        onnodeSelect?.(node.data())
+      }
+    }
+  }
+
+  function matchesFilter(
+    node: cytoscape.NodeSingular | cytoscape.EdgeSingular,
+    filter: Record<string, any>
+  ): boolean {
+    if (!node.isNode()) return false
     const data = node.data()
 
-    if (data.type === 'batch') {
+    if (data.type === 'group') {
       const memberIds = data.member_ids || []
       if (memberIds.length === 0) return false
       const firstMember = node.cy().getElementById(memberIds[0])
@@ -299,6 +482,14 @@
           if (strExpected.includes(String(node.id()))) {
             return false
           }
+        }
+        continue
+      }
+
+      // Special evaluation: Each listed property must take one of its allowed values
+      if (key === '_one_of') {
+        for (const [prop, allowed] of Object.entries(expectedValue as Record<string, unknown[]>)) {
+          if (!allowed.includes(data[prop])) return false
         }
         continue
       }
@@ -342,13 +533,13 @@
     return true
   }
 
-  function isBatchCompatible(batch: cytoscape.NodeSingular, node: cytoscape.NodeSingular): boolean {
-    const filter: Record<string, any> = batch.data('member_type')
-      ? { type: batch.data('member_type') }
+  function isGroupCompatible(group: cytoscape.NodeSingular, node: cytoscape.NodeSingular): boolean {
+    const filter: Record<string, any> = group.data('member_type')
+      ? { type: group.data('member_type') }
       : {}
 
-    // Extract the structural dependencies from the batch's existing members to match BatchingView's logic
-    const memberIds = batch.data('member_ids') || []
+    // Extract the structural dependencies from the group's existing members to match GroupingView's logic
+    const memberIds = group.data('member_ids') || []
     if (memberIds.length > 0) {
       const firstMember = cy!.getElementById(memberIds[0])
       if (firstMember && firstMember.length > 0) {
@@ -356,7 +547,7 @@
         if (incomingIds) filter._incoming_node_ids = incomingIds
 
         const ctx = firstMember.data('context')
-        BATCHING_CONFIG.strictContextKeys.forEach((key) => {
+        GROUPING_CONFIG.strictContextKeys.forEach((key) => {
           filter[`context.${key}`] = ctx?.[key] ?? null
         })
       }
@@ -416,6 +607,15 @@
     }
   })
 
+  // Dynamically update edge visibility whenever edge hiding settings change
+  $effect(() => {
+    void hideEvolutionaryEdges
+    void hideAllEdges
+    if (isInitialized && cy) {
+      queueUpdateEdgeVisibility()
+    }
+  })
+
   // Run layout when chronological constraint changes to show the immediate effect
   let firstEffectRun = true
   $effect(() => {
@@ -429,11 +629,113 @@
     }
   })
 
+  let edgeVisibilityRafId: number | null = null
+
+  function queueUpdateEdgeVisibility(): void {
+    if (edgeVisibilityRafId !== null) return
+    edgeVisibilityRafId = requestAnimationFrame(() => {
+      edgeVisibilityRafId = null
+      updateEdgeVisibility()
+    })
+  }
+
+  function isEvolutionaryEdge(edge: cytoscape.EdgeSingular): boolean {
+    const edgeType = edge.data('type') as string | undefined
+    const relation = edge.data('relation') as string | undefined
+    if (
+      edgeType === 'individual' ||
+      relation === 'shares_phenotype' ||
+      relation === 'precursor' ||
+      relation === 'parent' ||
+      relation === 'expressed_to'
+    ) {
+      return true
+    }
+
+    const src = edge.source()
+    const tgt = edge.target()
+
+    const srcType = src.data('type') as string | undefined
+    const tgtType = tgt.data('type') as string | undefined
+    const srcMemberType = src.data('member_type') as string | undefined
+    const tgtMemberType = tgt.data('member_type') as string | undefined
+
+    if (
+      srcType === 'individual' ||
+      tgtType === 'individual' ||
+      srcMemberType === 'individual' ||
+      tgtMemberType === 'individual'
+    ) {
+      return true
+    }
+
+    return false
+  }
+
+  function updateEdgeVisibility(): void {
+    if (!isInitialized || !cy) return
+
+    cy.batch(() => {
+      if (!hideEvolutionaryEdges && !hideAllEdges) {
+        cy?.edges('.hidden').removeClass('hidden')
+        return
+      }
+
+      const selectedEles = cy?.$(':selected')
+      if (!selectedEles) return
+
+      const selectedNodes = selectedEles.nodes()
+      const selectedEdges = selectedEles.edges()
+
+      let revealedEdges = selectedNodes.connectedEdges().union(selectedEdges)
+
+      selectedNodes.forEach((node) => {
+        if (node.isParent()) {
+          revealedEdges = revealedEdges.union(node.descendants().connectedEdges())
+        }
+        const memberIds = node.data('member_ids') as string[] | undefined
+        if (Array.isArray(memberIds) && memberIds.length > 0) {
+          memberIds.forEach((id: string) => {
+            const memberNode = cy?.getElementById(id)
+            if (memberNode && memberNode.length > 0) {
+              revealedEdges = revealedEdges.union(memberNode.connectedEdges())
+            }
+          })
+        }
+      })
+
+      cy?.edges().forEach((edge) => {
+        if (edge.data('type') === 'spring') {
+          return
+        }
+
+        const isTargeted = hideAllEdges || (hideEvolutionaryEdges && isEvolutionaryEdge(edge))
+
+        if (!isTargeted) {
+          edge.removeClass('hidden')
+        } else {
+          if (revealedEdges.contains(edge)) {
+            edge.removeClass('hidden')
+          } else {
+            edge.addClass('hidden')
+          }
+        }
+      })
+    })
+  }
+
   onMount(() => {
     initializeGraph()
   })
 
+  let removeKeydownListener: (() => void) | null = null
+
   onDestroy(() => {
+    if (edgeVisibilityRafId !== null) {
+      cancelAnimationFrame(edgeVisibilityRafId)
+      edgeVisibilityRafId = null
+    }
+    removeKeydownListener?.()
     cyInstanceStore.set(null) // Clean up
     if (cy) {
       cy.destroy()
@@ -480,30 +782,30 @@
 
     // --- Command Definitions (Inheritance-style) ---
 
-    const PINNED_OPERATIONS = new Set(['generate', 'invert'])
-
-    const getPinnedOperations = (ele: Singular): Command[] => {
+    const getPinnedOperations = (ele: cytoscape.NodeSingular): Command[] => {
       if (!operations) return []
       const type = ele.data('type')
+      const memberType = ele.data('member_type')
+      const pinned = PINNED_OPERATIONS[type] ?? []
       return operations
         .filter(
           (op) =>
-            PINNED_OPERATIONS.has(op.name) &&
+            pinned.includes(op.name) &&
             op.initiator_types &&
-            op.initiator_types.includes(type)
+            (op.initiator_types.includes(type) ||
+              (type === 'group' && memberType && op.initiator_types.includes(memberType)))
         )
         .map((op) => {
-          const display = getOpDisplayProps(op, type)
+          const effectiveType = type === 'group' && memberType ? memberType : type
+          const display = getOpDisplayProps(op, effectiveType)
           return {
             content: toTitleCase(display.name),
-            select: () => {
-              onselectOperation?.(op, ele.data())
-            }
+            select: () => onselectOperation?.(op, buildInitiatorData(op, ele))
           }
         })
     }
 
-    const getReplicateCommand = (ele: Singular): Command | null => {
+    const getReplicateCommand = (ele: cytoscape.NodeSingular): Command | null => {
       const context = ele.data().context
       if (!context) return null
 
@@ -533,7 +835,7 @@
       }
     }
 
-    const elementCommands = (ele: Singular): Command[] => [
+    const elementCommands = (ele: cytoscape.NodeSingular | cytoscape.EdgeSingular): Command[] => [
       {
         content: 'Remove',
         select: () => {
@@ -547,12 +849,53 @@
       }
     ]
 
-    const nodeCommands = (ele: Singular): Command[] => [
-      // Inherits from elementCommands
-      ...elementCommands(ele)
+    // The clicked node, or the whole selection when the clicked node is part of it
+    const targetNodeIds = (ele: cytoscape.NodeSingular): string[] => {
+      const selectedNodes = cy!.$('node:selected')
+      const nodes = selectedNodes.length > 1 && selectedNodes.contains(ele) ? selectedNodes : ele
+      return nodes.map((n) => n.id())
+    }
+
+    const nodeCommands = (ele: cytoscape.NodeSingular): Command[] =>
+      // Doorways belong to another view: usable as inputs, but managed from where they live
+      ele.data('_view_role') === 'doorway'
+        ? []
+        : [
+            {
+              content: 'Rename',
+              select: () => openRenamePopper(ele)
+            },
+            {
+              content: 'Break Out',
+              select: () => onbreakout?.(targetNodeIds(ele))
+            },
+            {
+              content: 'Fork to Project',
+              select: () => onforkProject?.(targetNodeIds(ele))
+            },
+            ...elementCommands(ele)
+          ]
+
+    const roomNodeCommands = (ele: cytoscape.NodeSingular): Command[] => [
+      {
+        content: 'Enter Room',
+        select: () => onenterRoom?.(ele.id())
+      },
+      ...(ele.data('_view_role') === 'doorway'
+        ? []
+        : [
+            {
+              content: 'Rename',
+              select: () => openRenamePopper(ele)
+            },
+            {
+              content: 'Rejoin',
+              select: () => ondissolveRoom?.(ele.id())
+            }
+          ])
     ]
 
-    const modelNodeCommands = (ele: Singular): Command[] => [
+    const modelNodeCommands = (ele: cytoscape.NodeSingular): Command[] => [
       ...getPinnedOperations(ele),
       {
         content: 'Bend',
@@ -562,25 +905,50 @@
         content: 'Import Grating',
         select: () => onimportGrating?.(ele.data())
       },
+      {
+        content: 'Operations...',
+        select: () => openOperationsMenu(ele)
+      },
       ...nodeCommands(ele)
     ]
 
-    const gratingNodeCommands = (ele: Singular): Command[] => [
+    const gratingNodeCommands = (ele: cytoscape.NodeSingular): Command[] => [
       ...getPinnedOperations(ele),
+      {
+        content: 'Operations...',
+        select: () => openOperationsMenu(ele)
+      },
       ...nodeCommands(ele)
     ]
 
-    const latentNodeCommands = (ele: Singular): Command[] => {
+    const individualNodeCommands = (ele: cytoscape.NodeSingular): Command[] => [
+      {
+        content: 'Score',
+        select: () => openScorePopper(ele)
+      },
+      ...getPinnedOperations(ele),
+      {
+        content: 'Operations...',
+        select: () => openOperationsMenu(ele)
+      },
+      ...nodeCommands(ele)
+    ]
+
+    const latentNodeCommands = (ele: cytoscape.NodeSingular): Command[] => {
       const specificCommands: Command[] = []
       const replicateCmd = getReplicateCommand(ele)
       if (replicateCmd) {
         specificCommands.push(replicateCmd)
       }
       specificCommands.push(...getPinnedOperations(ele))
+      specificCommands.push({
+        content: 'Operations...',
+        select: () => openOperationsMenu(ele)
+      })
       return [...specificCommands, ...nodeCommands(ele)]
     }
 
-    const audioNodeCommands = (ele: Singular): Command[] => {
+    const audioNodeCommands = (ele: cytoscape.NodeSingular): Command[] => {
       const specificCommands: Command[] = [
         {
           content: ele.data('favorite') ? 'Unfavorite' : 'Favorite',
@@ -597,12 +965,11 @@
         specificCommands.push(replicateCmd)
       }
 
-      // Inject pinned dynamic operations (e.g. Audio to Audio, Invert)
       specificCommands.push(...getPinnedOperations(ele))
 
       specificCommands.push({
         content: 'Export',
-        select: () => onexport?.({ names: [ele.data('name')] })
+        select: () => onexport?.({ names: [ele.data('name') || ele.id()] })
       })
 
       specificCommands.push({
@@ -614,7 +981,7 @@
       return [...specificCommands, ...nodeCommands(ele)]
     }
 
-    const imageNodeCommands = (ele: Singular): Command[] => {
+    const imageNodeCommands = (ele: cytoscape.NodeSingular): Command[] => {
       const specificCommands: Command[] = [
         {
           content: ele.data('favorite') ? 'Unfavorite' : 'Favorite',
@@ -642,7 +1009,7 @@
       return [...specificCommands, ...nodeCommands(ele)]
     }
 
-    const externalNodeCommands = (ele: Singular): Command[] => [
+    const externalNodeCommands = (ele: cytoscape.NodeSingular): Command[] => [
       // Inherits from elementCommands (cannot be grouped)
       {
         content: 'Rescan',
@@ -651,7 +1018,7 @@
       ...elementCommands(ele)
     ]
 
-    const pathNodeCommands = (ele: Singular): Command[] => [
+    const pathNodeCommands = (ele: cytoscape.NodeSingular): Command[] => [
       {
         content: 'Expand',
         select: () => onexpandPath?.(ele.id())
@@ -659,19 +1026,21 @@
       ...nodeCommands(ele)
     ]
 
-    const batchNodeCommands = (ele: Singular): Command[] => [
+    const groupNodeCommands = (ele: cytoscape.NodeSingular): Command[] => [
+      ...getPinnedOperations(ele),
       {
-        content: 'Update Batch',
-        select: () => onstartBatching?.(ele.data())
+        content: 'Update Group',
+        select: () => onstartGrouping?.(ele.data())
       },
       {
-        content: 'Export Batch',
+        content: 'Export Group',
         select: () => {
-          const memberIds = ele.data('member_ids') || []
-          const names = memberIds
-            .map((id: string) => cy!.getElementById(id).data('name'))
-            .filter(Boolean)
-          if (names.length > 0) onexport?.({ names })
+          const memberIds: string[] = ele.data('member_ids') || []
+          if (memberIds.length > 0) {
+            onexport?.({ names: memberIds, isGroup: true })
+          } else {
+            onexport?.({ names: [ele.id()], isGroup: true })
+          }
         }
       },
       {
@@ -689,19 +1058,19 @@
         { content: 'Tidy', select: tidyView },
         { content: 'Fit', select: fitView },
         {
-          content: 'Create Batch',
+          content: 'Create Group',
           select: async () => {
             try {
-              const response = await window.api.batchElements([])
+              const response = await window.api.groupElements([])
               if (response && response.success) {
-                const newBatch = response.collection
+                const newGroup = response.collection
                 await onsavePositions?.({
-                  [newBatch.id]: { x: lastCxtTapPosition.x, y: lastCxtTapPosition.y }
+                  [newGroup.id]: { x: lastCxtTapPosition.x, y: lastCxtTapPosition.y }
                 })
                 await onrefresh?.()
               }
             } catch (err: any) {
-              console.error('Failed to create empty batch:', err)
+              console.error('Failed to create empty group:', err)
             }
           }
         }
@@ -710,7 +1079,7 @@
 
     cy.cxtmenu({
       selector: 'node',
-      commands: (ele: Singular): Command[] => {
+      commands: (ele: cytoscape.NodeSingular): Command[] => {
         switch (ele.data('type')) {
           case 'model':
             return modelNodeCommands(ele)
@@ -724,10 +1093,14 @@
             return externalNodeCommands(ele)
           case 'local_path':
             return pathNodeCommands(ele)
-          case 'batch':
-            return batchNodeCommands(ele)
+          case 'group':
+            return groupNodeCommands(ele)
+          case 'individual':
+            return individualNodeCommands(ele)
           case 'latent':
             return latentNodeCommands(ele)
+          case 'room':
+            return roomNodeCommands(ele)
           default:
             return nodeCommands(ele) // Fallback for any other node type
         }
@@ -750,10 +1123,15 @@
       }
     })
 
+    cy.on('select unselect', 'node, edge', () => {
+      queueUpdateEdgeVisibility()
+    })
+
     cy.on('tap', (evt: EventObject) => {
       if (evt.target === cy) {
         onnodeSelect?.(null)
         onedgeSelect?.(null)
+        queueUpdateEdgeVisibility()
       }
     })
 
@@ -787,6 +1165,10 @@
     })
 
     cy.on('dblclick', 'node, edge', (evt: EventObject) => {
+      if (evt.target.isNode() && evt.target.data('type') === 'room') {
+        onenterRoom?.(evt.target.id())
+        return
+      }
       customFit(evt.target, getDynamicPadding())
     })
 
@@ -798,127 +1180,247 @@
 
     let ghostNode: cytoscape.NodeSingular | null = null
     let sourceNode: cytoscape.NodeSingular | null = null
+    let trackedMousedownNode: cytoscape.NodeSingular | null = null
+    let trackedInitialPositions: Record<string, { x: number; y: number }> = {}
+    let lastRenderedMousePos: { x: number; y: number } | null = null
+    let isMouseDown = false
+
+    function cleanupGhost(): void {
+      if (ghostNode) {
+        ghostNode.remove()
+        ghostNode = null
+      }
+      sourceNode = null
+      trackedMousedownNode = null
+      trackedInitialPositions = {}
+      lastRenderedMousePos = null
+      isMouseDown = false
+      cy?.nodes('[type="group"]').removeClass('compatible-drop-target active-drop-target')
+    }
+
+    function startGhostDrag(
+      node: cytoscape.NodeSingular,
+      initialPos: { x: number; y: number }
+    ): void {
+      if (ghostNode) return
+
+      // Restore original node (and any children) back to their initial positions before normal drag moved them
+      if (trackedInitialPositions[node.id()]) {
+        node.position({ ...trackedInitialPositions[node.id()] })
+      }
+      node.children().forEach((child) => {
+        if (trackedInitialPositions[child.id()]) {
+          child.position({ ...trackedInitialPositions[child.id()] })
+        }
+      })
+
+      sourceNode = node
+      ghostNode = cy!.add({
+        group: 'nodes',
+        data: { id: `ghost-node-${Date.now()}` },
+        position: { ...initialPos }
+      }) as unknown as cytoscape.NodeSingular
+
+      ghostNode.style({
+        'background-color': node.style('background-color'),
+        shape: node.style('shape'),
+        'corner-radius': node.style('corner-radius'),
+        width: node.style('width'),
+        height: node.style('height'),
+        label: node.style('label'),
+        opacity: 0.5,
+        'border-width': node.style('border-width'),
+        'border-color': node.style('border-color'),
+        'border-style': node.style('border-style'),
+        'text-valign': node.style('text-valign'),
+        'text-halign': node.style('text-halign'),
+        color: node.style('color'),
+        'z-index': 9999,
+        events: 'no' // Do not capture events on the ghost node
+      })
+
+      cy!.nodes('[type="group"]').forEach((group) => {
+        if (group.id() === sourceNode!.id()) return
+        if (isGroupCompatible(group as unknown as cytoscape.NodeSingular, sourceNode!)) {
+          group.addClass('compatible-drop-target')
+        }
+      })
+    }
+
+    const handleKeyDown = (e: KeyboardEvent): void => {
+      if (
+        (e.key === 'Control' || e.key === 'Meta' || e.ctrlKey || e.metaKey) &&
+        isMouseDown &&
+        !ghostNode &&
+        trackedMousedownNode
+      ) {
+        startGhostDrag(
+          trackedMousedownNode,
+          lastRenderedMousePos || trackedMousedownNode.position()
+        )
+      }
+    }
+
+    const handleWindowMouseUp = (): void => {
+      if (isMouseDown || ghostNode) {
+        handleMouseUp()
+      }
+    }
+
+    const handleWindowBlur = (): void => {
+      cleanupGhost()
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    window.addEventListener('mouseup', handleWindowMouseUp)
+    window.addEventListener('blur', handleWindowBlur)
+
+    removeKeydownListener = () => {
+      window.removeEventListener('keydown', handleKeyDown)
+      window.removeEventListener('mouseup', handleWindowMouseUp)
+      window.removeEventListener('blur', handleWindowBlur)
+    }
 
     cy.on('mousedown', 'node', (evt: EventObject) => {
-      const node = evt.target
+      const rawTarget = evt.target
       const oe = evt.originalEvent as MouseEvent
+
+      // If dragging an exemplar inside an individual compound node, resolve target to the individual itself
+      const parent = rawTarget.parent()
+      const isInsideIndividual = parent && parent.length > 0 && parent.data('type') === 'individual'
+      const node = isInsideIndividual ? parent : rawTarget
+
       const nodeType = node.data('type')
-      const parent = node.parent()
-      const parentType = parent && parent.length > 0 ? parent.data('type') : null
+      const nodeParent = node.parent()
+      const nodeParentType = nodeParent && nodeParent.length > 0 ? nodeParent.data('type') : null
 
-      // Block ghost-dragging for members of directory nodes, directories, and batches
+      // Block ghost-dragging for members of directory nodes, directories, and groups
       const isGhostDraggable =
-        parentType !== 'directory' && nodeType !== 'directory' && nodeType !== 'batch'
+        nodeParentType !== 'directory' &&
+        nodeType !== 'directory' &&
+        nodeType !== 'group' &&
+        nodeType !== 'room' &&
+        !node.data('_view_role')
 
-      if (node.children().length === 0 && isGhostDraggable && oe && (oe.ctrlKey || oe.metaKey)) {
-        sourceNode = node as unknown as cytoscape.NodeSingular
-        ghostNode = cy!.add({
-          group: 'nodes',
-          data: { id: `ghost-node-${Date.now()}` },
-          position: { ...node.position() }
-        }) as unknown as cytoscape.NodeSingular
+      const isEligible = node.children().length === 0 || nodeType === 'individual'
 
-        ghostNode.style({
-          'background-color': node.style('background-color'),
-          shape: node.style('shape'),
-          width: node.style('width'),
-          height: node.style('height'),
-          label: node.style('label'),
-          opacity: 0.5,
-          'border-width': node.style('border-width'),
-          'border-color': node.style('border-color'),
-          'text-valign': node.style('text-valign'),
-          'text-halign': node.style('text-halign'),
-          color: node.style('color'),
-          'z-index': 9999,
-          events: 'no' // Do not capture events on the ghost node
+      if (isEligible && isGhostDraggable) {
+        isMouseDown = true
+        trackedMousedownNode = node as unknown as cytoscape.NodeSingular
+        trackedInitialPositions = { [node.id()]: { ...node.position() } }
+        node.children().forEach((child: any) => {
+          trackedInitialPositions[child.id()] = { ...child.position() }
         })
+        lastRenderedMousePos = { ...evt.position }
 
-        cy!.nodes('[type="batch"]').forEach((batch) => {
-          if (batch.id() === sourceNode!.id()) return
-          if (isBatchCompatible(batch as unknown as cytoscape.NodeSingular, sourceNode!)) {
-            batch.addClass('compatible-drop-target')
-          }
-        })
+        if (oe && (oe.ctrlKey || oe.metaKey)) {
+          startGhostDrag(trackedMousedownNode, evt.position)
+        }
       }
     })
 
     cy.on('mousemove', (evt: EventObject) => {
+      lastRenderedMousePos = { ...evt.position }
+      const oe = evt.originalEvent as MouseEvent
+
+      // If mouse buttons are not pressed, clean up any phantom drag state immediately
+      if (oe && oe.buttons === 0) {
+        if (ghostNode || isMouseDown) {
+          cleanupGhost()
+        }
+        return
+      }
+
+      if (isMouseDown && !ghostNode && trackedMousedownNode && oe && (oe.ctrlKey || oe.metaKey)) {
+        startGhostDrag(trackedMousedownNode, evt.position)
+      }
+
       if (ghostNode && sourceNode) {
         ghostNode.position(evt.position)
 
         const nodePos = ghostNode.position()
-        cy!.nodes('.compatible-drop-target').forEach((batch) => {
-          const bb = batch.boundingBox()
+        cy!.nodes('.compatible-drop-target').forEach((group) => {
+          const bb = group.boundingBox()
           if (
             nodePos.x >= bb.x1 &&
             nodePos.x <= bb.x2 &&
             nodePos.y >= bb.y1 &&
             nodePos.y <= bb.y2
           ) {
-            batch.addClass('active-drop-target')
+            group.addClass('active-drop-target')
           } else {
-            batch.removeClass('active-drop-target')
+            group.removeClass('active-drop-target')
           }
         })
       }
     })
 
-    cy.on('mouseup', async () => {
+    async function handleMouseUp(): Promise<void> {
+      isMouseDown = false
+
       if (ghostNode && sourceNode) {
         const nodePos = ghostNode.position()
-        let targetBatchId: string | null = null
+        let targetGroupId: string | null = null
         let invalidDrop = false
 
-        cy!.nodes('[type="batch"]').forEach((batch) => {
-          if (batch.id() === sourceNode!.id()) return
-          const bb = batch.boundingBox()
+        cy!.nodes('[type="group"]').forEach((group) => {
+          if (group.id() === sourceNode!.id()) return
+          const bb = group.boundingBox()
           if (
             nodePos.x >= bb.x1 &&
             nodePos.x <= bb.x2 &&
             nodePos.y >= bb.y1 &&
             nodePos.y <= bb.y2
           ) {
-            if (batch.hasClass('compatible-drop-target')) {
-              targetBatchId = batch.id()
+            if (group.hasClass('compatible-drop-target')) {
+              targetGroupId = group.id()
             } else {
               invalidDrop = true
             }
           }
         })
 
-        // Ensure classes are cleared regardless of whether the drop was valid
-        cy!.nodes('[type="batch"]').removeClass('compatible-drop-target active-drop-target')
-
-        if (invalidDrop && !targetBatchId) {
-          ghostNode.remove()
-          ghostNode = null
-          sourceNode = null
+        if (invalidDrop && !targetGroupId) {
+          cleanupGhost()
           return
         }
 
         const currentParentId = sourceNode.data('parent') || null
         const sourceNodeId = sourceNode.id()
+        const currentSourceNode = sourceNode
 
-        if (currentParentId !== targetBatchId) {
+        // Remove ghost node early before any graph updates
+        if (ghostNode) {
+          ghostNode.remove()
+          ghostNode = null
+        }
+        sourceNode = null
+
+        if (currentParentId !== targetGroupId) {
           const oldMembers = currentParentId
             ? cy!
                 .getElementById(currentParentId)
                 .data('member_ids')
                 ?.filter((id: string) => id !== sourceNodeId) || []
             : []
-          const newMembers = targetBatchId
-            ? [...(cy!.getElementById(targetBatchId).data('member_ids') || []), sourceNodeId]
+          const newMembers = targetGroupId
+            ? [...(cy!.getElementById(targetGroupId).data('member_ids') || []), sourceNodeId]
             : []
 
-          // 1. Set the physical position immediately before snapshotting
-          sourceNode.position({ ...nodePos })
+          // 1. Set physical position: if sourceNode has children (e.g. compound individual), shift all its children by delta (dx, dy)
+          if (currentSourceNode.children().length > 0) {
+            const currentPos = currentSourceNode.position()
+            const dx = nodePos.x - currentPos.x
+            const dy = nodePos.y - currentPos.y
+            currentSourceNode.children().forEach((child) => {
+              const cp = child.position()
+              child.position({ x: cp.x + dx, y: cp.y + dy })
+            })
+          } else {
+            currentSourceNode.position({ ...nodePos })
+          }
 
-          // 2. Remove ghost node early so it isn't swept into the graph rebuild
-          ghostNode.remove()
-          ghostNode = null
-
-          // 3. Temporarily mutate local graphData to accurately recalculate proxy edges
+          // 2. Temporarily mutate local graphData to accurately recalculate proxy edges
           if (graphData && graphData.elements) {
             const elementsList = Array.isArray(graphData.elements)
               ? graphData.elements
@@ -926,42 +1428,58 @@
 
             const rawNode = elementsList.find((e: any) => e.data.id === sourceNodeId)
             if (rawNode) {
-              if (targetBatchId) {
-                rawNode.data.parent = targetBatchId
+              if (targetGroupId) {
+                rawNode.data.parent = targetGroupId
               } else {
                 delete rawNode.data.parent
               }
             }
           }
 
-          // 4. Instantly re-aggregate and redraw proxy edges without network delay
+          // 3. Instantly re-aggregate and redraw proxy edges without network delay
           updateGraph()
 
-          // 5. Persist
+          // 4. Persist
           await extractAndSavePositions()
-          if (onchangeBatchMembership) {
-            await onchangeBatchMembership(
+          if (onchangeGroupMembership) {
+            await onchangeGroupMembership(
               sourceNodeId,
               currentParentId,
               oldMembers,
-              targetBatchId,
+              targetGroupId,
               newMembers
             )
           }
         } else {
-          sourceNode.position({ ...nodePos })
+          if (currentSourceNode.children().length > 0) {
+            const currentPos = currentSourceNode.position()
+            const dx = nodePos.x - currentPos.x
+            const dy = nodePos.y - currentPos.y
+            currentSourceNode.children().forEach((child) => {
+              const cp = child.position()
+              child.position({ x: cp.x + dx, y: cp.y + dy })
+            })
+          } else {
+            currentSourceNode.position({ ...nodePos })
+          }
           extractAndSavePositions()
         }
-
-        if (ghostNode) ghostNode.remove()
-        ghostNode = null
-        sourceNode = null
       }
-    })
 
+      cleanupGhost()
+    }
+
+    cy.on('mouseup', handleMouseUp)
+
+    // dragfree fires once per node in a multi-node drag; coalesce into a single save
+    let dragSaveTimer: ReturnType<typeof setTimeout> | null = null
     cy.on('dragfree', 'node', () => {
       // Always save position so it remains physically exactly where it was dropped
-      extractAndSavePositions()
+      if (dragSaveTimer) clearTimeout(dragSaveTimer)
+      dragSaveTimer = setTimeout(() => {
+        dragSaveTimer = null
+        extractAndSavePositions()
+      }, 150)
     })
   }
 
@@ -1008,9 +1526,21 @@
     })
   }
 
-  function isGeneratedArtifact(node: cytoscape.NodeSingular): boolean {
-    const type = node.data('type')
-    if (type !== 'audio' && type !== 'latent') {
+  const ARTIFACT_TYPES = new Set([
+    'audio',
+    'latent',
+    'image',
+    'individual',
+    'bundle',
+    'grating'
+  ])
+
+  // Artifacts respect the chronological constraint unless they were imported from disk.
+  // Models are deliberately excluded: model modification is represented by gratings.
+  // Compound artifacts (e.g. an individual with an exemplar) are excluded by the leaf filter
+  // and get ordered via their children instead.
+  function isChronologicalArtifact(node: cytoscape.NodeSingular): boolean {
+    if (!ARTIFACT_TYPES.has(node.data('type'))) {
       return false
     }
     const parentId = node.data('parent')
@@ -1034,7 +1564,7 @@
     if (!cy) return []
     const leafNodes = cy.nodes().filter((node) => node.children().length === 0)
     const sortedNodes = (leafNodes.toArray() as cytoscape.NodeSingular[])
-      .filter((node) => node.data('created') !== undefined && isGeneratedArtifact(node))
+      .filter((node) => node.data('created') !== undefined && isChronologicalArtifact(node))
       .sort((a, b) => {
         const timeA = a.data('created') || 0
         const timeB = b.data('created') || 0
@@ -1110,7 +1640,10 @@
     if (!cy) return
     const positions: Record<string, { x: number; y: number }> = {}
     cy.nodes().forEach((node) => {
-      if (node.children().length === 0) {
+      // Stand-ins share the real node's ID; their position belongs to this view only
+      if (node.data('_view_role')) return
+      // A room box is placed by its saved position, which its boundary stand-ins arrange around
+      if (node.children().length === 0 || node.data('type') === 'room') {
         positions[node.id()] = { ...node.position() }
       }
     })
@@ -1140,7 +1673,32 @@
       return
     }
 
-    // 1. Snapshot the CURRENT visual state
+    // Filter out baseline nodes and edges connected to them to keep the visual graph clean.
+    // Elements from the backend carry no group field, so nodes are told apart by having no source.
+    const baselineNodeIds = new SvelteSet<string>()
+    newElements = newElements.filter((ele: any): boolean => {
+      const isNode = ele.group ? ele.group === 'nodes' : !ele.data?.source
+      if (isNode && ele.data.type === 'grating' && ele.data.context?.is_baseline) {
+        baselineNodeIds.add(ele.data.id)
+        return false
+      }
+      return true
+    })
+    newElements = newElements.filter((ele: any): boolean => {
+      if (ele.group === 'edges' || ele.data.source) {
+        if (baselineNodeIds.has(ele.data.source) || baselineNodeIds.has(ele.data.target)) {
+          return false
+        }
+      }
+      return true
+    })
+
+    newElements = projectRoomView(newElements, activeRoom)
+
+    // 1. Snapshot the CURRENT visual state (only meaningful when the view is unchanged)
+    const viewChanged = renderedRoom !== undefined && renderedRoom !== activeRoom
+    renderedRoom = activeRoom
+    if (viewChanged) cy.elements().remove()
     const savedPositions: Record<string, { x: number; y: number }> = {}
     cy.nodes().forEach((node) => {
       // Only store positions for leaf nodes to avoid compound drift
@@ -1158,14 +1716,38 @@
       // Pre-calculate raw structural dependencies before proxy-edge mutations
       const incomingMap: Record<string, string[]> = {}
       newElements.forEach((ele: any) => {
-        if ((ele.group === 'edges' || ele.data.source) && ele.data.type !== 'spring') {
+        if ((ele.group === 'edges' || ele.data?.source) && ele.data?.type !== 'spring') {
           const t = ele.data.target
-
           const sourceId = ele.data.source
 
-          if (!incomingMap[t]) incomingMap[t] = []
-          if (!incomingMap[t].includes(sourceId)) incomingMap[t].push(sourceId)
+          if (t && sourceId) {
+            if (!incomingMap[t]) incomingMap[t] = []
+            if (!incomingMap[t].includes(sourceId)) incomingMap[t].push(sourceId)
+          }
         }
+      })
+
+      // Pre-calculate which incoming node IDs are shared by ALL members of each parent/group
+      const allNodes = newElements.filter(
+        (ele: any) => ele.group === 'nodes' || (!ele.data?.source && !ele.data?.target)
+      )
+      const parentMembersMap: Record<string, any[]> = {}
+      allNodes.forEach((n: any) => {
+        const parentId = n.data?.parent
+        if (parentId) {
+          if (!parentMembersMap[parentId]) parentMembersMap[parentId] = []
+          parentMembersMap[parentId].push(n)
+        }
+      })
+
+      const parentSharedIncomingMap: Record<string, SvelteSet<string>> = {}
+      Object.entries(parentMembersMap).forEach(([parentId, members]) => {
+        if (members.length === 0) return
+        const firstMemberIncoming = incomingMap[members[0].data?.id] || []
+        const shared = firstMemberIncoming.filter((sourceId) =>
+          members.every((m) => incomingMap[m.data?.id]?.includes(sourceId))
+        )
+        parentSharedIncomingMap[parentId] = new SvelteSet(shared)
       })
 
       const seenProxyEdges = new SvelteSet<string>()
@@ -1180,38 +1762,63 @@
           ele.data._incoming_node_ids = incomingMap[ele.data.id] || []
         }
 
-        if (use_proxy_edges && (ele.group === 'edges' || ele.data.source)) {
-          const edgeData = ele.data
+        const isEdge = ele.group === 'edges' || Boolean(ele.data?.source && ele.data?.target)
 
-          // Ignore spring edges so they always connect to specific nodes, not parent batches
-          if (edgeData.type === 'spring') {
-            acc.push(ele)
+        if (isEdge) {
+          const edgeData = ele.data
+          const source = edgeData.source
+          const targetNode = newElements.find((n) => n.data.id === edgeData.target)
+          const sourceNode = newElements.find((n) => n.data.id === edgeData.source)
+
+          // Skip edges between a compound parent and its direct child (composition is already visual)
+          if (
+            targetNode?.data.parent === source ||
+            sourceNode?.data.parent === edgeData.target ||
+            source === edgeData.target
+          ) {
             return acc
           }
 
-          // Find the actual nodes in your newElements list to check for parents
-          const targetNode = newElements.find((n) => n.data.id === edgeData.target)
-          const target = targetNode?.data.parent || edgeData.target
-
-          // We explicitly DO NOT proxy the source to its parent batch.
-          // This ensures that when a single sample is used as init_audio,
-          // the edge visually originates from that specific sample, not the whole batch.
-          const source = edgeData.source
-
-          // Prevent alpha-stacking visual bugs by deduplicating edges that share the same endpoints
-          const sig = `${source}->${target}:${edgeData.type}`
-          if (seenProxyEdges.has(sig)) return acc
-          seenProxyEdges.add(sig)
-
-          acc.push({
-            ...ele,
-            data: {
-              ...edgeData,
-              // Redirect target to parent if it exists, but keep original source
-              source: source,
-              target: target
+          if (use_proxy_edges) {
+            // Ignore spring edges so they always connect to specific nodes, not parent batches
+            if (edgeData.type === 'spring') {
+              acc.push(ele)
+              return acc
             }
-          })
+
+            // We explicitly DO NOT proxy the source to its parent batch.
+            // This ensures that when a single sample is used as init_audio,
+            // the edge visually originates from that specific sample, not the whole batch.
+            let target = edgeData.target
+            const parentId = targetNode?.data?.parent
+
+            // If ALL members of the parent group share this incoming source,
+            // aggregate and redirect the target to the group itself.
+            if (parentId && parentId !== source && parentSharedIncomingMap[parentId]?.has(source)) {
+              target = parentId
+            }
+
+            if (source === target) return acc
+
+            // Prevent alpha-stacking visual bugs by deduplicating edges that share the same endpoints
+            const sig = `${source}->${target}:${edgeData.type}`
+            if (seenProxyEdges.has(sig)) return acc
+            seenProxyEdges.add(sig)
+
+            acc.push({
+              ...ele,
+              data: {
+                ...edgeData,
+                // Redirect target to parent if shared by all members, but keep original source
+                source: source,
+                target: target
+              }
+            })
+            return acc
+          } else {
+            acc.push(ele)
+            return acc
+          }
         } else {
           acc.push(ele)
         }
@@ -1227,6 +1834,7 @@
       if (showDetailedLabels) {
         addedElements.nodes().addClass('detailed')
       }
+      updateEdgeVisibility()
 
       addedElements.nodes().forEach((node) => {
         const isChildless = node.children().length === 0
@@ -1337,7 +1945,7 @@
           type="text"
           bind:value={searchQuery}
           onkeydown={handleKeyDown}
-          placeholder="Search audio operations..."
+          placeholder="Search operations..."
         />
       </div>
 
@@ -1363,8 +1971,15 @@
                 >
                   <div class="op-title-row">
                     <span class="op-name">{display.name.toUpperCase()}</span>
-                    <span class="op-badge" class:async={op.execution_mode === 'async'}>
-                      {op.execution_mode}
+                    <span
+                      class="op-badge"
+                      class:dsp={op.category === 'dsp' ||
+                        (!op.category && op.execution_mode === 'sync')}
+                      class:evolution={op.category === 'evolution'}
+                      class:generative={op.category === 'generative' ||
+                        (!op.category && op.execution_mode === 'async')}
+                    >
+                      {op.category || op.execution_mode || 'op'}
                     </span>
                   </div>
                   {#if display.description}
@@ -1377,6 +1992,22 @@
         {/if}
       </div>
     </div>
+  {/if}
+
+  {#if activePropertyPopper}
+    <NodePropertyPopper
+      targetNode={activePropertyPopper.targetNode}
+      title={activePropertyPopper.title}
+      inputType={activePropertyPopper.inputType}
+      initialValue={activePropertyPopper.initialValue}
+      placeholder={activePropertyPopper.placeholder}
+      submitLabel={activePropertyPopper.submitLabel}
+      allowClear={activePropertyPopper.allowClear}
+      clearLabel={activePropertyPopper.clearLabel}
+      step={activePropertyPopper.step}
+      onsubmit={activePropertyPopper.onsubmit}
+      onclose={() => (activePropertyPopper = null)}
+    />
   {/if}
 </div>
 
@@ -1522,12 +2153,25 @@
     background: rgba(255, 255, 255, 0.1);
     color: var(--color-text-muted, #aaa);
     text-transform: uppercase;
+    font-weight: 500;
   }
 
-  .op-badge.async {
+  .op-badge.dsp {
+    background: rgba(148, 163, 184, 0.15);
+    color: #cbd5e1;
+    border: 1px solid rgba(148, 163, 184, 0.25);
+  }
+
+  .op-badge.evolution {
+    background: rgba(168, 85, 247, 0.2);
+    color: #d8b4fe;
+    border: 1px solid rgba(168, 85, 247, 0.35);
+  }
+
+  .op-badge.generative {
     background: rgba(59, 130, 246, 0.2);
     color: #93c5fd;
-    border: 1px solid rgba(59, 130, 246, 0.3);
+    border: 1px solid rgba(59, 130, 246, 0.35);
   }
 
   .op-desc {

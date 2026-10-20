@@ -1,7 +1,13 @@
 <!-- src/renderer/src/components/views/OperationView.svelte -->
 <script lang="ts">
-  import { tick, onDestroy, untrack, type Snippet } from 'svelte'
-  import type { FormConfig, FormField, NodeData } from '../../utils/forms'
+  import { tick, onDestroy, untrack } from 'svelte'
+  import type {
+    FormConfig,
+    FormField,
+    NodeData,
+    GratingData,
+    GratingElement
+  } from '../../utils/forms'
   import { initializeFormData } from '../../utils/forms'
   import {
     initiatorNodeStore,
@@ -10,16 +16,50 @@
     cyInstanceStore
   } from '../../utils/stores'
   import { startExecution } from '../../utils/execution'
+  import { parseSequence, numericSequenceError } from '../../utils/sequence'
   import DynamicForm from '../DynamicForm.svelte'
-  import NodeSelectorList, { type NodeListItem } from '../NodeSelectorList.svelte'
-  import type { ErrorInfo } from '../../utils/types'
+  import NodeSelectorList from '../NodeSelectorList.svelte'
+  import ExemplarPresetList from '../ExemplarPresetList.svelte'
+  import type {
+    ErrorInfo,
+    NodeListItem,
+    GratingOverride,
+    GratingListItem,
+    ExemplarPreset
+  } from '../../utils/types'
 
   let { onClose, onError } = $props<{
     onClose: () => void
     onError: (error: ErrorInfo) => void
   }>()
 
-  let baseFields = $derived(($selectedOperation?.form_config || []) as FormConfig)
+  // A model op shared across adapters (e.g. invert) is implemented per adapter for different artifact
+  // types: only the adapters handling the initiating artifact are offered. Null when unrestricted
+  let initiatorArtifactType = $derived(
+    $initiatorNodeStore?.type === 'group'
+      ? $initiatorNodeStore.member_type
+      : $initiatorNodeStore?.type
+  )
+  let compatibleAdapters = $derived.by((): string[] | null => {
+    const adapters = $selectedOperation?.adapter_initiator_types
+    const type = initiatorArtifactType
+    if (!adapters || !type || isReplicated) return null
+    const all = Object.keys(adapters)
+    if (!all.some((a) => adapters[a].includes(type))) return null
+    const compatible = all.filter((a) => adapters[a].includes(type))
+    return compatible.length < all.length ? compatible : null
+  })
+
+  let baseFields = $derived.by((): FormConfig => {
+    const fields: FormConfig = $selectedOperation?.form_config || []
+    const adapters = compatibleAdapters
+    if (!adapters) return fields
+    return fields.map((f) =>
+      f.name === 'model' && f.type === 'node'
+        ? { ...f, filter: { ...f.filter, _one_of: { adapter: adapters } } }
+        : f
+    )
+  })
   let adapterFields = $state<FormField[]>([])
   let fieldsConfig = $derived([...baseFields, ...adapterFields])
 
@@ -42,7 +82,7 @@
   let outputType = $derived.by(() => {
     const node = $initiatorNodeStore
     if (!node) return null
-    if (node.type === 'batch') {
+    if (node.type === 'group') {
       const memberIds = node.member_ids || []
       if (memberIds.length > 0 && $cyInstanceStore) {
         const firstMember = $cyInstanceStore.getElementById(memberIds[0])
@@ -84,17 +124,17 @@
   let lastLoadedModelId: string | null = $state(null)
 
   // Gratings sub-selection state (for generation operation)
-  let selectedGratings: NodeListItem[] = $state([])
+  let selectedGratings: GratingListItem[] = $state([])
 
   // Automatically initialize overrides on selected gratings when nodes are chosen
   $effect(() => {
     for (const item of selectedGratings) {
       if (item.node && typeof item.node === 'object') {
-        const nodeObj = item.node as any
+        const nodeObj = item.node as GratingData
         const nodeId = nodeObj.id
         if (item.loadedNodeId !== nodeId) {
           item.loadedNodeId = nodeId
-          const elements = (nodeObj.elements || []) as any[]
+          const elements = (nodeObj.elements || []) as GratingElement[]
           item.overrides = elements.map((el) => {
             const ktype = el.kernel_type
             const meta = el.metadata || {}
@@ -108,7 +148,7 @@
               targetType = 'cluster'
             }
 
-            const params: Record<string, any> = {}
+            const params: Record<string, number | string | boolean> = {}
             if (ktype === 'erode' || ktype === 'dilate') {
               params.radius = meta.radius ?? 1
             } else if (ktype === 'scale') {
@@ -132,7 +172,7 @@
               kernel_type: ktype,
               targetType,
               indicesText: meta.indices ? meta.indices.join(', ') : '',
-              cluster: meta.cluster ?? 0,
+              cluster: typeof meta.cluster === 'number' ? meta.cluster : 0,
               params,
               batchFields: {}
             }
@@ -145,19 +185,19 @@
     }
   })
 
-  function toggleGratingBatchMode(ov: any, fieldName: string): void {
+  function toggleGratingBatchMode(ov: GratingOverride, fieldName: string): void {
     if (!ov.batchFields) {
       ov.batchFields = {}
     }
     ov.batchFields[fieldName] = !ov.batchFields[fieldName]
   }
 
-  let parentBatchId = $derived.by(() => {
+  let parentGroupId = $derived.by(() => {
     const cy = $cyInstanceStore
     const node = $initiatorNodeStore
     if (cy && node && node.parent) {
       const parentNode = cy.$id(node.parent)
-      if (parentNode && parentNode.length > 0 && parentNode.data('type') === 'batch') {
+      if (parentNode && parentNode.length > 0 && parentNode.data('type') === 'group') {
         return node.parent
       }
     }
@@ -165,7 +205,105 @@
   })
 
   let isReplicated = $derived(!!$contextStore)
-  let addToSameBatch = $state(true)
+  let addToSameGroup = $state(true)
+
+  // Generating exemplars for individuals first offers to repeat the generations of exemplars
+  // across their lineages; "Add New Exemplar" falls through to the standard generate form
+  let isExemplarGeneration = $derived.by(() => {
+    const node = $initiatorNodeStore
+    if ($selectedOperation?.name !== 'generate' || isReplicated || !node) return false
+    const type = node.type === 'group' ? node.member_type : node.type
+    return type === 'individual'
+  })
+  let exemplarView = $state<'presets' | 'form'>('presets')
+  let exemplarPresets = $state<ExemplarPreset[]>([])
+  // Individuals the exemplars are generated for (groups expanded by the backend)
+  let exemplarTargetIds = $state<string[]>([])
+  let selectedPresetKeys = $state<string[]>([])
+  let presetsLoading = $state(false)
+  let presetsRequest = 0
+
+  let presetJobCount = $derived(
+    exemplarPresets
+      .filter((preset) => selectedPresetKeys.includes(preset.key))
+      .reduce(
+        (count, preset) =>
+          count + exemplarTargetIds.filter((id) => !preset.covered_ids.includes(id)).length,
+        0
+      )
+  )
+
+  $effect(() => {
+    if (!isExemplarGeneration) return
+    const node = $initiatorNodeStore
+    const selected: string[] = Array.isArray(node?.selectedNodes)
+      ? node.selectedNodes
+          .filter((n: NodeData) => n?.type === 'individual')
+          .map((n: NodeData) => n.id)
+      : []
+    untrack(() => loadExemplarPresets(selected.length > 0 ? selected : [node.id]))
+  })
+
+  async function loadExemplarPresets(ids: string[]): Promise<void> {
+    const request = ++presetsRequest
+    presetsLoading = true
+    exemplarView = 'presets'
+    exemplarPresets = []
+    selectedPresetKeys = []
+    exemplarTargetIds = ids
+    try {
+      const res = await window.api.getExemplarPresets(ids)
+      if (request !== presetsRequest) return
+      if (Array.isArray(res?.individual_ids) && res.individual_ids.length > 0) {
+        exemplarTargetIds = res.individual_ids
+      }
+      exemplarPresets = res?.presets || []
+      // Preselect every preset that some target individual is still missing
+      selectedPresetKeys = exemplarPresets
+        .filter((preset) => exemplarTargetIds.some((id) => !preset.covered_ids.includes(id)))
+        .map((preset) => preset.key)
+    } catch (e: unknown) {
+      if (request !== presetsRequest) return
+      console.error('Failed to load exemplar presets:', e)
+      exemplarPresets = []
+    } finally {
+      if (request === presetsRequest) {
+        presetsLoading = false
+        if (exemplarPresets.length === 0) exemplarView = 'form'
+      }
+    }
+  }
+
+  // Switches to the generate form, starting from the nearest lineage exemplar's settings
+  function addNewExemplar(): void {
+    const nearest = exemplarPresets[0]
+    if (nearest) {
+      const prefill: Record<string, unknown> = {}
+      for (const [key, value] of Object.entries(nearest.params)) {
+        const nodeField = key.endsWith('_id')
+          ? fieldsConfig.find((f) => f.type === 'node' && f.name === key.slice(0, -3))
+          : undefined
+        if (nodeField) {
+          if (value) prefill[nodeField.name] = value
+        } else if (key !== 'gratings') {
+          prefill[key] = value
+        }
+      }
+      formData = { ...formData, ...prefill }
+    }
+    exemplarView = 'form'
+  }
+
+  function runExemplarPresets(): void {
+    for (const preset of exemplarPresets) {
+      if (!selectedPresetKeys.includes(preset.key)) continue
+      for (const id of exemplarTargetIds) {
+        if (preset.covered_ids.includes(id)) continue
+        startJob('GENERATE EXEMPLAR', { ...preset.params, individual_id: id }, 'generate')
+      }
+    }
+    onClose()
+  }
 
   onDestroy(() => {
     // Clear state on destroy
@@ -193,9 +331,9 @@
       adapterFields = []
       selectedGratings = []
       lastLoadedModelId = null
-      addToSameBatch = true
+      addToSameGroup = true
 
-      const baseFieldsConfig = (op.form_config || []) as FormConfig
+      const baseFieldsConfig: FormConfig = op.form_config || []
 
       const { formData: initialData } = initializeFormData(
         baseFieldsConfig,
@@ -204,122 +342,133 @@
       )
 
       // Pre-population for node fields
-      if (op.execution_mode === 'async') {
-        let modelId: string | null = null
-        if ($contextStore?.model_id) {
-          modelId = $contextStore.model_id
-        } else if ($initiatorNodeStore?.base_model_id) {
-          modelId = $initiatorNodeStore.base_model_id
-        } else if ($initiatorNodeStore?.context?.model_id) {
-          modelId = $initiatorNodeStore.context.model_id
-        } else if ($initiatorNodeStore?.type === 'model') {
-          modelId = $initiatorNodeStore.id
+      let modelId: string | null = null
+      if ($contextStore?.model_id) {
+        modelId = $contextStore.model_id
+      } else if ($initiatorNodeStore?.base_model_id) {
+        modelId = $initiatorNodeStore.base_model_id
+      } else if ($initiatorNodeStore?.context?.model_id) {
+        modelId = $initiatorNodeStore.context.model_id
+      } else if ($initiatorNodeStore?.type === 'model') {
+        modelId = $initiatorNodeStore.id
+      } else if ($initiatorNodeStore?.type === 'group' && $cyInstanceStore) {
+        const memberIds = $initiatorNodeStore.member_ids || []
+        if (memberIds.length > 0) {
+          const firstMember = $cyInstanceStore.getElementById(memberIds[0])
+          if (firstMember && firstMember.length > 0) {
+            modelId =
+              firstMember.data('base_model_id') || firstMember.data('context')?.model_id || null
+          }
         }
+      }
 
-        if (modelId) {
-          initialData.model = modelId
-        }
+      if (modelId && baseFieldsConfig.some((f) => f.name === 'model')) {
+        initialData.model = modelId
+      }
 
-        if (isReplicated && $contextStore?.gratings && $cyInstanceStore) {
-          const contextGratings = $contextStore.gratings as Array<{
-            id: string
-            strength: number
-            overrides?: any[]
+      if (isReplicated && $contextStore?.gratings && $cyInstanceStore) {
+        const contextGratings = $contextStore.gratings as Array<{
+          id: string
+          strength: number
+          overrides?: Array<{
+            address: string
+            kernel_type?: string
+            metadata?: {
+              indices?: number[]
+              cluster?: number | null
+              radius?: number
+              scale_factor?: number
+              angle?: number
+              offset_x?: number
+              offset_y?: number
+              factor?: number
+              multiplier?: number
+              scale_x?: number
+              scale_y?: number
+              threshold?: number
+              [key: string]: unknown
+            }
+            batchFields?: Record<string, boolean>
           }>
-          selectedGratings = contextGratings.map((g, index) => {
-            const node = $cyInstanceStore.$id(g.id).data()
-            const item: NodeListItem = {
-              id: index,
-              node: node || g.id,
-              strength: g.strength
-            }
-            if (g.overrides) {
-              item.overrides = g.overrides.map((ov) => {
-                const meta = ov.metadata || {}
-                const el = node?.elements?.find((e: any) => e.address === ov.address)
-                const ktype = el?.kernel_type || 'erode'
-
-                let targetType: 'all' | 'indices' | 'cluster' = 'all'
-                if (meta.indices && Array.isArray(meta.indices) && meta.indices.length > 0) {
-                  targetType = 'indices'
-                } else if (meta.cluster !== null && meta.cluster !== undefined) {
-                  targetType = 'cluster'
-                }
-
-                const params: Record<string, any> = {}
-                if (ktype === 'erode' || ktype === 'dilate') {
-                  params.radius = meta.radius ?? el?.metadata?.radius ?? 1
-                } else if (ktype === 'scale') {
-                  params.scale_factor = meta.scale_factor ?? el?.metadata?.scale_factor ?? 1.0
-                } else if (ktype === 'rotate') {
-                  params.angle = meta.angle ?? el?.metadata?.angle ?? 0.0
-                } else if (ktype === 'translate') {
-                  params.offset_x = meta.offset_x ?? el?.metadata?.offset_x ?? 0.0
-                  params.offset_y = meta.offset_y ?? el?.metadata?.offset_y ?? 0.0
-                } else if (ktype === 'scalar-multiply') {
-                  params.factor =
-                    meta.factor ??
-                    meta.multiplier ??
-                    el?.metadata?.factor ??
-                    el?.metadata?.multiplier ??
-                    1.0
-                } else if (ktype === 'resize') {
-                  params.scale_x = meta.scale_x ?? el?.metadata?.scale_x ?? 1.0
-                  params.scale_y = meta.scale_y ?? el?.metadata?.scale_y ?? 1.0
-                } else if (ktype === 'binary-thresh') {
-                  params.threshold = meta.threshold ?? el?.metadata?.threshold ?? 0.0
-                }
-
-                return {
-                  address: ov.address,
-                  kernel_type: ktype,
-                  targetType,
-                  indicesText: meta.indices ? meta.indices.join(', ') : '',
-                  cluster: meta.cluster ?? 0,
-                  params,
-                  batchFields: ov.batchFields || {}
-                }
-              })
-              item.loadedNodeId = node?.id || g.id
-            }
-            return item
-          })
-        }
-
-        if ($initiatorNodeStore && !isReplicated) {
-          const type = $initiatorNodeStore.type
-          const effectiveType = type === 'batch' ? $initiatorNodeStore.member_type : type
-          if (effectiveType === 'audio') {
-            if (baseFieldsConfig.some((f) => f.name === 'init_audio')) {
-              initialData.init_audio = $initiatorNodeStore
-            }
-            if (baseFieldsConfig.some((f) => f.name === 'source_audio')) {
-              initialData.source_audio = $initiatorNodeStore
-            }
-          } else if (effectiveType === 'latent') {
-            if (baseFieldsConfig.some((f) => f.name === 'init_latent')) {
-              initialData.init_latent = $initiatorNodeStore
-            }
-          } else if (effectiveType === 'grating') {
-            selectedGratings = [
-              { id: -1, node: $initiatorNodeStore as unknown as NodeData, strength: 1.0 }
-            ]
+        }>
+        selectedGratings = contextGratings.map((g, index) => {
+          const node = $cyInstanceStore.$id(g.id).data() as GratingData | undefined
+          const item: GratingListItem = {
+            id: index,
+            node: node || g.id,
+            strength: g.strength
           }
-        }
-      } else {
-        // Synchronous operations fallback
-        if (!isReplicated) {
-          for (const field of baseFieldsConfig) {
-            if (field.type === 'node') {
-              const isAudioInitiator =
-                $initiatorNodeStore?.type === 'audio' ||
-                ($initiatorNodeStore?.type === 'batch' &&
-                  $initiatorNodeStore?.member_type === 'audio')
-              if (field.name === 'source_audio' && isAudioInitiator) {
-                initialData[field.name] = $initiatorNodeStore
+          if (g.overrides) {
+            item.overrides = g.overrides.map((ov) => {
+              const meta = ov.metadata || {}
+              const el = node?.elements?.find((e: GratingElement) => e.address === ov.address)
+              const ktype = el?.kernel_type || ov.kernel_type || 'erode'
+
+              let targetType: 'all' | 'indices' | 'cluster' = 'all'
+              if (meta.indices && Array.isArray(meta.indices) && meta.indices.length > 0) {
+                targetType = 'indices'
+              } else if (meta.cluster !== null && meta.cluster !== undefined) {
+                targetType = 'cluster'
               }
-            }
+
+              const params: Record<string, number | string | boolean> = {}
+              if (ktype === 'erode' || ktype === 'dilate') {
+                params.radius = meta.radius ?? el?.metadata?.radius ?? 1
+              } else if (ktype === 'scale') {
+                params.scale_factor = meta.scale_factor ?? el?.metadata?.scale_factor ?? 1.0
+              } else if (ktype === 'rotate') {
+                params.angle = meta.angle ?? el?.metadata?.angle ?? 0.0
+              } else if (ktype === 'translate') {
+                params.offset_x = meta.offset_x ?? el?.metadata?.offset_x ?? 0.0
+                params.offset_y = meta.offset_y ?? el?.metadata?.offset_y ?? 0.0
+              } else if (ktype === 'scalar-multiply') {
+                params.factor =
+                  meta.factor ??
+                  meta.multiplier ??
+                  el?.metadata?.factor ??
+                  el?.metadata?.multiplier ??
+                  1.0
+              } else if (ktype === 'resize') {
+                params.scale_x = meta.scale_x ?? el?.metadata?.scale_x ?? 1.0
+                params.scale_y = meta.scale_y ?? el?.metadata?.scale_y ?? 1.0
+              } else if (ktype === 'binary-thresh') {
+                params.threshold = meta.threshold ?? el?.metadata?.threshold ?? 0.0
+              }
+
+              return {
+                address: ov.address,
+                kernel_type: ktype,
+                targetType,
+                indicesText: meta.indices ? meta.indices.join(', ') : '',
+                cluster: typeof meta.cluster === 'number' ? meta.cluster : 0,
+                params,
+                batchFields: ov.batchFields || {}
+              }
+            })
+            item.loadedNodeId = node?.id || g.id
           }
+          return item
+        })
+      }
+
+      if ($initiatorNodeStore && !isReplicated) {
+        const type = $initiatorNodeStore.type
+        const effectiveType = type === 'group' ? $initiatorNodeStore.member_type : type
+        if (effectiveType === 'audio') {
+          if (baseFieldsConfig.some((f) => f.name === 'init_audio')) {
+            initialData.init_audio = $initiatorNodeStore
+          }
+          if (baseFieldsConfig.some((f) => f.name === 'source_audio')) {
+            initialData.source_audio = $initiatorNodeStore
+          }
+        } else if (effectiveType === 'latent') {
+          if (baseFieldsConfig.some((f) => f.name === 'init_latent')) {
+            initialData.init_latent = $initiatorNodeStore
+          }
+        } else if (effectiveType === 'grating') {
+          selectedGratings = [
+            { id: -1, node: $initiatorNodeStore as unknown as NodeData, strength: 1.0 }
+          ]
         }
       }
 
@@ -331,14 +480,16 @@
     }
   })
 
-  // Load dynamic adapter fields when model is chosen in async operations
+  // Load dynamic adapter fields when model is chosen in generative operations
   $effect(() => {
     const op = $selectedOperation
     const modelNode = formData.model
     const cy = $cyInstanceStore
 
     untrack(() => {
-      if (op && op.execution_mode === 'async' && modelNode) {
+      const isGenerative =
+        op && (op.category === 'generative' || op.name === 'generate' || op.name === 'invert')
+      if (isGenerative && modelNode) {
         const isObj = typeof modelNode === 'object' && modelNode !== null
         const rawModelId = isObj
           ? String((modelNode as Record<string, unknown>).id || '')
@@ -351,7 +502,7 @@
           ? ((modelNode as Record<string, unknown>).adapter as string | null)
           : null
         let config = isObj
-          ? ((modelNode as Record<string, unknown>).config as Record<string, any> | null)
+          ? ((modelNode as Record<string, unknown>).config as Record<string, unknown> | null)
           : null
 
         if (cy && modelId) {
@@ -361,17 +512,17 @@
               adapter = cyNode.data('adapter') as string | null
             }
             if (!config) {
-              config = cyNode.data('config') as Record<string, any> | null
+              config = cyNode.data('config') as Record<string, unknown> | null
             }
           }
         }
 
         let modelType: string | null = null
-        let diffusionObjective: string = 'v'
+        let diffusionObjective = 'v'
         if (config) {
-          const modelConfig = config.model || {}
-          const diffusionConfig = modelConfig.diffusion || {}
-          diffusionObjective = diffusionConfig.diffusion_objective || 'v'
+          const modelConfig = (config.model || {}) as Record<string, unknown>
+          const diffusionConfig = (modelConfig.diffusion || {}) as Record<string, unknown>
+          diffusionObjective = (diffusionConfig.diffusion_objective as string) || 'v'
           modelType = ['rectified_flow', 'rf_denoiser'].includes(diffusionObjective)
             ? 'rectified_flow'
             : 'k_diffusion'
@@ -409,8 +560,16 @@
       error = null
       await tick()
 
+      if (compatibleAdapters && !compatibleAdapters.includes(adapterName)) {
+        adapterFields = []
+        throw new Error(
+          `${adapterName} models can't ${opName} ${initiatorArtifactType} artifacts. Choose a ${compatibleAdapters.join(' or ')} model.`
+        )
+      }
+
       const config = await window.api.getAdapterConfig(adapterName)
-      const opFields = config?.[opName]
+      const rawOpName = opName.includes(':') ? opName.split(':')[0] : opName
+      const opFields = config?.[rawOpName] || config?.[opName]
       if (opFields && Array.isArray(opFields)) {
         adapterFields = opFields
 
@@ -435,42 +594,53 @@
     }
   }
 
-  function parseSequence(str: string): (string | number)[] {
-    const parts = str.split(',').map((p) => p.trim())
-    const result: (string | number)[] = []
-
-    for (const part of parts) {
-      const rangeMatch = part.match(/^(-?\d+\.?\d*)-(-?\d+\.?\d*):(-?\d+\.?\d*)$/)
-      if (rangeMatch) {
-        const [, start, end, step] = rangeMatch.map(Number)
-        for (let i = start; i <= end; i += step) {
-          result.push(i)
-        }
-        continue
-      }
-
-      const simpleRangeMatch = part.match(/^(-?\d+\.?\d*)-(-?\d+\.?\d*)$/)
-      if (simpleRangeMatch) {
-        const [, start, end] = simpleRangeMatch.map(Number)
-        for (let i = start; i <= end; i++) {
-          result.push(i)
-        }
-        continue
-      }
-
-      if (!isNaN(Number(part))) {
-        result.push(Number(part))
-        continue
-      }
-
-      result.push(part)
-    }
-
-    return result
-  }
-
   function cartesian<T>(...arrays: T[][]): T[][] {
     return arrays.reduce((a, b) => a.flatMap((x) => b.map((y) => [...x, y])), [[]] as T[][])
+  }
+
+  function parseIndices(text: string): number[] {
+    return text
+      .split(',')
+      .map((s) => parseInt(s.trim()))
+      .filter((n) => !isNaN(n))
+  }
+
+  function isValidStrength(item: GratingListItem): boolean {
+    if (item.strengthBatch) {
+      return numericSequenceError(String(item.strength ?? '')) === null
+    }
+    return typeof item.strength === 'number' && isFinite(item.strength)
+  }
+
+  let validGratings = $derived(selectedGratings.filter((l) => l.node))
+  let gratingStrengthsValid = $derived(validGratings.every(isValidStrength))
+
+  // Serializes the selected gratings for the payload. Batched values are left out
+  // here and filled in per combination of the cartesian product.
+  function serializeGratings(items: GratingListItem[]): Array<{
+    id: string
+    strength: number
+    overrides: Array<{ address: string; metadata: Record<string, unknown> }>
+  }> {
+    return items.map((l) => {
+      const id = typeof l.node === 'string' ? l.node : (l.node as GratingData).id
+      const overrides = (l.overrides ?? []).map((o) => {
+        const metadata: Record<string, unknown> = {
+          indices:
+            o.targetType === 'indices' && !o.batchFields?.indicesText
+              ? parseIndices(o.indicesText)
+              : [],
+          cluster: o.targetType === 'cluster' && !o.batchFields?.cluster ? o.cluster : null
+        }
+        for (const paramKey in o.params) {
+          if (!o.batchFields?.[paramKey]) {
+            metadata[paramKey] = o.params[paramKey]
+          }
+        }
+        return { address: o.address, metadata }
+      })
+      return { id, strength: l.strengthBatch ? 1.0 : Number(l.strength ?? 1.0), overrides }
+    })
   }
 
   function execute(): void {
@@ -483,72 +653,99 @@
 
     const basePayload: Record<string, unknown> = { ...payload }
 
-    // Map Gratings if the operation supports them
-    if (op.name === 'generate') {
-      const validGratings = selectedGratings.filter((l) => l.node)
-      const gratings = validGratings.map((l) => {
-        const id = typeof l.node === 'string' ? l.node : l.node?.id
-        const strength = l.strength ?? 1.0
+    // Ensure initiator and context are attached to payload
+    if ($initiatorNodeStore && !isReplicated) {
+      basePayload.initiator = $initiatorNodeStore
+      const initiatorId = $initiatorNodeStore.id
+      const effectiveType =
+        $initiatorNodeStore.type === 'group'
+          ? $initiatorNodeStore.member_type
+          : $initiatorNodeStore.type
 
-        const overrides: any[] = []
-        if (l.overrides) {
-          for (const o of l.overrides) {
-            let indices: number[] = []
-            if (o.targetType === 'indices' && o.indicesText.trim() !== '') {
-              indices = o.indicesText
-                .split(',')
-                .map((s) => parseInt(s.trim()))
-                .filter((n) => !isNaN(n))
-            }
-
-            const metaOverride: Record<string, any> = {
-              indices: o.targetType === 'indices' ? indices : [],
-              cluster: o.targetType === 'cluster' ? o.cluster : null,
-              ...o.params
-            }
-
-            overrides.push({
-              address: o.address,
-              metadata: metaOverride
-            })
+      if (effectiveType === 'audio') {
+        if (op.name !== 'generate') {
+          if (!basePayload.source_audio && !basePayload.source_audio_id) {
+            basePayload.source_audio = initiatorId
+            basePayload.source_audio_id = initiatorId
+          }
+          if (!basePayload.precursor_audio_id) {
+            basePayload.precursor_audio_id = initiatorId
           }
         }
-
-        return {
-          id,
-          strength,
-          overrides
+      } else if (effectiveType === 'bundle') {
+        if (!basePayload.parent_bundle_id) {
+          basePayload.parent_bundle_id = initiatorId
         }
-      })
-      if (gratings.length > 0) {
-        basePayload.gratings = gratings
+      } else if (effectiveType === 'group') {
+        if (!basePayload.parent_group_id) {
+          basePayload.parent_group_id = initiatorId
+        }
+      } else if (effectiveType === 'individual') {
+        if (!basePayload.parent_ids && !basePayload.parents) {
+          if ($initiatorNodeStore.type === 'group') {
+            basePayload.parent_group_id = initiatorId
+          } else {
+            basePayload.parent_ids = [initiatorId]
+          }
+        }
       }
     }
 
-    // Collect batch fields from grating overrides
+    if (basePayload.parents && !basePayload.parent_ids) {
+      basePayload.parent_ids = basePayload.parents
+    }
+
+    if ($contextStore) {
+      if ($contextStore.model_id && !basePayload.model && !basePayload.model_id) {
+        basePayload.model_id = $contextStore.model_id
+      }
+      if (
+        $contextStore.source_audio_id &&
+        !basePayload.source_audio &&
+        !basePayload.source_audio_id &&
+        op.name !== 'generate'
+      ) {
+        basePayload.source_audio = $contextStore.source_audio_id
+        basePayload.source_audio_id = $contextStore.source_audio_id
+        basePayload.precursor_audio_id = $contextStore.source_audio_id
+      }
+    }
+
+    // Map Gratings if the operation supports them
+    const gratings = op.name === 'generate' ? serializeGratings(validGratings) : []
+    if (gratings.length > 0) {
+      basePayload.gratings = gratings
+    }
+
+    // Collect batched grating values. Indices refer to positions in `gratings`
+    // (keys: grating_strength__<g>, grating__<g>__<o>__<field>)
     const gratingBatchParams: Record<string, (string | number)[]> = {}
-    selectedGratings.forEach((l, gIdx) => {
-      if (l.overrides) {
-        l.overrides.forEach((o, oIdx) => {
-          if (o.batchFields) {
-            for (const key in o.batchFields) {
-              if (o.batchFields[key]) {
-                const tempKey = `grating__${gIdx}__${oIdx}__${key}`
-                let rawVal = ''
-                if (key === 'cluster') {
-                  rawVal = String(o.cluster)
-                } else if (key === 'indicesText') {
-                  rawVal = String(o.indicesText)
-                } else {
-                  rawVal = String(o.params[key])
-                }
-                gratingBatchParams[tempKey] = parseSequence(rawVal)
-              }
-            }
+    try {
+      // `gratings` is empty for non-generate operations, in which case nothing is swept
+      validGratings.slice(0, gratings.length).forEach((l, gIdx) => {
+        if (l.strengthBatch) {
+          gratingBatchParams[`grating_strength__${gIdx}`] = parseSequence(String(l.strength ?? ''))
+        }
+        l.overrides?.forEach((o, oIdx) => {
+          for (const key in o.batchFields ?? {}) {
+            if (!o.batchFields?.[key]) continue
+            // Targeting fields only sweep when their target mode is the active one
+            if (key === 'indicesText' && o.targetType !== 'indices') continue
+            if (key === 'cluster' && o.targetType !== 'cluster') continue
+            const rawVal =
+              key === 'cluster'
+                ? String(o.cluster)
+                : key === 'indicesText'
+                  ? String(o.indicesText)
+                  : String(o.params[key])
+            gratingBatchParams[`grating__${gIdx}__${oIdx}__${key}`] = parseSequence(rawVal)
           }
         })
-      }
-    })
+      })
+    } catch (e: unknown) {
+      onError({ title: 'Invalid Sequence', message: e instanceof Error ? e.message : String(e) })
+      return
+    }
 
     const hasBatch = batchFields.size > 0 || Object.keys(gratingBatchParams).length > 0
 
@@ -561,12 +758,12 @@
         basePayload.model_id = basePayload.model
       }
 
-      if (parentBatchId && isReplicated && addToSameBatch) {
-        basePayload.batch_id = parentBatchId
+      if (parentGroupId && isReplicated && addToSameGroup) {
+        basePayload.group_id = parentGroupId
       }
 
       // Single run
-      runJob(jobName, basePayload, op.name, op.execution_mode)
+      runJob(jobName, basePayload, op.name)
       onClose()
       return
     }
@@ -585,72 +782,35 @@
         }
       }
 
-      // Construct a clean representation of gratings with non-batched parameters
-      const staticGratings = selectedGratings
-        .filter((l) => l.node)
-        .map((l) => {
-          const id = typeof l.node === 'string' ? l.node : l.node?.id
-          const strength = l.strength ?? 1.0
-
-          const overrides: any[] = []
-          if (l.overrides) {
-            for (const o of l.overrides) {
-              let indices: number[] = []
-              if (
-                o.targetType === 'indices' &&
-                !o.batchFields?.indicesText &&
-                o.indicesText.trim() !== ''
-              ) {
-                indices = o.indicesText
-                  .split(',')
-                  .map((s) => parseInt(s.trim()))
-                  .filter((n) => !isNaN(n))
-              }
-
-              const metaOverride: Record<string, any> = {
-                indices: o.targetType === 'indices' && !o.batchFields?.indicesText ? indices : [],
-                cluster: o.targetType === 'cluster' && !o.batchFields?.cluster ? o.cluster : null
-              }
-
-              for (const paramKey in o.params) {
-                if (!o.batchFields?.[paramKey]) {
-                  metaOverride[paramKey] = o.params[paramKey]
-                }
-              }
-
-              overrides.push({
-                address: o.address,
-                metadata: metaOverride
-              })
-            }
-          }
-
-          return {
-            id,
-            strength,
-            overrides
-          }
-        })
+      // `gratings` is the payload grating list with batched values left out
+      delete staticParams.gratings
 
       const paramNames = Object.keys(batchParams)
       const paramValues = Object.values(batchParams)
+      const emptyParam = paramNames.find((name) => batchParams[name].length === 0)
+      if (emptyParam) {
+        throw new Error(`Sequence for "${emptyParam}" has no values.`)
+      }
       const combinations = cartesian(...paramValues)
 
       console.log(`Starting batch execution with ${combinations.length} combinations.`)
 
-      const batchId =
-        parentBatchId && isReplicated && addToSameBatch
-          ? parentBatchId
+      const groupId =
+        parentGroupId && isReplicated && addToSameGroup
+          ? parentGroupId
           : `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
 
       combinations.forEach((combination) => {
-        // Deep clone static gratings so each combination gets its own overrides
-        const combinationGratings = JSON.parse(JSON.stringify(staticGratings))
+        // Deep clone gratings so each combination gets its own strengths and overrides
+        const combinationGratings = JSON.parse(JSON.stringify(gratings))
         const batchPayload: Record<string, unknown> = { ...staticParams }
 
         combination.forEach((value, index) => {
           const paramName = paramNames[index]
-          if (paramName.startsWith('grating__')) {
+          if (paramName.startsWith('grating_strength__')) {
+            const gIdx = parseInt(paramName.split('__')[1])
+            combinationGratings[gIdx].strength = value
+          } else if (paramName.startsWith('grating__')) {
             const [, gIdxStr, oIdxStr, key] = paramName.split('__')
             const gIdx = parseInt(gIdxStr)
             const oIdx = parseInt(oIdxStr)
@@ -689,9 +849,9 @@
           batchPayload.model_id = batchPayload.model
         }
 
-        batchPayload.batch_id = batchId
+        batchPayload.group_id = groupId
 
-        runJob(jobName, batchPayload, op.name, op.execution_mode)
+        runJob(jobName, batchPayload, op.name)
       })
 
       onClose()
@@ -706,8 +866,19 @@
     }
   }
 
-  function runJob(jobName: string, payload: unknown, opName: string, mode: 'sync' | 'async'): void {
-    startExecution(jobName, payload, opName, mode).catch((err: unknown) => {
+  function runJob(jobName: string, payload: unknown, opName: string): void {
+    // A new exemplar from the form is generated for every target individual
+    if (isExemplarGeneration && exemplarTargetIds.length > 0) {
+      for (const id of exemplarTargetIds) {
+        startJob(jobName, { ...(payload as Record<string, unknown>), individual_id: id }, opName)
+      }
+      return
+    }
+    startJob(jobName, payload, opName)
+  }
+
+  function startJob(jobName: string, payload: unknown, opName: string): void {
+    startExecution(jobName, payload, opName).catch((err: unknown) => {
       console.error('Execution failed:', err)
       onError({
         title: 'Execution Failed',
@@ -717,7 +888,15 @@
   }
 </script>
 
-{#snippet gratingExtra(item: any, index: number)}
+{#snippet gratingExtra(rawItem: NodeListItem)}
+  {@const item = rawItem as GratingListItem}
+  {@const gratingNode = (
+    typeof item.node === 'object' && item.node !== null
+      ? item.node
+      : typeof item.node === 'string' && $cyInstanceStore
+        ? $cyInstanceStore.$id(item.node).data()
+        : null
+  ) as GratingData | null}
   {#if item.overrides && item.overrides.length > 0}
     <div class="grating-overrides-form">
       {#each item.overrides as ov, ovIdx (ov.address)}
@@ -738,7 +917,7 @@
               </div>
               <div class="sub-input-row">
                 {#if ov.batchFields?.radius}
-                  <input type="text" bind:value={ov.params.radius} placeholder="e.g. 1, 2, 3-5" />
+                  <input type="text" bind:value={ov.params.radius} placeholder="e.g. 1, 2, 3..5" />
                 {:else}
                   <input type="range" min="1" max="15" step="1" bind:value={ov.params.radius} />
                 {/if}
@@ -760,7 +939,7 @@
                   <input
                     type="text"
                     bind:value={ov.params.scale_factor}
-                    placeholder="e.g. 0.5, 1.0, 1.2-2.0:0.2"
+                    placeholder="e.g. 0.5, 1.0, 1.2..2.0:0.2"
                   />
                 {:else}
                   <input type="number" step="0.1" bind:value={ov.params.scale_factor} />
@@ -783,7 +962,7 @@
                   <input
                     type="text"
                     bind:value={ov.params.angle}
-                    placeholder="e.g. 0, 90, 180-360:90"
+                    placeholder="e.g. 0, 45, 90..360:90"
                   />
                 {:else}
                   <input type="number" step="1.0" bind:value={ov.params.angle} />
@@ -857,7 +1036,7 @@
                   <input
                     type="text"
                     bind:value={ov.params.factor}
-                    placeholder="e.g. 0.5, 1.0, 1.5-3.0:0.5"
+                    placeholder="e.g. -1, 0.5, 1.5..3.0:0.5"
                   />
                 {:else}
                   <input type="number" step="0.1" bind:value={ov.params.factor} />
@@ -969,7 +1148,7 @@
                 >
                   Explicit Channels
                 </button>
-                {#if item.node && typeof item.node === 'object' && item.node.elements?.[ovIdx]?.metadata?.cluster_map}
+                {#if gratingNode?.elements?.[ovIdx]?.metadata?.cluster_map}
                   <button
                     type="button"
                     class="sub-tab-btn"
@@ -1002,15 +1181,18 @@
                 </div>
               </div>
             {:else if ov.targetType === 'cluster'}
-              {@const clusterMap = item.node.elements?.[ovIdx]?.metadata?.cluster_map}
+              {@const clusterMap =
+                (gratingNode?.elements?.[ovIdx]?.metadata?.cluster_map as
+                  | Array<{ cluster_index?: number | string }>
+                  | undefined) ?? []}
               {@const maxClusterId = Math.max(
                 0,
-                ...(clusterMap || []).map((item) => Number(item?.cluster_index ?? 0))
+                ...clusterMap.map((entry) => Number(entry?.cluster_index ?? 0))
               )}
               <span class="sub-label">Target Cluster ID (0 to {maxClusterId})</span>
               <div class="sub-input-row">
                 {#if ov.batchFields?.cluster}
-                  <input type="text" bind:value={ov.cluster} placeholder="e.g. 0, 1, 2, 0-4" />
+                  <input type="text" bind:value={ov.cluster} placeholder="e.g. 0, 2, 4..6" />
                 {:else}
                   <input type="number" min="0" max={maxClusterId} bind:value={ov.cluster} />
                 {/if}
@@ -1035,14 +1217,40 @@
 
 <div class="view-container">
   <div class="view-content">
-    {#if isLoading}
+    {#if isExemplarGeneration && exemplarView === 'presets'}
+      <p class="op-description">
+        Repeat the generations of exemplars from this lineage on the selected
+        {exemplarTargetIds.length > 1 ? `${exemplarTargetIds.length} individuals` : 'individual'},
+        or add a new exemplar.
+      </p>
+      {#if presetsLoading}
+        <p class="centered-text">Finding lineage exemplars...</p>
+      {:else}
+        <ExemplarPresetList
+          presets={exemplarPresets}
+          targetIds={exemplarTargetIds}
+          bind:selectedKeys={selectedPresetKeys}
+          onAddNew={addNewExemplar}
+        />
+      {/if}
+    {:else if isLoading}
       <p class="centered-text">Loading configuration...</p>
     {:else if error}
       <div class="error-message">
         <p>Error: {error}</p>
       </div>
     {:else if $selectedOperation}
+      {#if isExemplarGeneration && exemplarPresets.length > 0}
+        <button class="back-btn" onclick={() => (exemplarView = 'presets')}>
+          ← Lineage exemplars
+        </button>
+      {/if}
       <p class="op-description">{activeDescription || 'No description available.'}</p>
+      {#if isExemplarGeneration && exemplarTargetIds.length > 1}
+        <p class="op-description">
+          The new exemplar will be generated for each of the {exemplarTargetIds.length} selected individuals.
+        </p>
+      {/if}
 
       {#if fieldsConfig && fieldsConfig.length > 0}
         <DynamicForm
@@ -1075,16 +1283,16 @@
         </div>
       {/if}
 
-      {#if parentBatchId && isReplicated}
+      {#if parentGroupId && isReplicated}
         <div class="options">
           <label>
-            <input type="checkbox" bind:checked={addToSameBatch} disabled={isRunning} />
-            Add new artifact to the same batch
+            <input type="checkbox" bind:checked={addToSameGroup} disabled={isRunning} />
+            Add new artifact to the same group
           </label>
         </div>
       {/if}
 
-      {#if (!fieldsConfig || fieldsConfig.length === 0) && !(parentBatchId && isReplicated)}
+      {#if (!fieldsConfig || fieldsConfig.length === 0) && !(parentGroupId && isReplicated)}
         <p class="centered-text">No parameters needed for this operation.</p>
       {/if}
     {:else}
@@ -1095,20 +1303,31 @@
   <div class="panel-actions">
     <button onclick={onClose} disabled={isRunning}>Cancel</button>
 
-    <button
-      class="primary"
-      onclick={execute}
-      disabled={isLoading ||
-        !$selectedOperation ||
-        (fieldsConfig?.length > 0 && !isFormValid) ||
-        isRunning}
-    >
-      {#if isRunning}
-        Running...
-      {:else}
-        Run
-      {/if}
-    </button>
+    {#if isExemplarGeneration && exemplarView === 'presets'}
+      <button
+        class="primary"
+        onclick={runExemplarPresets}
+        disabled={presetsLoading || presetJobCount === 0}
+      >
+        {presetJobCount === 1 ? 'Generate 1 Exemplar' : `Generate ${presetJobCount} Exemplars`}
+      </button>
+    {:else}
+      <button
+        class="primary"
+        onclick={execute}
+        disabled={isLoading ||
+          !$selectedOperation ||
+          (fieldsConfig?.length > 0 && !isFormValid) ||
+          !gratingStrengthsValid ||
+          isRunning}
+      >
+        {#if isRunning}
+          Running...
+        {:else}
+          Run
+        {/if}
+      </button>
+    {/if}
   </div>
 </div>
 
@@ -1128,6 +1347,20 @@
     font-size: 0.9rem;
     margin-bottom: 1.5rem;
     line-height: 1.4;
+  }
+  .back-btn {
+    min-width: 0;
+    min-height: 0;
+    padding: 0.25rem 0.5rem;
+    margin-bottom: 0.75rem;
+    font-size: 0.85rem;
+    background: none;
+    border: none;
+    color: var(--color-text-muted, #aaa);
+    cursor: pointer;
+  }
+  .back-btn:hover {
+    color: var(--color-overlay-text);
   }
   .centered-text {
     text-align: center;
@@ -1216,21 +1449,6 @@
     color: var(--color-text-muted, #aaa);
     font-size: 0.8rem;
     font-weight: 500;
-  }
-  .sub-label input[type='number'],
-  .sub-label input[type='text'] {
-    width: 100%;
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid var(--color-overlay-border-primary, rgba(255, 255, 255, 0.1));
-    color: var(--color-overlay-text);
-    padding: 0.35rem;
-    border-radius: 0.25rem;
-    margin-top: 0.25rem;
-    font-size: 0.8rem;
-  }
-  .sub-label input[type='range'] {
-    width: 100%;
-    margin-top: 0.25rem;
   }
   .sub-target-selector {
     display: flex;

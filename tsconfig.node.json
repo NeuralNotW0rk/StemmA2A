@@ -4,6 +4,7 @@
   "compilerOptions": {
     "composite": true,
     "types": ["electron-vite/node"],
-    "ignoreDeprecations": "6.0"
+    "moduleResolution": "bundler",
+    "ignoreDeprecations": "5.0"
   }
 }

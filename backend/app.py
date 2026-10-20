@@ -1,25 +1,38 @@
 # backend/app.py
+import sys
+from pathlib import Path
+
+# Add sibling neutral-selection directory to sys.path dynamically
+sibling_neutral_selection = Path(__file__).parent.parent.parent / "neutral-selection"
+if sibling_neutral_selection.exists() and str(sibling_neutral_selection.resolve()) not in sys.path:
+    sys.path.insert(0, str(sibling_neutral_selection.resolve()))
+
 import io
 import traceback
-from pathlib import Path
 import os
 import json
 import random
 import string
 import logging
 import shutil
+import uuid
+import copy
+import contextvars
 from dataclasses import replace
 
 from dotenv import load_dotenv
 # Load .env file from the project root (parent directory)
 load_dotenv(Path(__file__).parent.parent / ".env")
 
+import time
 import threading
+import asyncio
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 import torch
 import torchaudio
 import numpy as np
+from PIL import Image as PILImage
 from sklearn.neighbors import NearestNeighbors
 from sklearn.metrics.pairwise import cosine_distances
 from pydantic import ValidationError
@@ -31,23 +44,53 @@ from param_graph.elements.artifacts.audio_element import Audio
 from param_graph.elements.artifacts.image_element import Image
 from param_graph.elements.artifacts.grating_element import Grating
 from param_graph.elements.artifacts.latent_element import Latent
-from param_graph.elements.base_elements import Asset
-from param_graph.elements.collections.batch_element import Batch
+from param_graph.elements.base_elements import Asset, Artifact, GraphElement
+from param_graph.elements.collections.group_element import Group
+from param_graph.elements.artifacts.bundle_element import Bundle
 from param_graph.elements.collections.directory_element import Directory
 from param_graph.elements.local_path import LocalPath
 from param_graph.utils import save_artifact_asset, resolve_element
+from param_graph.transfer import collect_subgraph, write_subgraph
+from param_graph.rooms import placement_room, room_of, break_out, dissolve
+from coolname import generate_slug
 from engine.engine_provider import EngineProvider
+from engine.results import is_multi_result, result_artifacts, root_ids
 from engine.encoders.clap_encoder import CLAPEncoder
 from engine.encoders.clip_encoder import CLIPEncoder
 from utils.audio import load_audio, save_audio_to_buffer, save_audio
 from utils.form import create_dynamic_model
 from utils.uid import XXH3_64, path_from_uid
 from utils.migrations import run_global_migrations, run_project_migrations
+from utils.log_capture import start_log_capture
 from utils.semantic_interrogation import SemanticInterrogator
 
-from operations.registry import SyncRegistry
+from operations import (
+    Operation,
+    SyncOperation,
+    OperationRegistry,
+    SyncRegistry,
+    operation_registry,
+    sync_registry,
+    TaskManager,
+    task_manager,
+    dispatch_operation,
+)
 from diffracture import Actant
 from diffracture.topology.grating import Grating as DiffractureGrating
+
+from param_graph.elements.artifacts.individual_element import Individual
+from param_graph.elements.artifacts.bundle_element import Bundle
+from param_graph.elements.collections.group_element import Group
+
+from operations.evolution import (
+    wrap_precursor_as_individual,
+    express_individual_to_grating_artifact,
+    dispatch_scatter_operation,
+    dispatch_recombine_operation,
+    extract_individual_parent_ids,
+    collect_exemplar_presets,
+)
+from operations.grating import dispatch_create_grating_operation
 
 app = Flask(__name__)
 CORS(app)
@@ -110,15 +153,23 @@ SIMILARITY_GROUPS = {
 param_graph: ParameterGraph = None
 execution_url = os.environ.get("ENGINE_URL")
 uid_generator = XXH3_64()
-sync_registry = SyncRegistry()
+sync_registry = operation_registry
 # EngineProvider is now initialized after a project is loaded
 engine_provider: EngineProvider = None
 
 # Context storage for background jobs
 active_jobs = {}
-local_jobs = {}
+local_jobs = task_manager.jobs
 
 graph_lock = threading.Lock()
+# The room the frontend is viewing; new top-level elements are placed there (see param_graph.rooms)
+view_room: str | None = None
+
+
+@app.before_request
+def set_placement_room():
+    # Set on every request so a value never leaks between requests sharing a thread
+    placement_room.set(view_room if param_graph is not None and param_graph.G.has_node(view_room or '') else None)
 
 
 # --------------------
@@ -158,7 +209,7 @@ def load_project():
     """
     Load a project from an absolute path.
     """
-    global param_graph
+    global param_graph, view_room
     
     try:
         data = request.get_json()
@@ -176,6 +227,7 @@ def load_project():
         with graph_lock:
             run_project_migrations(project_path)
             param_graph = ParameterGraph(str(project_path))
+            view_room = None
             initialize_engine(str(project_path))
 
             if param_graph.load():
@@ -183,11 +235,13 @@ def load_project():
                     "message": f"Project '{project_path.name}' loaded successfully.",
                     "project_name": project_path.name,
                     "project_path": str(project_path),
+                    "origin": param_graph.origin,
                     "success": True
                 })
             
-            # If load fails, it might be a directory without a project file yet.
-            # We can still "load" it to create one.
+            # If load fails, it is a new/uninitialized directory.
+            # Initialize project_name and save initial graph.
+            param_graph.project_name = project_path.name
             param_graph.save()
 
         return jsonify({
@@ -207,7 +261,7 @@ def create_project():
     """
     Create a new project at a given absolute path.
     """
-    global param_graph
+    global param_graph, view_room
     
     try:
         data = request.get_json()
@@ -227,6 +281,7 @@ def create_project():
         with graph_lock:
             param_graph = ParameterGraph(str(project_path))
             param_graph.project_name = final_project_name
+            view_room = None
             initialize_engine(str(project_path))
             param_graph.save()
 
@@ -252,6 +307,7 @@ def get_project():
             "message": "success",
             "project_name": Path(param_graph.root).name,
             "project_path": str(param_graph.root),
+            "origin": param_graph.origin,
             "success": True
         })
     else:
@@ -259,6 +315,124 @@ def get_project():
             "message": "no project selected",
             "success": False
         })
+
+
+@app.route("/fork_project", methods=["POST"])
+def fork_project():
+    """
+    Copies the given elements, with everything they depend on, into a new project next to the
+    current one ("<project>-<slug>"), recording where it came from. The current project is left
+    untouched and stays loaded; the caller decides when to switch.
+    """
+    if param_graph is None:
+        return jsonify({"error": "No project loaded"}), 400
+
+    data = request.get_json() or {}
+    element_ids = data.get("element_ids") or []
+    include_lineage = data.get("include_lineage", True)
+    if not element_ids:
+        return jsonify({"error": "element_ids is required"}), 400
+
+    try:
+        # Snapshot under the lock; copying files and writing the fork happen outside it
+        with graph_lock:
+            subgraph = collect_subgraph(param_graph, element_ids, include_lineage=include_lineage)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+    source_root = Path(param_graph.root)
+    name = f"{source_root.name}-{generate_slug(2)}"
+    while (source_root.parent / name).exists():
+        name = f"{source_root.name}-{generate_slug(2)}"
+    project_path = source_root.parent / name
+
+    try:
+        project_path.mkdir(parents=True)
+        target = ParameterGraph(str(project_path))
+        target.project_name = name
+        target.origin = {
+            "project_name": subgraph.source_name,
+            "project_path": str(subgraph.source_root),
+            "element_ids": subgraph.selected_ids,
+            "created": int(time.time()),
+        }
+        report = write_subgraph(subgraph, target)
+        # Detached exemplars are plain artifacts now, so their inputs get explicit edges
+        for element_id in report["converted_exemplars"]:
+            link_artifact_dependencies(target.get_element(element_id), target)
+        target.save()
+    except Exception as e:
+        print(f"Failed to fork elements into a project: {e}")
+        traceback.print_exc()
+        shutil.rmtree(project_path, ignore_errors=True)
+        return jsonify({"error": str(e)}), 500
+
+    return jsonify({
+        "message": f"Forked {report['element_count']} elements into '{name}'.",
+        "project_name": name,
+        "project_path": str(project_path),
+        **report,
+        "success": True
+    })
+
+
+# --------------------
+#  Rooms
+# --------------------
+
+@app.route("/rooms", methods=["POST"])
+def create_room():
+    """Breaks the given elements out of their view into a new room, shown there as a box."""
+    if param_graph is None:
+        return jsonify({"error": "No project loaded"}), 400
+
+    data = request.get_json() or {}
+    element_ids = data.get("element_ids") or []
+    if not element_ids:
+        return jsonify({"error": "element_ids is required"}), 400
+
+    try:
+        with graph_lock:
+            room_id = break_out(param_graph, element_ids, name=data.get("name") or generate_slug(2))
+            param_graph.save()
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+    return jsonify({"room_id": room_id, "success": True})
+
+
+@app.route("/rooms/<room_id>/dissolve", methods=["POST"])
+def dissolve_room(room_id):
+    """Rejoins a room's members with the view the room sits in."""
+    global view_room
+    if param_graph is None:
+        return jsonify({"error": "No project loaded"}), 400
+
+    try:
+        with graph_lock:
+            outer = param_graph.G.nodes[room_id].get("room") if param_graph.G.has_node(room_id) else None
+            members = dissolve(param_graph, room_id)
+            param_graph.save()
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+    if view_room == room_id:
+        view_room = outer
+    return jsonify({"member_ids": members, "success": True})
+
+
+@app.route("/rooms/view", methods=["POST"])
+def set_view_room():
+    """Records the room the frontend is viewing (None for the main graph) for placing new elements."""
+    global view_room
+    if param_graph is None:
+        return jsonify({"error": "No project loaded"}), 400
+
+    room_id = (request.get_json() or {}).get("room_id")
+    if room_id and param_graph.G.nodes.get(room_id, {}).get("type") != "room":
+        return jsonify({"error": f"'{room_id}' is not a room."}), 400
+    view_room = room_id
+    return jsonify({"room_id": view_room, "success": True})
 
 
 # --------------------
@@ -285,9 +459,9 @@ def get_graph():
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/graph/create_batch", methods=["POST"])
-def batch_elements():
-    """Create a batch from a selection of nodes."""
+@app.route("/graph/create_group", methods=["POST"])
+def group_elements():
+    """Create a group from a selection of nodes."""
     if param_graph is None:
         return jsonify({"error": "No project loaded"}), 400
 
@@ -297,7 +471,7 @@ def batch_elements():
 
         # 1. Create a new collection element
         if member_ids:
-            batch_id = uid_generator.from_uids(member_ids)
+            group_id = uid_generator.from_uids(member_ids)
             member_type = None
             for member_id in member_ids:
                 member = param_graph.get_element(member_id)
@@ -307,60 +481,60 @@ def batch_elements():
                     return jsonify({"error": "All members must be of the same type"}), 400
         else:
             import uuid
-            batch_id = uid_generator.from_string(str(uuid.uuid4()))
+            group_id = uid_generator.from_string(str(uuid.uuid4()))
             member_type = None
 
         with graph_lock:
-            batch = Batch(id=batch_id, member_ids=member_ids, member_type=member_type)
-            param_graph.add_element(batch)
+            group = Group(id=group_id, member_ids=member_ids, member_type=member_type)
+            param_graph.add_element(group)
 
             # Update parents
             for member_id in member_ids:
-                param_graph.update_element(member_id, {"parent": batch_id})
+                param_graph.update_element(member_id, {"parent": group_id})
             
-            update_batch_labels(batch_id)
+            update_group_labels(group_id)
             param_graph.save()
             
-            updated_batch = param_graph.get_element(batch_id).to_dict()
+            updated_group = param_graph.get_element(group_id).to_dict()
 
         return jsonify({
-            "message": "Batch created successfully",
-            "collection": updated_batch,
+            "message": "Group created successfully",
+            "collection": updated_group,
             "success": True
         })
 
     except Exception as e:
-        print(f"Failed to create batch: {e}")
+        print(f"Failed to create group: {e}")
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
 
-@app.route("/graph/update_batch", methods=["PUT", "POST"])
-@app.route("/graph/update_batch/<batch_id>", methods=["PUT", "POST"])
-def update_batch_endpoint(batch_id=None):
-    """Update an existing batch with new members."""
+@app.route("/graph/update_group", methods=["PUT", "POST"])
+@app.route("/graph/update_group/<group_id>", methods=["PUT", "POST"])
+def update_group_endpoint(group_id=None):
+    """Update an existing group with new members."""
     if param_graph is None:
         return jsonify({"error": "No project loaded"}), 400
 
     try:
         data = request.get_json()
         
-        # Handle alternative route where batch_id is in the body
-        if batch_id is None:
-            batch_id = data.get("batch_id")
+        # Handle alternative route where group_id is in the body
+        if group_id is None:
+            group_id = data.get("group_id") or data.get("batch_id")
             
-        if not batch_id:
-            return jsonify({"error": "batch_id is required"}), 400
+        if not group_id:
+            return jsonify({"error": "group_id is required"}), 400
             
         new_member_ids = data.get("member_ids", [])
 
         with graph_lock:
-            if not param_graph.G.has_node(batch_id):
-                return jsonify({"error": f"Batch {batch_id} not found"}), 404
+            if not param_graph.G.has_node(group_id):
+                return jsonify({"error": f"Group {group_id} not found"}), 404
 
-            batch_node_attrs = param_graph.G.nodes[batch_id]
-            if batch_node_attrs.get('type') != 'batch':
-                return jsonify({"error": f"Node {batch_id} is not a batch"}), 400
+            group_node_attrs = param_graph.G.nodes[group_id]
+            if group_node_attrs.get('type') != 'group':
+                return jsonify({"error": f"Node {group_id} is not a group"}), 400
 
             # Validate types of new members
             member_type = None
@@ -371,7 +545,7 @@ def update_batch_endpoint(batch_id=None):
                 elif member_type != member.type:
                     return jsonify({"error": "All members must be of the same type"}), 400
 
-            old_member_ids = batch_node_attrs.get('member_ids', [])
+            old_member_ids = group_node_attrs.get('member_ids', [])
 
             # Unlink removed members
             for m_id in old_member_ids:
@@ -380,25 +554,25 @@ def update_batch_endpoint(batch_id=None):
 
             # Link new members
             for m_id in new_member_ids:
-                param_graph.update_element(m_id, {"parent": batch_id})
+                param_graph.update_element(m_id, {"parent": group_id})
 
-            # Update batch properties
-            batch_node_attrs['member_ids'] = new_member_ids
-            batch_node_attrs['member_type'] = member_type
+            # Update group properties
+            group_node_attrs['member_ids'] = new_member_ids
+            group_node_attrs['member_type'] = member_type
             
-            update_batch_labels(batch_id)
+            update_group_labels(group_id)
             param_graph.save()
             
-            updated_batch = param_graph.get_element(batch_id).to_dict()
+            updated_group = param_graph.get_element(group_id).to_dict()
 
         return jsonify({
-            "message": "Batch updated successfully",
-            "collection": updated_batch,
+            "message": "Group updated successfully",
+            "collection": updated_group,
             "success": True
         })
 
     except Exception as e:
-        print(f"Failed to update batch: {e}")
+        print(f"Failed to update group: {e}")
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
@@ -419,21 +593,25 @@ async def get_shared_models():
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
-@app.route("/register_model", methods=["POST"])
-async def import_model():
-    """Register a model by providing absolute paths to its files."""
-    if param_graph is None:
-        return jsonify({"error": "No project loaded"}), 400
-    
+async def _import_model_task(job_id: str, data: dict) -> None:
     try:
-        data = request.get_json()
+        local_jobs[job_id]["status"] = "running"
+        local_jobs[job_id]["progress"] = {
+            "value": 10,
+            "total": 100,
+            "description": "Validating model configuration..."
+        }
 
-        # Check if we are registering a pre-constructed model element (e.g., shared model)
+        # Check if registering pre-constructed model element (e.g. shared model)
         if "model_element" in data:
             model_dict = data["model_element"]
             model_artifact = resolve_element(model_dict)
-            
-            # Populate layers if missing
+
+            local_jobs[job_id]["progress"] = {
+                "value": 40,
+                "total": 100,
+                "description": "Extracting model layers..."
+            }
             if not getattr(model_artifact, 'layers', None):
                 try:
                     engine = engine_provider.get_engine()
@@ -442,80 +620,144 @@ async def import_model():
                 except Exception as layer_err:
                     print(f"Warning: Failed to extract layers for shared model during registration: {layer_err}")
 
+            local_jobs[job_id]["progress"] = {
+                "value": 80,
+                "total": 100,
+                "description": "Registering model in graph..."
+            }
             with graph_lock:
                 param_graph.add_element(model_artifact)
                 param_graph.save()
-            return jsonify({
+
+            local_jobs[job_id]["status"] = "completed"
+            local_jobs[job_id]["progress"] = {
+                "value": 100,
+                "total": 100,
+                "description": "Shared model registered successfully."
+            }
+            local_jobs[job_id]["result"] = {
                 "message": "Shared model registered successfully",
-                "success": True
-            })
+                "model": model_artifact.to_dict(),
+                "node_id": model_artifact.id,
+                "id": model_artifact.id
+            }
+            return
 
-        adapter_name = data.pop("adapter")
-
-
-        config_path = data.get("config_path")
-        checkpoint_path = data.get("checkpoint_path")
+        adapter_name = data.pop("adapter", None) or data.pop("model_type", None)
+        if not adapter_name:
+            raise ValueError("adapter (or model_type) is required")
+        config_path = data.get("config_path", "")
+        checkpoint_path = data.get("checkpoint_path", "")
 
         if adapter_name == "stylegan2":
-            if not checkpoint_path:
-                return jsonify({"error": "checkpoint_path is required"}), 400
             config_path = config_path or ""
         else:
             if not config_path or not checkpoint_path:
-                return jsonify({"error": "config_path and checkpoint_path are required"}), 400
+                raise ValueError("config_path and checkpoint_path are required")
 
-        # Paths are now expected to be absolute and valid on the server's filesystem.
-        if config_path:
-            data["config_path"] = str(Path(config_path))
-        else:
-            data["config_path"] = ""
-        data["checkpoint_path"] = str(Path(checkpoint_path))
+        data["config_path"] = str(Path(config_path)) if config_path else ""
+        data["checkpoint_path"] = str(Path(checkpoint_path)) if checkpoint_path else ""
 
+        local_jobs[job_id]["progress"] = {
+            "value": 30,
+            "total": 100,
+            "description": "Initializing model weights and adapter..."
+        }
         engine = engine_provider.get_engine()
         model_artifact = await engine.register_model(adapter_name, **data)
 
-        # Populate layers list on model registration
+        local_jobs[job_id]["progress"] = {
+            "value": 60,
+            "total": 100,
+            "description": "Extracting parameter layer topology..."
+        }
         try:
             layers = await engine.get_model_layers(model_artifact)
             model_artifact.layers = layers
         except Exception as layer_err:
             print(f"Warning: Failed to extract layers during model registration: {layer_err}")
 
+        local_jobs[job_id]["progress"] = {
+            "value": 85,
+            "total": 100,
+            "description": "Saving model to parameter graph..."
+        }
         with graph_lock:
             param_graph.add_element(model_artifact)
             param_graph.save()
-        
-        return jsonify({
-            "message": "Model registered successfully",
-            "success": True
-        })
-        
-    except Exception as e:
-        print(f"Failed to import model: {e}")
-        traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
 
-@app.route("/export_shared_model", methods=["POST"])
-async def export_shared_model():
-    """
-    Exports a registered model to a shared_models_dummy.json file
-    in the active project's root folder.
-    """
-    if param_graph is None:
+        local_jobs[job_id]["status"] = "completed"
+        local_jobs[job_id]["progress"] = {
+            "value": 100,
+            "total": 100,
+            "description": "Model registered successfully."
+        }
+        local_jobs[job_id]["result"] = {
+            "message": "Model registered successfully",
+            "model": model_artifact.to_dict(),
+            "node_id": model_artifact.id,
+            "id": model_artifact.id
+        }
+
+    except Exception as e:
+        print(f"Failed in async model registration: {e}")
+        traceback.print_exc()
+        local_jobs[job_id]["status"] = "failed"
+        local_jobs[job_id]["progress"] = None
+        local_jobs[job_id]["error"] = str(e)
+        local_jobs[job_id]["traceback"] = traceback.format_exc()
+
+
+@app.route("/register_model", methods=["POST"])
+async def import_model():
+    """Register a model asynchronously in a local background task."""
+    if param_graph is None or engine_provider is None:
         return jsonify({"error": "No project loaded"}), 400
 
     try:
-        data = request.get_json()
-        model_id = data.get("model_id")
-        if not model_id:
-            return jsonify({"error": "model_id is required"}), 400
+        data = request.get_json() or {}
+        job_id = f"import_model_{uuid.uuid4().hex[:12]}"
+        local_jobs[job_id] = {
+            "status": "pending",
+            "progress": {"value": 0, "total": 100, "description": "Starting model import..."},
+            "result": None,
+            "error": None,
+            "traceback": None,
+            "name": "Import Model"
+        }
+
+        threading.Thread(
+            target=contextvars.copy_context().run,
+            args=(lambda: asyncio.run(_import_model_task(job_id, data)),),
+            daemon=True
+        ).start()
+
+        return jsonify({
+            "success": True,
+            "job_id": job_id,
+            "message": "Model import job started"
+        }), 202
+
+    except Exception as e:
+        print(f"Failed to initiate model import: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
+async def _export_shared_model_task(job_id: str, model_id: str) -> None:
+    try:
+        local_jobs[job_id]["status"] = "running"
+        local_jobs[job_id]["progress"] = {
+            "value": 10,
+            "total": 100,
+            "description": "Locating model in parameter graph..."
+        }
 
         with graph_lock:
             model = param_graph.get_element(model_id)
             if not model:
-                return jsonify({"error": f"Model '{model_id}' not found in parameter graph"}), 404
+                raise ValueError(f"Model '{model_id}' not found in parameter graph")
 
-            # Prepare the entry
             entry = {
                 "name": model.name,
                 "adapter": model.adapter,
@@ -526,14 +768,18 @@ async def export_shared_model():
                 "config": model.config
             }
 
-            # Optional encoder details for StableAudioModel
             encoder = getattr(model, "encoder", None)
             if encoder:
                 entry["encoder_uid"] = encoder.uid
                 entry["encoder_path"] = encoder.path
                 entry["encoder_size"] = encoder.size
 
-            # Load/Update shared_models_dummy.json in the project root
+            local_jobs[job_id]["progress"] = {
+                "value": 50,
+                "total": 100,
+                "description": "Updating shared models catalog..."
+            }
+
             dummy_config_path = Path(param_graph.root) / "shared_models_dummy.json"
             shared_models_list = []
             if dummy_config_path.exists():
@@ -546,7 +792,6 @@ async def export_shared_model():
                     print(f"Warning: Failed to read existing dummy config: {e}. Resetting.")
                     shared_models_list = []
 
-            # Check if this model checkpoint_uid already exists in the dummy list, if so replace it
             found = False
             for idx, existing in enumerate(shared_models_list):
                 existing_uid = existing.get("checkpoint_uid") or existing.get("checkpoint", {}).get("uid")
@@ -561,15 +806,66 @@ async def export_shared_model():
             with open(dummy_config_path, "w") as f:
                 json.dump(shared_models_list, f, indent=2)
 
-        return jsonify({
+        local_jobs[job_id]["status"] = "completed"
+        local_jobs[job_id]["progress"] = {
+            "value": 100,
+            "total": 100,
+            "description": "Shared model exported successfully."
+        }
+        local_jobs[job_id]["result"] = {
             "message": f"Successfully exported shared model entry to {dummy_config_path.name}",
-            "success": True
-        })
+            "config_path": str(dummy_config_path),
+            "node_id": model_id
+        }
 
     except Exception as e:
         print(f"Failed to export shared model: {e}")
         traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        local_jobs[job_id]["status"] = "failed"
+        local_jobs[job_id]["progress"] = None
+        local_jobs[job_id]["error"] = str(e)
+        local_jobs[job_id]["traceback"] = traceback.format_exc()
+
+
+@app.route("/export_shared_model", methods=["POST"])
+async def export_shared_model():
+    """Exports a registered model to shared_models_dummy.json as an async local job."""
+    if param_graph is None:
+        return jsonify({"error": "No project loaded"}), 400
+
+    try:
+        data = request.get_json() or {}
+        model_id = data.get("model_id")
+        if not model_id:
+            return jsonify({"error": "model_id is required"}), 400
+
+        job_id = f"export_model_{uuid.uuid4().hex[:12]}"
+        local_jobs[job_id] = {
+            "status": "pending",
+            "progress": {"value": 0, "total": 100, "description": "Starting shared model export..."},
+            "result": None,
+            "error": None,
+            "traceback": None,
+            "name": "Export Shared Model"
+        }
+
+        threading.Thread(
+            target=contextvars.copy_context().run,
+            args=(lambda: asyncio.run(_export_shared_model_task(job_id, model_id)),),
+            daemon=True
+        ).start()
+
+        return jsonify({
+            "success": True,
+            "job_id": job_id,
+            "message": "Shared model export job started"
+        }), 202
+
+    except Exception as e:
+        print(f"Failed to start shared model export: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
 
 @app.route("/register_grating", methods=["POST"])
 def register_grating():
@@ -631,6 +927,7 @@ def register_grating():
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
+
 @app.route("/model/<model_id>/layers", methods=["GET"])
 async def get_model_layers(model_id):
     """Inspects a model node and returns a list of its candidate layers for bending."""
@@ -667,43 +964,173 @@ async def get_model_layers(model_id):
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
+
 @app.route("/create_grating", methods=["POST"])
 async def create_grating():
-    """Dynamically creates a new Bending Grating and registers it in the project graph."""
+    """Dynamically creates a new Bending Grating as an async local background job."""
     if param_graph is None or engine_provider is None:
         return jsonify({"error": "No project loaded"}), 400
-        
+
     try:
-        data = request.get_json()
-        model_id = data.get("model_id")
-        grating_name = data.get("name", "New Grating")
-        elements_input = data.get("elements", [])
-        
-        if not model_id or not elements_input:
-            return jsonify({"error": "model_id and elements list are required"}), 400
-            
-        model_element = param_graph.get_element(model_id)
-        if not isinstance(model_element, Model):
-            return jsonify({"error": f"Node '{model_id}' is not a valid model."}), 400
-            
-        engine = engine_provider.get_engine()
-        grating_artifact = await engine.create_grating(model_element, grating_name, elements_input)
-        
-        with graph_lock:
-            param_graph.add_element(grating_artifact)
-            param_graph.link(model_element, grating_artifact, relation='binds_to')
-            param_graph.save()
-            
-        return jsonify({
-            "success": True,
-            "message": "Grating created successfully",
-            "grating": grating_artifact.to_dict()
-        }), 200
-        
+        data = request.get_json() or {}
+        resp, code = await dispatch_create_grating_operation(
+            data=data,
+            param_graph=param_graph,
+            engine_provider=engine_provider,
+            graph_lock=graph_lock,
+            local_jobs=local_jobs,
+        )
+        return jsonify(resp), code
+
     except Exception as e:
-        print(f"Failed to create grating: {e}")
+        print(f"Failed to start grating creation: {e}")
         traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
+@app.route("/wrap_individual", methods=["POST"])
+async def wrap_individual():
+    """
+    Wraps a precursor artifact (such as an Audio node) into a baseline Individual node
+    with generation 0 and zero/baseline LoRA weights, linking it to its base model and precursor.
+    """
+    if param_graph is None or engine_provider is None:
+        return jsonify({"error": "No project loaded"}), 400
+
+    try:
+        data = request.get_json() or {}
+        resp, code = await wrap_precursor_as_individual(
+            data=data,
+            param_graph=param_graph,
+            engine_provider=engine_provider,
+            graph_lock=graph_lock,
+            uid_generator=uid_generator,
+        )
+        return jsonify(resp), code
+    except Exception as e:
+        print(f"Failed to wrap individual: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
+@app.route("/scatter_evolution", methods=["POST"])
+async def scatter_evolution():
+    """
+    Scatters variant offspring around seed individuals.
+    Genetics runs 100% locally on CPU without remote engine dependencies.
+    """
+    if param_graph is None or engine_provider is None:
+        return jsonify({"error": "No project loaded"}), 400
+
+    try:
+        data = request.get_json() or {}
+        resp, code = await dispatch_scatter_operation(
+            data=data,
+            param_graph=param_graph,
+            graph_lock=graph_lock,
+            engine_provider=engine_provider,
+            local_jobs=local_jobs,
+            active_jobs=active_jobs,
+            uid_generator=uid_generator,
+        )
+        return jsonify(resp), code
+    except Exception as e:
+        print(f"Failed to start scatter: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
+@app.route("/recombine_evolution", methods=["POST"])
+@app.route("/reproduce_evolution", methods=["POST"])
+async def recombine_evolution():
+    """
+    Starts an evolutionary recombination (breeding) run.
+    Selects, crosses over, and mutates parent individuals to produce a new generation.
+    Genetics runs 100% locally on CPU without remote engine dependencies.
+    """
+    if param_graph is None or engine_provider is None:
+        return jsonify({"error": "No project loaded"}), 400
+
+    try:
+        data = request.get_json() or {}
+        resp, code = await dispatch_recombine_operation(
+            data=data,
+            param_graph=param_graph,
+            graph_lock=graph_lock,
+            engine_provider=engine_provider,
+            local_jobs=local_jobs,
+            active_jobs=active_jobs,
+            uid_generator=uid_generator,
+        )
+        return jsonify(resp), code
+    except Exception as e:
+        print(f"Failed to start recombination: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
+@app.route("/express_individual", methods=["POST"])
+async def express_individual():
+    """
+    Expresses the genome of an individual to a full Grating node in the parameter graph,
+    linking it as a child of the individual.
+    """
+    if param_graph is None:
+        return jsonify({"error": "No project loaded"}), 400
+
+    try:
+        data = request.get_json() or {}
+        individual_id = data.get("individual_id")
+
+        if not individual_id:
+            return jsonify({"error": "individual_id is required"}), 400
+
+        resp, code = express_individual_to_grating_artifact(
+            individual_id=individual_id,
+            param_graph=param_graph,
+            graph_lock=graph_lock,
+            uid_generator=uid_generator,
+        )
+        return jsonify(resp), code
+    except Exception as e:
+        print(f"Failed to express individual: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+@app.route("/exemplar_presets", methods=["POST"])
+async def get_exemplar_presets():
+    """
+    Lists the distinct generation settings of the exemplars across the given individuals and their
+    ancestors, so the same generations can be repeated on those individuals.
+    Accepts individual and group IDs; groups are expanded to their member individuals.
+    """
+    if param_graph is None or engine_provider is None:
+        return jsonify({"error": "No project loaded"}), 400
+
+    try:
+        data = request.get_json() or {}
+        individual_ids = extract_individual_parent_ids(
+            data.get("individual_ids") or [], param_graph=param_graph, graph_lock=graph_lock
+        )
+        if not individual_ids:
+            return jsonify({"success": True, "individual_ids": [], "presets": []})
+
+        with graph_lock:
+            first_individual = param_graph.get_element(individual_ids[0])
+            model_element = param_graph.get_element(first_individual.base_model_id)
+        if not isinstance(model_element, Model):
+            return jsonify({"error": f"Individual '{first_individual.id}' has no valid base model."}), 400
+
+        engine = engine_provider.get_engine()
+        adapter_config = await engine.get_adapter_config(model_element.adapter)
+        form_config = adapter_config.get("generate", []) if isinstance(adapter_config, dict) else adapter_config
+
+        presets = collect_exemplar_presets(individual_ids, param_graph, form_config, graph_lock=graph_lock)
+        return jsonify({"success": True, "individual_ids": individual_ids, "presets": presets})
+    except Exception as e:
+        print(f"Failed to collect exemplar presets: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
 @app.route("/adapter_config/<adapter_name>", methods=["GET"])
 async def get_adapter_config(adapter_name):
@@ -718,6 +1145,86 @@ async def get_adapter_config(adapter_name):
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
+DYNAMIC_LABELING_BLACKLIST = {
+    "job_id",
+    "batch_id",
+    "group_id",
+    "parent_id",
+    "execution_mode",
+    "operation",
+    "is_baseline",
+    "phenotype_status",
+    "phenotype_duplicate_of",
+    "shared_exemplar_id",
+    "file",
+    "embeddings",
+}
+
+def link_artifact_dependencies(element: GraphElement, param_graph) -> int:
+    """
+    Deterministically extracts all declared source inputs, model bindings,
+    and context references from an artifact and links them into param_graph.G.
+    Correctly ignores spring edges and avoids phantom/blacklisted links.
+    Returns the number of new edges created.
+    """
+    if param_graph is None or not param_graph.G.has_node(element.id):
+        return 0
+    # A generated exemplar's inputs are implied through its individual
+    if param_graph.is_generated_exemplar(element.id):
+        return 0
+
+    edges_added = 0
+    potential_source_ids: list[tuple[str, str]] = []
+
+    if hasattr(element, 'base_model_id') and element.base_model_id:
+        potential_source_ids.append((element.base_model_id, 'binds_to'))
+
+    if hasattr(element, 'context') and isinstance(element.context, dict):
+        op_name = element.context.get("operation")
+        for key, value in element.context.items():
+            # The baseline grating is reached through the individual, so it is not a direct source
+            if key in ('job_id', 'group_id', 'batch_id', 'parent_id', 'execution_mode', 'baseline_grating_id'):
+                continue
+            if key.endswith('_id') and isinstance(value, str):
+                if op_name == "generate" and key in ("source_audio_id", "source_audio"):
+                    continue
+                potential_source_ids.append((value, 'source'))
+            elif key in ('init_audio', 'init_latent', 'init_image') and isinstance(value, str):
+                potential_source_ids.append((value, 'source'))
+            elif key in ('source_audio', 'precursor_audio') and op_name != "generate" and isinstance(value, str):
+                potential_source_ids.append((value, 'source'))
+            elif key == 'gratings' and isinstance(value, list):
+                for grating_item in value:
+                    g_id = grating_item.get('id') if isinstance(grating_item, dict) else grating_item
+                    if g_id and isinstance(g_id, str):
+                        potential_source_ids.append((g_id, 'source'))
+            elif key == 'grating_ids' and isinstance(value, list):
+                for g_id in value:
+                    if g_id and isinstance(g_id, str):
+                        potential_source_ids.append((g_id, 'source'))
+            elif key == 'individuals' and isinstance(value, list):
+                for ind_item in value:
+                    ind_id = ind_item.get('id') if isinstance(ind_item, dict) else ind_item
+                    if ind_id and isinstance(ind_id, str):
+                        potential_source_ids.append((ind_id, 'source'))
+            elif key == 'individual_ids' and isinstance(value, list):
+                for ind_id in value:
+                    if ind_id and isinstance(ind_id, str):
+                        potential_source_ids.append((ind_id, 'source'))
+
+    for source_id, relation in potential_source_ids:
+        if source_id != element.id and param_graph.G.has_node(source_id):
+            edge_exists = any(
+                v == element.id and attrs.get('type') != 'spring'
+                for _, v, attrs in param_graph.G.out_edges(source_id, data=True)
+            )
+            if not edge_exists:
+                source_el = param_graph.get_element(source_id)
+                param_graph.link(source_el, element, relation=relation)
+                edges_added += 1
+
+    return edges_added
+
 @app.route("/job_status/<job_id>", methods=["GET"])
 async def get_job_status(job_id):
     """Gets the status of a generation job and handles final artifact processing."""
@@ -730,8 +1237,13 @@ async def get_job_status(job_id):
         status = job_info.get("status")
         
         if status in ["completed", "failed"]:
-            # Pop the job from memory once we send the final completed/failed state
-            return jsonify(local_jobs.pop(job_id)), 200 if status == "completed" else 500
+            # Mark completed timestamp and clean up jobs older than 5 minutes to prevent leaking
+            job_info["completed_at"] = job_info.get("completed_at", time.time())
+            now = time.time()
+            expired_keys = [k for k, v in local_jobs.items() if v.get("completed_at") and (now - v["completed_at"] > 300)]
+            for k in expired_keys:
+                local_jobs.pop(k, None)
+            return jsonify(job_info), 200 if status == "completed" else 500
         return jsonify(job_info), 200
 
     try:
@@ -740,66 +1252,158 @@ async def get_job_status(job_id):
         status_info = await engine.get_job_status(job_id)
         status = status_info.get("status")
 
-        if status == "completed":
-            print(f"Job {job_id} completed. Processing artifact...")
-            job_context = active_jobs.pop(job_id, {})
-            
-            result_dict = status_info.get("result", {})
-            artifact_data = result_dict.get('artifact', result_dict)
+        if status in ["completed", "failed", "not_found"]:
+            job_context = active_jobs.pop(job_id, None)
+            if job_context is not None:
+                # Place the result in the room the job was started from, not the one viewed now
+                placement_room.set(job_context.get("room"))
 
-            if not artifact_data:
-                raise Exception("Completed job did not return a valid artifact.")
+            if status == "completed":
+                if job_context is None:
+                    # Job artifact has already been processed and saved into the graph by a prior request
+                    return jsonify(status_info), 200
 
-            temp_artifact = resolve_element(artifact_data) if isinstance(artifact_data, dict) else artifact_data
+                print(f"Job {job_id} completed. Processing artifact...")
+                result_dict = status_info.get("result", {})
+                # Multi-artifact operations (e.g. a StyleGAN inversion's pivot latent and its grating)
+                # return several artifacts; the first is the primary one
+                artifact_data, companion_data, result_links = result_artifacts(result_dict)
 
-            output_dir = param_graph.root / "generate"
-            final_artifact = save_artifact_asset(temp_artifact, output_dir, asset_name="file")
-            
-            # Ensure context is populated for labelling, and merge job-level validated params (like model_id, operation, gratings)
-            if hasattr(final_artifact, 'context'):
-                current_context = final_artifact.context or {}
-                merged_context = {**job_context.get("validated_params", {}), **current_context}
-                final_artifact = replace(final_artifact, context=merged_context)
-            
-            with graph_lock:
-                param_graph.add_element(final_artifact)
+                if not artifact_data:
+                    raise Exception("Completed job did not return a valid artifact.")
 
-                batch_id = job_context.get("batch_id")
-                if batch_id:
-                    param_graph.update_element(final_artifact.id, {"parent": batch_id})
-                    batch_node_attrs = param_graph.G.nodes[batch_id]
-                    if 'member_ids' not in batch_node_attrs or not isinstance(batch_node_attrs['member_ids'], list):
-                        batch_node_attrs['member_ids'] = []
-                    if final_artifact.id not in batch_node_attrs['member_ids']:
-                        batch_node_attrs['member_ids'].append(final_artifact.id)
-                        
-                    update_batch_labels(batch_id)
+                # Artifacts that an internal link points to are reached through its source, not the job's inputs
+                root_artifact_ids = set(root_ids(result_dict)) if is_multi_result(result_dict) else None
 
-                for element in job_context.get("linked_elements", []):
-                    print(f"Linking {element.id} to {final_artifact.id}")
-                    param_graph.link(element, final_artifact, relation='source')
-                param_graph.save()
-            
-            trigger_embedding_update()
-            
-            print("Artifact processed and saved to graph successfully.")
-            return jsonify({
-                "status": "completed",
-                "message": "Audio generated and registered successfully.",
-                "artifact": final_artifact.to_dict(),
-                "node_id": final_artifact.id,
-                "validated_params": job_context.get("validated_params")
-            }), 200
+                with graph_lock:
+                    output_dir = param_graph.root / "generate"
+                    parent_id = job_context.get("parent_id")
+                    group_id = job_context.get("group_id") or job_context.get("batch_id")
 
-        elif status == "failed":
-            error_msg = status_info.get("error", "Unknown error during generation.")
-            traceback_msg = status_info.get("traceback")
-            active_jobs.pop(job_id, None)
-            return jsonify({"status": "failed", "error": error_msg, "traceback": traceback_msg}), 500
+                    def _store(data):
+                        temp_artifact = resolve_element(data) if isinstance(data, dict) else data
+                        stored = save_artifact_asset(temp_artifact, output_dir, asset_name="file")
 
-        elif status == "not_found":
-            active_jobs.pop(job_id, None)
-            return jsonify({"status": "not_found", "error": f"Job {job_id} was lost."}), 404
+                        # Ensure context is populated for labelling, and merge job-level validated params (like model_id, operation, gratings)
+                        if isinstance(stored, Artifact):
+                            current_context = stored.context or {}
+                            merged_context = {**job_context.get("validated_params", {}), **current_context}
+                            merged_context.pop("job_id", None)
+                            merged_context.pop("execution_mode", None)
+                            stored = replace(stored, context=merged_context)
+                        return stored
+
+                    def _add_to_group(artifact):
+                        param_graph.update_element(artifact.id, {"parent": group_id})
+                        group_node_attrs = param_graph.G.nodes[group_id]
+                        if 'member_ids' not in group_node_attrs or not isinstance(group_node_attrs['member_ids'], list):
+                            group_node_attrs['member_ids'] = []
+                        if artifact.id not in group_node_attrs['member_ids']:
+                            group_node_attrs['member_ids'].append(artifact.id)
+                        update_group_labels(group_id)
+
+                    def _link_inputs(artifact):
+                        if root_artifact_ids is not None and artifact.id not in root_artifact_ids:
+                            return
+                        is_exemplar = param_graph.is_generated_exemplar(artifact.id)
+                        for element in job_context.get("linked_elements", []):
+                            if is_exemplar or (parent_id and element.id == parent_id):
+                                continue
+                            edge_exists = any(
+                                v == artifact.id and attrs.get('type') != 'spring'
+                                for _, v, attrs in param_graph.G.out_edges(element.id, data=True)
+                            )
+                            if not edge_exists:
+                                print(f"Linking {element.id} to {artifact.id}")
+                                param_graph.link(element, artifact, relation='source')
+
+                    final_artifact = _store(artifact_data)
+
+                    existing_parent = (
+                        param_graph.G.nodes[final_artifact.id].get("parent")
+                        if param_graph.G.has_node(final_artifact.id)
+                        else None
+                    )
+
+                    if parent_id and existing_parent and existing_parent != parent_id:
+                        # Duplicate collision detected!
+                        # The artifact already exists in the graph and is claimed by `existing_parent`.
+                        # Preserve original parent's exemplar and flag the child individual (`parent_id`).
+                        print(
+                            f"[job_status] Phenotypic duplicate detected! "
+                            f"Child individual '{parent_id}' generated exemplar '{final_artifact.id}' "
+                            f"which is already claimed by ancestor '{existing_parent}'. "
+                            f"Preserving original parentage and flagging child."
+                        )
+                        if param_graph.G.has_node(parent_id):
+                            child_node = param_graph.get_element(parent_id)
+                            child_ctx = copy.deepcopy(getattr(child_node, "context", {}) or {})
+                            child_ctx["phenotype_status"] = "duplicate"
+                            child_ctx["phenotype_duplicate_of"] = existing_parent
+                            child_ctx["shared_exemplar_id"] = final_artifact.id
+                            param_graph.update_element(parent_id, {
+                                "context": child_ctx,
+                                "phenotype_status": "duplicate",
+                                "phenotype_duplicate_of": existing_parent,
+                                "shared_exemplar_id": final_artifact.id
+                            })
+                            # Link child individual to the shared exemplar
+                            param_graph.link(child_node, final_artifact, relation="shares_phenotype")
+                    else:
+                        param_graph.add_element(final_artifact)
+                        if parent_id:
+                            param_graph.update_element(final_artifact.id, {"parent": parent_id})
+                        elif group_id:
+                            _add_to_group(final_artifact)
+
+                    _link_inputs(final_artifact)
+
+                    # The rest of a multi-artifact result joins the batch group alongside the primary when it is a root
+                    stored_artifacts = {final_artifact.id: final_artifact}
+                    for data in companion_data:
+                        companion = _store(data)
+                        param_graph.add_element(companion)
+                        if group_id and not parent_id and companion.id in root_artifact_ids:
+                            _add_to_group(companion)
+                        _link_inputs(companion)
+                        stored_artifacts[companion.id] = companion
+
+                    for link in result_links:
+                        source = stored_artifacts.get(link.get("source"))
+                        target = stored_artifacts.get(link.get("target"))
+                        if source and target:
+                            param_graph.link(source, target, relation=link.get("relation") or "source")
+
+                    # Deterministically ensure all structural dependencies declared in context are linked
+                    for artifact in stored_artifacts.values():
+                        link_artifact_dependencies(artifact, param_graph)
+
+                    param_graph.save()
+
+                trigger_embedding_update()
+
+                print("Artifact processed and saved to graph successfully.")
+                response = {
+                    "status": "completed",
+                    "message": "Audio generated and registered successfully.",
+                    "artifact": final_artifact.to_dict(),
+                    "node_id": final_artifact.id,
+                    "validated_params": job_context.get("validated_params")
+                }
+                if companion_data:
+                    response["artifacts"] = [artifact.to_dict() for artifact in stored_artifacts.values()]
+                return jsonify(response), 200
+
+            elif status == "failed":
+                error_msg = status_info.get("error", "Unknown error during generation.")
+                traceback_msg = status_info.get("traceback")
+                print(f"Error: Job {job_id} failed: {error_msg}")
+                if traceback_msg:
+                    print(f"Traceback:\n{traceback_msg}")
+                return jsonify({"status": "failed", "error": error_msg, "traceback": traceback_msg}), 500
+
+            elif status == "not_found":
+                return jsonify({"status": "not_found", "error": f"Job {job_id} was lost."}), 404
 
         # For 'pending' or 'running', just return the status info
         return jsonify(status_info), 200
@@ -836,31 +1440,45 @@ async def cancel_job(job_id):
 def get_sync_operations():
     """Returns a list of available Synchronous operations and their configurations."""
     try:
-        operations = [op.to_dict() for op in sync_registry.get_all()]
+        operations = [op.to_dict() for op in sync_registry.get_all() if op.execution == "immediate" and op.category == "dsp"]
         return jsonify({"operations": operations, "success": True}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 @app.route("/operations", methods=["GET"])
 async def get_all_operations():
-    """Returns a unified list of both Synchronous and Asynchronous operations."""
+    """Returns a unified list of operations across DSP, Evolution, and Generative Engine."""
     try:
         operations = []
-        for op in sync_registry.get_all():
-            op_dict = op.to_dict()
-            op_dict["execution_mode"] = "sync"
-            operations.append(op_dict)
-            
+
+        # 1. Registered Host Operations (DSP & Evolution)
+        for op in operation_registry.get_all():
+            operations.append(op.to_dict())
+
+        # 2. Neural Engine Generative Operations (queued)
         if engine_provider is not None:
             engine = engine_provider.get_engine()
             if engine is not None:
                 async_ops = await engine.get_supported_operations()
                 for op in async_ops:
                     op_dict = dict(op)
-                    op_dict["execution_mode"] = "async"
+                    if "category" not in op_dict:
+                        op_dict["category"] = "generative"
+                    if "execution" not in op_dict:
+                        op_dict["execution"] = "queued"
+                    if "execution_mode" not in op_dict:
+                        op_dict["execution_mode"] = "async"
                     operations.append(op_dict)
-                    
-        return jsonify({"operations": operations, "success": True}), 200
+
+        # Deduplicate by operation name, preserving local priority
+        seen = set()
+        deduped_operations = []
+        for op in operations:
+            if op["name"] not in seen:
+                seen.add(op["name"])
+                deduped_operations.append(op)
+
+        return jsonify({"operations": deduped_operations, "success": True}), 200
     except Exception as e:
         print(f"Error getting operations: {e}")
         import traceback
@@ -871,338 +1489,43 @@ async def get_all_operations():
 async def execute_operation():
     """
     Unified Operation Dispatcher Endpoint.
-    Routes operations to either the synchronous registry or the async Engine.
+    Auto-dispatches operations across DSP, Evolution, and Generative Engine.
     """
     if param_graph is None:
         return jsonify({"error": "No project loaded"}), 400
         
     try:
-        payload = request.get_json()
-        
-        # Map legacy 'type' payloads for backward compatibility, preferring 'execution_mode'
-        legacy_type = payload.get("type")
-        mode = payload.get("execution_mode", "sync")
-        if legacy_type == "dsp": mode = "sync"
-        elif legacy_type == "ai": mode = "async"
-        
-        if mode == "sync":
-            return _dispatch_sync_operation(payload)
-        elif mode == "async":
-            return await _dispatch_async_operation(payload)
-        else:
-            return jsonify({"error": f"Unknown execution mode: {mode}"}), 400
-            
-    except Exception as e:
-        traceback.print_exc()
-        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
-
-def _dispatch_sync_operation(data):
-    try:
-        operation = data.get("operation")
-        params = data.get("params", {})
-        
-        if not operation:
-            return jsonify({"error": "'operation' is required"}), 400
-            
-        op_instance = sync_registry.get(operation)
-        DynamicArgsModel = create_dynamic_model(op_instance.get_form_config())
-        
-        # Support fallback where frontend still sends params at top level
-        validation_target = params if params else data
-        validated_params = DynamicArgsModel.model_validate(validation_target).model_dump()
-        
-        # 1. Dynamically resolve all requested node links from the graph
-        node_args = {}
-        source_elements = []
-        for field in op_instance.get_form_config():
-            if field.get("type") == "node":
-                field_name = field.get("name")
-                node_id = validated_params.pop(field_name, None)
-                if node_id:
-                    element = param_graph.get_element(node_id)
-                    if element:
-                        node_args[f"{field_name}_element"] = element
-                        source_elements.append(element)
-                        
-        # Resolving and caching missing local audio
-        for arg_name, element in node_args.items():
-            if isinstance(element, Audio):
-                cache_used_audio(element.id)
-                valid_path = resolve_audio_path(element.id)
-                if valid_path and str(valid_path) != element.file.path:
-                    element.file = replace(element.file, path=str(valid_path))
-                    node_args[arg_name] = element
-        
-        process_results = op_instance.execute(
-            device=device_accelerator, 
-            sample_rate=APP_SAMPLE_RATE, 
-            **node_args, 
-            **validated_params
+        payload = request.get_json() or {}
+        # Work started on an element inside a room stays in that room, whichever view it came from
+        initiator = payload.get("initiator")
+        initiator_id = initiator.get("id") if isinstance(initiator, dict) else None
+        if initiator_id and param_graph.G.has_node(initiator_id):
+            initiator_room = room_of(param_graph.G, initiator_id)
+            if initiator_room:
+                placement_room.set(initiator_room)
+        resp_data, status_code = await dispatch_operation(
+            payload=payload,
+            param_graph=param_graph,
+            engine_provider=engine_provider,
+            graph_lock=graph_lock,
+            uid_generator=uid_generator,
+            device_accelerator=device_accelerator,
+            sample_rate=APP_SAMPLE_RATE,
+            active_jobs=active_jobs,
+            local_jobs=local_jobs,
+            task_mgr=task_manager,
+            trigger_embedding_update_fn=lambda: trigger_embedding_update(background=True),
+            cache_used_audio_fn=cache_used_audio,
+            resolve_audio_path_fn=resolve_audio_path,
+            update_group_labels_fn=update_group_labels,
+            data_cache_root=data_cache_root,
         )
-        is_batch = len(process_results) > 1
-        process_results_to_save = process_results
+        return jsonify(resp_data), status_code
             
-        output_dir = param_graph.root / "process"
-        output_dir.mkdir(parents=True, exist_ok=True)
-        
-        final_artifacts = []
-        
-        # 3. Agnostic artifact data saving based strictly on returned element Types
-        for artifact_blueprint, raw_data in process_results_to_save:
-            local_path = data_cache_root / path_from_uid(artifact_blueprint.id)
-            local_path.parent.mkdir(parents=True, exist_ok=True)
-            
-            if isinstance(artifact_blueprint, Audio):
-                save_audio(raw_data.cpu(), local_path, artifact_blueprint.sample_rate, format="wav")
-            elif isinstance(artifact_blueprint, Latent):
-                torch.save(raw_data.cpu(), local_path)
-            
-            artifact_blueprint.file = replace(artifact_blueprint.file, path=str(local_path))
-            final_artifacts.append(save_artifact_asset(artifact_blueprint, output_dir, asset_name="file"))
-
-        # 4. Integrate into the graph
-        collection_dict = None
-        req_batch_id = data.get("batch_id") or params.get("batch_id")
-        with graph_lock:
-            for artifact in final_artifacts:
-                param_graph.add_element(artifact)
-                
-                for source_el in source_elements:
-                    param_graph.link(source_el, artifact, relation='source')
-                
-            if req_batch_id:
-                if not param_graph.G.has_node(req_batch_id):
-                    # Create new batch element
-                    batch_node = Batch(id=req_batch_id, member_ids=[], member_type=final_artifacts[0].type)
-                    param_graph.add_element(batch_node)
-                    
-                    # Try to position it near one of the source elements
-                    for el in source_elements:
-                        if param_graph.G.has_node(el.id):
-                            el_pos = param_graph.G.nodes[el.id].get('position')
-                            if el_pos:
-                                param_graph.update_element(req_batch_id, {"position": {"x": el_pos["x"] + 80, "y": el_pos["y"] + 80}})
-                                break
-                    print(f"Created new batch element {req_batch_id} for sync operation")
-                
-                for artifact in final_artifacts:
-                    param_graph.update_element(artifact.id, {"parent": req_batch_id})
-                    batch_node_attrs = param_graph.G.nodes[req_batch_id]
-                    if 'member_ids' not in batch_node_attrs or not isinstance(batch_node_attrs['member_ids'], list):
-                        batch_node_attrs['member_ids'] = []
-                    if artifact.id not in batch_node_attrs['member_ids']:
-                        batch_node_attrs['member_ids'].append(artifact.id)
-                
-                update_batch_labels(req_batch_id)
-                collection_dict = param_graph.get_element(req_batch_id).to_dict()
-            elif is_batch:
-                member_ids = [a.id for a in final_artifacts]
-                batch_id = uid_generator.from_uids(member_ids)
-                batch = Batch(id=batch_id, member_ids=member_ids, member_type=final_artifacts[0].type)
-                param_graph.add_element(batch)
-                
-                # Try to position it near one of the source elements
-                for el in source_elements:
-                    if param_graph.G.has_node(el.id):
-                        el_pos = param_graph.G.nodes[el.id].get('position')
-                        if el_pos:
-                            param_graph.update_element(batch_id, {"position": {"x": el_pos["x"] + 80, "y": el_pos["y"] + 80}})
-                            break
-                
-                for m_id in member_ids:
-                    param_graph.update_element(m_id, {"parent": batch_id})
-                    
-                update_batch_labels(batch_id)
-                collection_dict = param_graph.get_element(batch_id).to_dict()
-
-            param_graph.save()
-            
-        trigger_embedding_update(background=True)
-        
-        response_data = {
-            "message": f"Operation '{operation}' completed successfully.",
-            "status": "completed"
-        }
-        
-        if req_batch_id:
-            response_data["artifact"] = final_artifacts[0].to_dict()
-            response_data["node_id"] = final_artifacts[0].id
-            if collection_dict:
-                response_data["collection"] = collection_dict
-        elif is_batch:
-            response_data["artifacts"] = [a.to_dict() for a in final_artifacts]
-            if collection_dict:
-                response_data["collection"] = collection_dict
-                response_data["node_id"] = collection_dict["id"]
-        else:
-            response_data["artifact"] = final_artifacts[0].to_dict()
-            response_data["node_id"] = final_artifacts[0].id
-            
-        return jsonify(response_data), 200
-        
-    except (ValidationError, ValueError) as e:
-        return jsonify({"error": "Invalid request", "details": str(e)}), 400
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
-async def _dispatch_async_operation(data):
-    """Routes an AI operation to the async Engine."""
-    if engine_provider is None:
-        return jsonify({"error": "Engine provider not initialized"}), 400
-        
-    try:
-        model_id = data.get("model_id")
-        job_id = data.get("job_id")
-        operation = data.get("operation")
-        params = data.get("params", {})
-        
-        if not job_id:
-            return jsonify({"error": "'job_id' is required."}), 400
-        if not model_id:
-            return jsonify({"error": "'model_id' is required."}), 400
-        if not operation:
-            return jsonify({"error": "'operation' is required."}), 400
-
-        model_element = param_graph.get_element(model_id)
-        if not isinstance(model_element, Model):
-            return jsonify({"error": f"Node '{model_id}' is not a valid model."}), 400
-        
-        engine = engine_provider.get_engine()
-        form_config = await engine.get_adapter_config(model_element.adapter)
-        
-        form_config = form_config.get(operation, [])
-        if not form_config:
-            return jsonify({"error": f"Adapter '{model_element.adapter}' has no '{operation}' configuration"}), 404
-
-        DynamicArgsModel = create_dynamic_model(form_config)
-        # Support fallback where frontend still sends params at top level
-        validation_target = params if params else data
-        validated_params = DynamicArgsModel.model_validate(validation_target)
-        dumped_params = validated_params.model_dump()
-        
-        node_engine_args = {}
-        for field in form_config:
-            if field.get("type") == "node":
-                field_name = field.get("name")
-                node_id = dumped_params.pop(field_name, None)
-                if node_id:
-                    element = param_graph.get_element(node_id)
-                    if element:
-                        node_engine_args[f"{field_name}_element"] = element
-
-        # --- Special Case Handlers (Gratings & Inversion Sources) ---
-        grating_strengths = []
-        gratings = data.get("gratings") or params.get("gratings")
-        if gratings:
-            grating_elements = []
-            for g_conf in gratings:
-                g_id = g_conf.get("id")
-                g_element = param_graph.get_element(g_id)
-                if not isinstance(g_element, Grating):
-                    return jsonify({"error": f"Node '{g_id}' is not a valid grating."}), 400
-                grating_elements.append(g_element)
-                grating_strengths.append(g_conf.get("strength", 1.0))
-            node_engine_args["grating_elements"] = grating_elements
-
-        source_audio_id = data.get("source_audio_id") or params.get("source_audio_id")
-        if source_audio_id:
-            source_audio_element = param_graph.get_element(source_audio_id)
-            if not isinstance(source_audio_element, Audio):
-                return jsonify({"error": f"Node '{source_audio_id}' is not a valid audio artifact."}), 400
-            node_engine_args["source_audio_element"] = source_audio_element
-
-        # Resolve element list for edge creation
-        resolved_elements = []
-        for val in node_engine_args.values():
-            if isinstance(val, list):
-                resolved_elements.extend(val)
-            else:
-                resolved_elements.append(val)
-
-        # Cache external audio files used in this step, and resolve to cache if missing
-        for arg_name, element in node_engine_args.items():
-            if isinstance(element, list):
-                for el in element:
-                    if not isinstance(el, (Audio, Model, Grating, Latent)):
-                        return jsonify({"error": f"Node '{el.id}' is not a valid artifact."}), 400
-            else:
-                if isinstance(element, Audio):
-                    cache_used_audio(element.id)
-                    valid_path = resolve_audio_path(element.id)
-                    if valid_path and str(valid_path) != element.file.path:
-                        element.file = replace(element.file, path=str(valid_path))
-                        node_engine_args[arg_name] = element
-                
-                if not isinstance(element, (Audio, Model, Grating, Latent)):
-                    field_name = arg_name.removesuffix("_element")
-                    return jsonify({"error": f"Node '{element.id}' for field '{field_name}' is not a valid artifact."}), 400
-
-        engine_args = {"model_element": model_element, **node_engine_args}
-        if gratings:
-            engine_args["grating_strengths"] = grating_strengths
-            engine_args["gratings"] = gratings
-        
-        # If gratings are used, the model is implied, so we omit the direct edge
-        if "grating_elements" in node_engine_args and node_engine_args["grating_elements"]:
-            linked_elements = [*resolved_elements]
-        else:
-            linked_elements = [model_element, *resolved_elements]
-        
-        # --- Batching Logic ---
-        batch_id = data.get("batch_id")
-        if batch_id:
-            with graph_lock:
-                if not param_graph.G.has_node(batch_id):
-                    batch_element = Batch(id=batch_id, member_type="audio" if operation != "invert" else "latent")
-                    param_graph.add_element(batch_element)
-                    
-                    # Try to position it near one of the source/linked elements
-                    for el in linked_elements:
-                        if param_graph.G.has_node(el.id):
-                            el_pos = param_graph.G.nodes[el.id].get('position')
-                            if el_pos:
-                                param_graph.update_element(batch_id, {"position": {"x": el_pos["x"] + 80, "y": el_pos["y"] + 80}})
-                                break
-                    
-                    param_graph.save()
-                    print(f"Created new batch element {batch_id}")
-
-        # --- Execute ---
-        print(f"Submitting {operation} job {job_id} to engine...")
-        returned_job_id = await engine.execute(operation, job_id=job_id, **engine_args, **dumped_params)
-        
-        if returned_job_id != job_id:
-             job_id = returned_job_id
-             
-        # Store job context to process the artifact later when the frontend polls /job_status
-        v_params = validated_params.model_dump()
-        v_params["model_id"] = model_id
-        v_params["operation"] = operation
-        if gratings:
-            v_params["gratings"] = gratings
-            
-        active_jobs[job_id] = {
-            "batch_id": batch_id,
-            "linked_elements": linked_elements,
-            "validated_params": v_params,
-            "operation": operation
-        }
-
-        return jsonify({
-            "message": "Job started successfully.",
-            "job_id": job_id,
-            "status": "pending"
-        }), 202
-
-    except (ValidationError, ValueError) as e:
-        print(f"Invalid request: {e}")
-        traceback.print_exc()
-        return jsonify({"error": "Invalid request", "details": str(e)}), 400
-    except Exception as e:
-        print(f"AI Operation failed: {e}")
-        traceback.print_exc()
-        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
 # --------------------
 #  External Sources
@@ -1247,76 +1570,118 @@ def add_external_source():
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
+async def _rescan_source_task(job_id: str, source_name: str) -> None:
+    try:
+        local_jobs[job_id]["status"] = "running"
+        local_jobs[job_id]["progress"] = {
+            "value": 10,
+            "total": 100,
+            "description": f"Scanning external source '{source_name}'..."
+        }
+
+        path_node_id = None
+        with graph_lock:
+            for node_id, data in param_graph.G.nodes(data=True):
+                if data.get("type") == "local_path" and (data.get("name") == source_name or node_id == source_name):
+                    path_node_id = node_id
+                    break
+            if not path_node_id:
+                for node_id, data in param_graph.G.nodes(data=True):
+                    if data.get("type") == "local_path":
+                        path_node_id = node_id
+                        break
+
+        if not path_node_id:
+            raise ValueError(f"No source path matching '{source_name}' found.")
+
+        await _expand_path_task(job_id, path_node_id)
+
+    except Exception as e:
+        print(f"Failed in async source rescan: {e}")
+        traceback.print_exc()
+        local_jobs[job_id]["status"] = "failed"
+        local_jobs[job_id]["progress"] = None
+        local_jobs[job_id]["error"] = str(e)
+        local_jobs[job_id]["traceback"] = traceback.format_exc()
+
+
 @app.route("/rescan_source", methods=["POST"])
-def rescan_source():
-    """Rescan external source"""
+async def rescan_source():
+    """Rescan external source asynchronously as a local background job."""
     if param_graph is None:
         return jsonify({"error": "No project loaded"}), 400
-    
+
     try:
-        data = request.get_json()
+        data = request.get_json() or {}
         source_name = data.get('source_name')
-        
         if not source_name:
             return jsonify({"error": "source_name is required"}), 400
-        
-        with graph_lock:
-            param_graph.scan_external_source(source_name)
-            param_graph.save()
-        
-        # Trigger an incremental embedding update
-        trigger_embedding_update()
-        
+
+        job_id = f"rescan_source_{uuid.uuid4().hex[:12]}"
+        local_jobs[job_id] = {
+            "status": "pending",
+            "progress": {"value": 0, "total": 100, "description": "Starting source rescan..."},
+            "result": None,
+            "error": None,
+            "traceback": None,
+            "name": "Rescan Source"
+        }
+
+        threading.Thread(
+            target=contextvars.copy_context().run,
+            args=(lambda: asyncio.run(_rescan_source_task(job_id, source_name)),),
+            daemon=True
+        ).start()
+
         return jsonify({
-            "message": "Source rescanned successfully",
-            "success": True
-        })
-        
+            "success": True,
+            "job_id": job_id,
+            "message": "Source rescan job started"
+        }), 202
+
     except Exception as e:
-        print(f"Failed to rescan source: {e}")
+        print(f"Failed to start source rescan: {e}")
         traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
-@app.route("/expand_path", methods=["POST"])
-def expand_path():
-    """Reads a PathNode, creates a Directory compound node if needed, and populates it."""
-    if param_graph is None:
-        return jsonify({"error": "No project loaded"}), 400
 
+async def _expand_path_task(job_id: str, path_node_id: str) -> None:
     try:
-        data = request.get_json()
-        path_node_id = data.get("path_node_id")
-        
-        if not path_node_id:
-            return jsonify({"error": "path_node_id is required"}), 400
-            
-        path_element = param_graph.get_element(path_node_id)
+        local_jobs[job_id]["status"] = "running"
+        local_jobs[job_id]["progress"] = {
+            "value": 5,
+            "total": 100,
+            "description": "Locating path element..."
+        }
+
+        path_element = None
+        with graph_lock:
+            path_element = param_graph.get_element(path_node_id)
         if not path_element or not hasattr(path_element, "path"):
-            return jsonify({"error": "Invalid path element"}), 400
-            
+            raise ValueError("Invalid path element")
+
         dir_path = Path(path_element.path)
         if not dir_path.is_dir():
-            return jsonify({"error": f"Path {dir_path} is not a valid directory"}), 400
-            
-        # 1. Check if we already have an expanded Directory for this PathNode
+            raise ValueError(f"Path {dir_path} is not a valid directory")
+
         existing_dir_id = None
+        new_dir_created = False
+        new_dir = None
+        new_edge = None
         with graph_lock:
             for u, v, edge_data in param_graph.G.out_edges(path_node_id, data=True):
                 target_node = param_graph.get_element(v)
                 if getattr(target_node, "type", None) == "directory":
                     existing_dir_id = v
                     break
-            
-            new_dir_created = False
+
             if not existing_dir_id:
                 existing_dir_id = f"{path_node_id}.dir"
                 new_dir = Directory(id=existing_dir_id, name=path_element.name, path=path_element.path)
-                
                 param_graph.add_element(new_dir)
                 new_edge = param_graph.link(path_element, new_dir, relation='expands')
                 new_dir_created = True
 
-        # 2. Gather paths of existing children to prevent duplicates during sync
         existing_paths = set()
         with graph_lock:
             for node_id, data in param_graph.G.nodes(data=True):
@@ -1328,17 +1693,22 @@ def expand_path():
                         existing_paths.add(el.file.path)
 
         audio_exts = {'.wav', '.mp3', '.flac', '.ogg', '.m4a', '.aiff'}
+        image_exts = {'.png', '.jpg', '.jpeg', '.webp', '.bmp', '.gif'}
+        entries = [entry for entry in dir_path.iterdir() if not entry.name.startswith('.')]
+        total_entries = len(entries)
         new_elements = []
-        
-        for entry in dir_path.iterdir():
-            if entry.name.startswith('.'):
-                continue
-                
+
+        for idx, entry in enumerate(entries):
+            local_jobs[job_id]["progress"] = {
+                "value": int(10 + (idx / max(total_entries, 1)) * 75),
+                "total": 100,
+                "description": f"Scanning entry {idx + 1} of {total_entries}: {entry.name}"
+            }
+
             entry_str = str(entry)
             if entry_str in existing_paths:
-                continue  # This file/folder is already in the graph
+                continue
 
-            
             if entry.is_dir():
                 element_id = uid_generator.from_string(str(entry.resolve()))
                 new_elements.append(LocalPath(id=element_id, name=entry.name, path=entry_str))
@@ -1351,33 +1721,98 @@ def expand_path():
                     new_elements.append(Audio(id=element_id, name=entry.name, context={}, file=asset, duration=duration))
                 except Exception as e:
                     print(f"Failed to load audio for {entry.name} to generate UID: {e}")
-                
+            elif entry.is_file() and entry.suffix.lower() in image_exts:
+                try:
+                    with PILImage.open(entry_str) as pil_img:
+                        pixels = np.asarray(pil_img.convert("RGB"))
+                    element_id = uid_generator.from_tensor(torch.from_numpy(pixels))
+                    asset = Asset(path=entry_str, uid=element_id, extension=entry.suffix.lower())
+                    height, width = pixels.shape[:2]
+                    new_elements.append(Image(id=element_id, name=entry.name, context={}, file=asset, width=width, height=height))
+                except Exception as e:
+                    print(f"Failed to load image for {entry.name} to generate UID: {e}")
+
+        local_jobs[job_id]["progress"] = {
+            "value": 90,
+            "total": 100,
+            "description": "Saving directory contents to parameter graph..."
+        }
         with graph_lock:
             for el in new_elements:
                 param_graph.add_element(el)
                 param_graph.update_element(el.id, {"parent": existing_dir_id})
             param_graph.save()
-            
-        # Trigger embedding calculation for the newly added audio files
-        trigger_embedding_update(background=False)
-        
-        response_data = {
+
+        # Trigger background incremental embedding updates
+        trigger_embedding_update(background=True)
+
+        result_payload = {
             "message": f"Successfully expanded path {path_element.name}",
             "directory_id": existing_dir_id,
-            "elements": [el.to_dict() for el in new_elements],
-            "success": True
+            "node_id": existing_dir_id,
+            "id": existing_dir_id,
+            "elements": [el.to_dict() for el in new_elements]
         }
-        if new_dir_created:
-            response_data["new_directory"] = new_dir.to_dict()
-            if new_edge:
-                response_data["new_edge"] = new_edge
-            
-        return jsonify(response_data)
+        if new_dir_created and new_dir:
+            result_payload["new_directory"] = new_dir.to_dict()
+        if new_edge:
+            result_payload["new_edge"] = new_edge
+
+        local_jobs[job_id]["status"] = "completed"
+        local_jobs[job_id]["progress"] = {
+            "value": 100,
+            "total": 100,
+            "description": f"Expanded {len(new_elements)} items."
+        }
+        local_jobs[job_id]["result"] = result_payload
 
     except Exception as e:
-        print(f"Failed to expand path: {e}")
+        print(f"Failed in async directory expansion: {e}")
         traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        local_jobs[job_id]["status"] = "failed"
+        local_jobs[job_id]["progress"] = None
+        local_jobs[job_id]["error"] = str(e)
+        local_jobs[job_id]["traceback"] = traceback.format_exc()
+
+
+@app.route("/expand_path", methods=["POST"])
+async def expand_path():
+    """Reads a PathNode, creates a Directory compound node if needed, and populates it asynchronously."""
+    if param_graph is None:
+        return jsonify({"error": "No project loaded"}), 400
+
+    try:
+        data = request.get_json() or {}
+        path_node_id = data.get("path_node_id")
+        if not path_node_id:
+            return jsonify({"error": "path_node_id is required"}), 400
+
+        job_id = f"expand_path_{uuid.uuid4().hex[:12]}"
+        local_jobs[job_id] = {
+            "status": "pending",
+            "progress": {"value": 0, "total": 100, "description": "Starting directory expansion..."},
+            "result": None,
+            "error": None,
+            "traceback": None,
+            "name": "Expand Directory"
+        }
+
+        threading.Thread(
+            target=contextvars.copy_context().run,
+            args=(lambda: asyncio.run(_expand_path_task(job_id, path_node_id)),),
+            daemon=True
+        ).start()
+
+        return jsonify({
+            "success": True,
+            "job_id": job_id,
+            "message": "Directory expansion job started"
+        }), 202
+
+    except Exception as e:
+        print(f"Failed to start directory expansion: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
 def resolve_audio_path(audio_id):
     """Gets the audio path, falling back to the project cache if the original file was deleted."""
@@ -1451,20 +1886,47 @@ def cache_used_audio(audio_id):
         except Exception as e:
             print(f"Failed to cache audio {audio_id}: {e}")
 
-def update_batch_labels(batch_id: str):
+def values_are_equal(v1, v2) -> bool:
+    """Safe deep equality comparison supporting Python primitives, dicts, lists, numpy arrays, and torch tensors."""
+    if v1 is v2:
+        return True
+    if v1 is None or v2 is None:
+        return v1 is v2
+    if isinstance(v1, (int, float)) and isinstance(v2, (int, float)):
+        return v1 == v2
+    if type(v1) != type(v2):
+        return False
+    if isinstance(v1, torch.Tensor) and isinstance(v2, torch.Tensor):
+        return v1.shape == v2.shape and torch.equal(v1, v2)
+    if isinstance(v1, np.ndarray) and isinstance(v2, np.ndarray):
+        return v1.shape == v2.shape and np.array_equal(v1, v2)
+    if isinstance(v1, dict) and isinstance(v2, dict):
+        if set(v1.keys()) != set(v2.keys()):
+            return False
+        return all(values_are_equal(v1[k], v2[k]) for k in v1)
+    if isinstance(v1, (list, tuple)) and isinstance(v2, (list, tuple)):
+        if len(v1) != len(v2):
+            return False
+        return all(values_are_equal(a, b) for a, b in zip(v1, v2))
+    try:
+        return bool(v1 == v2)
+    except Exception:
+        return False
+
+def update_group_labels(group_id: str):
     """
-    Recalculates the shared parameters of a batch and updates the batch's alias,
+    Recalculates the shared parameters of a group and updates the group's alias,
     as well as the aliases of all its children (based on their unique parameters).
     Assumes caller holds `graph_lock`.
     """
-    if param_graph is None or not param_graph.G.has_node(batch_id):
+    if param_graph is None or not param_graph.G.has_node(group_id):
         return
 
-    batch_node_attrs = param_graph.G.nodes[batch_id]
-    if batch_node_attrs.get('type') != 'batch':
+    group_node_attrs = param_graph.G.nodes[group_id]
+    if group_node_attrs.get('type') != 'group':
         return
         
-    member_ids = batch_node_attrs.get('member_ids', [])
+    member_ids = group_node_attrs.get('member_ids', [])
     if not member_ids:
         return
 
@@ -1477,52 +1939,83 @@ def update_batch_labels(batch_id: str):
         try:
             el = param_graph.get_element(m_id)
             ctx = getattr(el, 'context', {})
-            contexts.append(ctx if isinstance(ctx, dict) else {})
+            filtered_ctx = {
+                k: v for k, v in (ctx.items() if isinstance(ctx, dict) else [])
+                if k not in DYNAMIC_LABELING_BLACKLIST
+            }
+            contexts.append(filtered_ctx)
         except Exception:
             contexts.append({})
     
     def diff_recursive(vals: list):
         if not vals:
             return None, []
-        if all(v == vals[0] for v in vals):
+        if len(vals) == 1:
+            return vals[0], [None]
+        if all(values_are_equal(v, vals[0]) for v in vals):
             return vals[0], [None] * len(vals)
             
-        if all(isinstance(v, dict) for v in vals):
+        if all(isinstance(v, dict) for v in vals if v is not None):
             shared_dict = {}
             diff_dicts = [{} for _ in vals]
-            all_keys = set().union(*(d.keys() for d in vals))
+            all_keys = set()
+            for d in vals:
+                if isinstance(d, dict):
+                    all_keys.update(d.keys())
             
             for k in all_keys:
-                if not all(k in d for d in vals):
-                    for idx, d in enumerate(vals):
-                        if k in d:
-                            diff_dicts[idx][k] = d[k]
+                if k in DYNAMIC_LABELING_BLACKLIST:
                     continue
                     
-                k_vals = [d[k] for d in vals]
-                shared_k, diff_k = diff_recursive(k_vals)
+                present_indices = [idx for idx, d in enumerate(vals) if isinstance(d, dict) and k in d]
+                if not present_indices:
+                    continue
+                    
+                k_vals_present = [vals[idx][k] for idx in present_indices]
                 
-                if shared_k is not None or any(dk is not None for dk in diff_k):
+                # If present in all members and completely identical
+                if len(present_indices) == len(vals) and all(values_are_equal(v, k_vals_present[0]) for v in k_vals_present):
+                    shared_dict[k] = k_vals_present[0]
+                    continue
+                    
+                # If all present members have dicts or lists for k, recurse
+                if len(present_indices) == len(vals) and all(isinstance(v, (dict, list)) for v in k_vals_present):
+                    k_vals = [d[k] for d in vals]
+                    shared_k, diff_k = diff_recursive(k_vals)
                     if shared_k is not None:
                         shared_dict[k] = shared_k
-                    for idx, dk in enumerate(diff_k):
-                        if dk is not None:
-                            diff_dicts[idx][k] = dk
-            return (shared_dict if shared_dict else None), (diff_dicts if any(d for d in diff_dicts) else [None]*len(vals))
+                    has_any_diff = any(dk is not None and (not isinstance(dk, (dict, list)) or len(dk) > 0) for dk in diff_k)
+                    if has_any_diff:
+                        for idx, dk in enumerate(diff_k):
+                            if dk is not None and (not isinstance(dk, (dict, list)) or len(dk) > 0):
+                                diff_dicts[idx][k] = dk
+                    continue
+
+                # If all present members share the exact same value for k, treat as shared context
+                if all(values_are_equal(v, k_vals_present[0]) for v in k_vals_present):
+                    shared_dict[k] = k_vals_present[0]
+                    continue
+                    
+                # Values actually differ among members
+                for idx in present_indices:
+                    diff_dicts[idx][k] = vals[idx][k]
+                    
+            has_diff = any(bool(d) for d in diff_dicts)
+            return (shared_dict if shared_dict else None), (diff_dicts if has_diff else [None] * len(vals))
             
-        if all(isinstance(v, list) for v in vals) and all(len(v) == len(vals[0]) for v in vals):
+        if all(isinstance(v, list) for v in vals if v is not None) and all(len(v) == len(vals[0]) for v in vals if isinstance(v, list)):
             shared_list = []
             diff_lists = [[] for _ in vals]
             has_diff = False
             
             for i in range(len(vals[0])):
-                i_vals = [v[i] for v in vals]
+                i_vals = [v[i] if isinstance(v, list) else None for v in vals]
                 shared_i, diff_i = diff_recursive(i_vals)
                 
                 shared_list.append(shared_i)
                 for idx, di in enumerate(diff_i):
                     diff_lists[idx].append(di)
-                if any(di is not None for di in diff_i):
+                if any(di is not None and (not isinstance(di, (dict, list)) or len(di) > 0) for di in diff_i):
                     has_diff = True
                     
             if has_diff:
@@ -1536,13 +2029,15 @@ def update_batch_labels(batch_id: str):
         if isinstance(val, dict):
             items = []
             for k, v in val.items():
+                if k in DYNAMIC_LABELING_BLACKLIST:
+                    continue
                 new_path = f"{path}.{k}" if path else k
                 items.extend(flatten_diff(v, new_path))
             return items
         elif isinstance(val, list):
             items = []
             for i, v in enumerate(val):
-                if v is not None:
+                if v is not None and (not isinstance(v, (dict, list)) or len(v) > 0):
                     new_path = f"{path}[{i}]"
                     items.extend(flatten_diff(v, new_path))
             return items
@@ -1572,15 +2067,17 @@ def update_batch_labels(batch_id: str):
         shared_context = shared_res or {}
         member_diffs_list = [d or {} for d in diff_res]
 
-    print(f"Shared context: {shared_context}")
-    print(f"Member diffs list: {member_diffs_list}")
+    # Generate a label for the group based on the shared prompt/context
+    full_group_alias = str(shared_context.get('prompt') or "Artifact Group")
+    group_alias = full_group_alias
+    if len(str(group_alias)) > 30:
+        group_alias = str(group_alias)[:27] + "..."
 
-    # Generate a label for the batch based on the shared prompt/context
-    batch_alias = shared_context.get('prompt', "Artifact Batch")
-    if len(str(batch_alias)) > 30:
-        batch_alias = str(batch_alias)[:27] + "..."
-
-    param_graph.update_element(batch_id, {"shared_context": shared_context, "alias": batch_alias})
+    param_graph.update_element(group_id, {
+        "shared_context": shared_context,
+        "alias": group_alias,
+        "full_alias": full_group_alias
+    })
 
     # Update member aliases
     for member_id, ctx, diff_dict in zip(member_ids, contexts, member_diffs_list):
@@ -1598,228 +2095,366 @@ def update_batch_labels(batch_id: str):
             else:
                 diff_items.append(f"{cleaned}: {val}")
             
-        diff_label = "\n".join(diff_items) if diff_items else "Base"
-        if len(diff_label) > 40:
+        full_diff_label = "\n".join(diff_items) if diff_items else None
+        diff_label = full_diff_label
+        if diff_label and len(diff_label) > 40:
             diff_label = diff_label[:37] + "..."
             
-        param_graph.update_element(member_id, {"alias": diff_label})
+        param_graph.update_element(member_id, {
+            "alias": diff_label,
+            "full_alias": full_diff_label
+        })
 
 def trigger_labeling_update():
     """
-    Forces a graph-wide recalculation of all batch and node labels.
+    Forces a graph-wide recalculation of all group and node labels.
     """
     if param_graph is None:
         return
 
     with graph_lock:
-        batch_ids = [
+        group_ids = [
             node for node, data in param_graph.G.nodes(data=True)
-            if data.get('type') == 'batch'
+            if data.get('type') == 'group'
         ]
-        for batch_id in batch_ids:
-            update_batch_labels(batch_id)
+        for group_id in group_ids:
+            update_group_labels(group_id)
             
         param_graph.save()
     print("Labeling update completed successfully.")
 
-def trigger_embedding_update(force_recalculate=False, background=True):
+_shared_clap_encoder = None
+_shared_clip_encoder = None
+_shared_interrogator = None
+_shared_encoder_lock = threading.Lock()
+
+def get_shared_clap_encoder() -> CLAPEncoder:
+    global _shared_clap_encoder
+    with _shared_encoder_lock:
+        if _shared_clap_encoder is None:
+            _shared_clap_encoder = CLAPEncoder()
+        return _shared_clap_encoder
+
+def get_shared_clip_encoder() -> CLIPEncoder:
+    global _shared_clip_encoder
+    with _shared_encoder_lock:
+        if _shared_clip_encoder is None:
+            _shared_clip_encoder = CLIPEncoder()
+        return _shared_clip_encoder
+
+def get_shared_interrogator() -> SemanticInterrogator:
+    global _shared_interrogator
+    with _shared_encoder_lock:
+        if _shared_interrogator is None:
+            interrogator = SemanticInterrogator(device_accelerator)
+            bank_path = Path(__file__).parent / "data" / "semantic_transitions_bank.pt"
+            if bank_path.exists():
+                interrogator.load_bank_from_disk(str(bank_path))
+            _shared_interrogator = interrogator
+        return _shared_interrogator
+
+_embedding_worker_lock = threading.Lock()
+_embedding_worker_running = False
+_embedding_update_pending = False
+_force_recalculate_pending = False
+_pending_embedding_job_ids: list[str] = []
+
+def _execute_embedding_pass(force_recalculate=False, job_ids=None):
+    if job_ids is None:
+        job_ids = []
+        
+    if param_graph is None or getattr(param_graph, "G", None) is None:
+        return
+
+    try:
+        for j_id in job_ids:
+            if j_id in local_jobs:
+                local_jobs[j_id]["status"] = "running"
+                local_jobs[j_id]["progress"] = {
+                    "value": 10,
+                    "total": 100,
+                    "description": "Initializing CLAP/CLIP encoders..."
+                }
+
+        interrogator = get_shared_interrogator()
+        bank_path = Path(__file__).parent / "data" / "semantic_transitions_bank.pt"
+        has_label_bank = bank_path.exists()
+
+        group_keys = list(SIMILARITY_GROUPS.items())
+        for g_idx, (group_type, embedding_type) in enumerate(group_keys):
+            for j_id in job_ids:
+                if j_id in local_jobs:
+                    local_jobs[j_id]["progress"] = {
+                        "value": int(20 + (g_idx / max(len(group_keys), 1)) * 60),
+                        "total": 100,
+                        "description": f"Processing {group_type} embeddings..."
+                    }
+
+            if group_type == "audio":
+                encoder = get_shared_clap_encoder()
+                resolver = resolve_audio_path
+            elif group_type == "image":
+                encoder = get_shared_clip_encoder()
+                resolver = resolve_image_path
+            else:
+                print(f"Unknown similarity group type: {group_type}")
+                continue
+
+            # 1. Compute embeddings ONLY for nodes that need them
+            with graph_lock:
+                if param_graph is None or getattr(param_graph, "G", None) is None:
+                    return
+                nodes_to_process = []
+                for node in param_graph.G.nodes():
+                    el = param_graph.get_element(node)
+                    if el and getattr(el, 'type', None) == group_type:
+                        emb_copy = getattr(el, 'embeddings', {}).copy()
+                        nodes_to_process.append((node, emb_copy))
+                    
+            for node, embeddings in nodes_to_process:
+                if not force_recalculate and embedding_type in embeddings:
+                    continue
+
+                try:
+                    file_path = resolver(node)
+                    if not file_path:
+                        continue
+                        
+                    embedding = encoder.get_embedding(str(file_path))
+                    
+                    with graph_lock:
+                        if param_graph is None or not param_graph.G.has_node(node):
+                            continue
+                        current_data = param_graph.G.nodes[node]
+                        current_embeddings = current_data.get('embeddings', {})
+                        current_embeddings[embedding_type] = embedding.tolist()
+                        param_graph.update_element(node, {'embeddings': current_embeddings})
+                        
+                    print(f"Updated {embedding_type} embedding for node {node}")
+                except Exception as e:
+                    print(f"Could not update {embedding_type} embedding for node {node}. Error: {e}")
+
+            with graph_lock:
+                if param_graph is None or getattr(param_graph, "G", None) is None:
+                    return
+                # 2. Fast similarity edge rebuild based on cached embeddings (only remove spring edges)
+                edges_to_remove = [
+                    (u, v) for u, v, d in param_graph.G.edges(data=True) 
+                    if d.get('type') == 'spring' and d.get('group') == group_type
+                ]
+                param_graph.G.remove_edges_from(edges_to_remove)
+
+                group_nodes = {}
+                for node in param_graph.G.nodes():
+                    el = param_graph.get_element(node)
+                    if el and getattr(el, 'type', None) == group_type:
+                        if embedding_type in getattr(el, 'embeddings', {}):
+                            group_nodes[node] = el.embeddings[embedding_type]
+
+            if len(group_nodes) <= 1:
+                with graph_lock:
+                    if param_graph is not None:
+                        param_graph.save()
+                continue
+
+            node_ids = list(group_nodes.keys())
+            all_latents = np.array(list(group_nodes.values()))
+            
+            # L2 Normalize all latents to project them onto the unit hypersphere
+            norms = np.linalg.norm(all_latents, axis=1, keepdims=True)
+            all_latents = all_latents / np.where(norms == 0, 1e-10, norms)
+            
+            n_nodes = len(node_ids)
+            
+            # Dynamically scale k based on graph size (logarithmic scaling)
+            safe_n = max(n_nodes, 1)
+            k_near = max(2, min(7, int(np.log10(safe_n) * 2.5)))
+            k_far = max(1, min(4, int(np.log10(safe_n) * 1.5)))
+
+            # Build the nearest neighbors model
+            nn = NearestNeighbors(n_neighbors=min(n_nodes, k_near), metric='cosine', algorithm='brute')
+            nn.fit(all_latents)
+
+            # Find neighbors for each node
+            distances, indices = nn.kneighbors(all_latents)
+            
+            # Calculate full distance matrix for distant neighbors
+            full_distances = cosine_distances(all_latents)
+            k_furthest = min(n_nodes - 1, k_far)
+
+            with graph_lock:
+                if param_graph is None or getattr(param_graph, "G", None) is None:
+                    return
+                for i, node_id in enumerate(node_ids):
+                    near_indices = set(indices[i])
+                    emb_A = all_latents[i]
+                    
+                    # 1. Add nearest neighbors (similar nodes)
+                    for j, neighbor_idx in enumerate(indices[i]):
+                        if i == neighbor_idx:
+                            continue
+                            
+                        target_id = node_ids[neighbor_idx]
+                        # Never overwrite an existing structural (non-spring) edge!
+                        if param_graph.G.has_edge(node_id, target_id):
+                            existing_edge = param_graph.G[node_id][target_id]
+                            if existing_edge.get('type') != 'spring':
+                                continue
+                            
+                        source_label = ""
+                        if has_label_bank and group_type == "audio":
+                            emb_B = all_latents[neighbor_idx]
+                            diff_A_to_B = torch.tensor(emb_B - emb_A, dtype=torch.float32)
+                            res_A = interrogator.interrogate(diff_A_to_B, k=1)
+                            source_label = res_A[0][0] if res_A else ""
+                            
+                        param_graph.G.add_edge(
+                            node_id, 
+                            target_id, 
+                            id=f"edge-{node_id}-near-{target_id}",
+                            type='spring', 
+                            spring_type='near',
+                            weight=float(1 - distances[i][j]),
+                            group=group_type,
+                            source_label=source_label
+                        )
+                        
+                    # 2. Add furthest neighbors (ghost edges for separation)
+                    furthest_indices = np.argsort(full_distances[i])[-k_furthest:]
+                    
+                    for neighbor_idx in furthest_indices:
+                        if i == neighbor_idx or neighbor_idx in near_indices:
+                            continue  # Prevent overlap on small graphs
+                        
+                        target_id = node_ids[neighbor_idx]
+                        # Never overwrite an existing structural (non-spring) edge!
+                        if param_graph.G.has_edge(node_id, target_id):
+                            existing_edge = param_graph.G[node_id][target_id]
+                            if existing_edge.get('type') != 'spring':
+                                continue
+                            
+                        source_label = ""
+                        if has_label_bank and group_type == "audio":
+                            emb_B = all_latents[neighbor_idx]
+                            diff_A_to_B = torch.tensor(emb_B - emb_A, dtype=torch.float32)
+                            res_A = interrogator.interrogate(diff_A_to_B, k=1)
+                            source_label = res_A[0][0] if res_A else ""
+                        
+                        param_graph.G.add_edge(
+                            node_id, 
+                            target_id, 
+                            id=f"edge-{node_id}-dist-{target_id}",
+                            type='spring', 
+                            spring_type='distant',
+                            weight=float(1 - full_distances[i][neighbor_idx]),
+                            group=group_type,
+                            source_label=source_label
+                        )
+
+                param_graph.save()
+        print("Embeddings updated and similarity edges created successfully")
+        for j_id in job_ids:
+            if j_id in local_jobs:
+                local_jobs[j_id]["status"] = "completed"
+                local_jobs[j_id]["progress"] = {
+                    "value": 100,
+                    "total": 100,
+                    "description": "Embeddings updated successfully."
+                }
+                local_jobs[j_id]["result"] = {
+                    "message": "Embeddings updated successfully",
+                    "success": True
+                }
+
+    except Exception as e:
+        print(f"Failed to update embeddings: {e}")
+        traceback.print_exc()
+        for j_id in job_ids:
+            if j_id in local_jobs:
+                local_jobs[j_id]["status"] = "failed"
+                local_jobs[j_id]["progress"] = None
+                local_jobs[j_id]["error"] = str(e)
+                local_jobs[j_id]["traceback"] = traceback.format_exc()
+
+
+def _run_embedding_worker_loop():
+    global _embedding_worker_running, _embedding_update_pending, _force_recalculate_pending
+    try:
+        while True:
+            with _embedding_worker_lock:
+                force = _force_recalculate_pending
+                _force_recalculate_pending = False
+                _embedding_update_pending = False
+                current_job_ids = list(_pending_embedding_job_ids)
+                _pending_embedding_job_ids.clear()
+
+            _execute_embedding_pass(force_recalculate=force, job_ids=current_job_ids)
+
+            with _embedding_worker_lock:
+                if not _embedding_update_pending and not _force_recalculate_pending and not _pending_embedding_job_ids:
+                    _embedding_worker_running = False
+                    break
+    except Exception as e:
+        print(f"Error in embedding worker loop: {e}")
+        traceback.print_exc()
+        with _embedding_worker_lock:
+            _embedding_worker_running = False
+
+
+def trigger_embedding_update(force_recalculate=False, background=True, job_id=None):
     """
-    Background task to compute missing embeddings and recalculate similarity edges.
-    If force_recalculate is True, it will recompute embeddings for all nodes.
+    Thread-safe debounced task to compute missing embeddings and recalculate similarity edges.
+    Coalesces concurrent requests to prevent parallel duplicate model loading and calculations.
     """
+    global _embedding_worker_running, _embedding_update_pending, _force_recalculate_pending
     if param_graph is None:
         return
 
-    def update_embeddings_task():
-        try:
-            # Instantiate encoders lazily per task run
-            clap_encoder = None
-            clip_encoder = None
-            
-            # Initialize interrogator for semantic edge labels
-            interrogator = SemanticInterrogator(device_accelerator)
-            bank_path = Path(__file__).parent / "data" / "semantic_transitions_bank.pt"
-            has_label_bank = bank_path.exists()
-            if has_label_bank:
-                interrogator.load_bank_from_disk(str(bank_path))
-            
-            for group_type, embedding_type in SIMILARITY_GROUPS.items():
-                if group_type == "audio":
-                    if clap_encoder is None:
-                        clap_encoder = CLAPEncoder()
-                    encoder = clap_encoder
-                    resolver = resolve_audio_path
-                elif group_type == "image":
-                    if clip_encoder is None:
-                        clip_encoder = CLIPEncoder()
-                    encoder = clip_encoder
-                    resolver = resolve_image_path
-                else:
-                    print(f"Unknown similarity group type: {group_type}")
-                    continue
-
-                # 1. Compute embeddings ONLY for nodes that need them
-                with graph_lock:
-                    nodes_to_process = []
-                    for node in param_graph.G.nodes():
-                        el = param_graph.get_element(node)
-                        if el and getattr(el, 'type', None) == group_type:
-                            emb_copy = getattr(el, 'embeddings', {}).copy()
-                            nodes_to_process.append((node, emb_copy))
-                        
-                for node, embeddings in nodes_to_process:
-                    if not force_recalculate and embedding_type in embeddings:
-                        continue
-
-                    try:
-                        file_path = resolver(node)
-                        if not file_path:
-                            continue
-                            
-                        embedding = encoder.get_embedding(str(file_path))
-                        
-                        with graph_lock:
-                            current_data = param_graph.G.nodes[node]
-                            current_embeddings = current_data.get('embeddings', {})
-                            current_embeddings[embedding_type] = embedding.tolist()
-                            param_graph.update_element(node, {'embeddings': current_embeddings})
-                            
-                        print(f"Updated {embedding_type} embedding for node {node}")
-                    except Exception as e:
-                        print(f"Could not update {embedding_type} embedding for node {node}. Error: {e}")
-
-                with graph_lock:
-                    # 2. Fast similarity edge rebuild based on cached embeddings
-                    edges_to_remove = [
-                        (u, v) for u, v, d in param_graph.G.edges(data=True) 
-                        if d.get('group') == group_type
-                    ]
-                    param_graph.G.remove_edges_from(edges_to_remove)
-
-                    group_nodes = {}
-                    for node in param_graph.G.nodes():
-                        el = param_graph.get_element(node)
-                        if el and getattr(el, 'type', None) == group_type:
-                            if embedding_type in getattr(el, 'embeddings', {}):
-                                group_nodes[node] = el.embeddings[embedding_type]
-
-                if len(group_nodes) <= 1:
-                    with graph_lock:
-                        param_graph.save()
-                    continue
-
-                node_ids = list(group_nodes.keys())
-                all_latents = np.array(list(group_nodes.values()))
-                
-                # L2 Normalize all latents to project them onto the unit hypersphere
-                norms = np.linalg.norm(all_latents, axis=1, keepdims=True)
-                all_latents = all_latents / np.where(norms == 0, 1e-10, norms)
-                
-                n_nodes = len(node_ids)
-                
-                # Dynamically scale k based on graph size (logarithmic scaling)
-                # e.g., 10 nodes -> k_near=2, 100 nodes -> k_near=5, 1000+ nodes -> k_near=7
-                safe_n = max(n_nodes, 1)
-                k_near = max(2, min(7, int(np.log10(safe_n) * 2.5)))
-                k_far = max(1, min(4, int(np.log10(safe_n) * 1.5)))
-
-                # Build the nearest neighbors model
-                nn = NearestNeighbors(n_neighbors=min(n_nodes, k_near), metric='cosine', algorithm='brute')
-                nn.fit(all_latents)
-
-                # Find neighbors for each node
-                distances, indices = nn.kneighbors(all_latents)
-                
-                # Calculate full distance matrix for distant neighbors
-                full_distances = cosine_distances(all_latents)
-                k_furthest = min(n_nodes - 1, k_far)
-
-                with graph_lock:
-                    for i, node_id in enumerate(node_ids):
-                        near_indices = set(indices[i])
-                        emb_A = all_latents[i]
-                        
-                        # 1. Add nearest neighbors (similar nodes)
-                        for j, neighbor_idx in enumerate(indices[i]):
-                            if i == neighbor_idx:
-                                continue
-                                
-                            source_label = ""
-                            if has_label_bank and group_type == "audio":
-                                emb_B = all_latents[neighbor_idx]
-                                diff_A_to_B = torch.tensor(emb_B - emb_A, dtype=torch.float32)
-                                
-                                res_A = interrogator.interrogate(diff_A_to_B, k=1)
-                                
-                                source_label = res_A[0][0] if res_A else ""
-                                
-                            param_graph.G.add_edge(
-                                node_id, 
-                                node_ids[neighbor_idx], 
-                                id=f"edge-{node_id}-near-{node_ids[neighbor_idx]}",
-                                type='spring', 
-                                spring_type='near',
-                                weight=float(1 - distances[i][j]),
-                                group=group_type,
-                                source_label=source_label
-                            )
-                            
-                        # 2. Add furthest neighbors (ghost edges for separation)
-                        furthest_indices = np.argsort(full_distances[i])[-k_furthest:]
-                        
-                        for neighbor_idx in furthest_indices:
-                            if i == neighbor_idx or neighbor_idx in near_indices:
-                                continue  # Prevent overlap on small graphs
-                            
-                            source_label = ""
-                            if has_label_bank and group_type == "audio":
-                                emb_B = all_latents[neighbor_idx]
-                                diff_A_to_B = torch.tensor(emb_B - emb_A, dtype=torch.float32)
-                                
-                                res_A = interrogator.interrogate(diff_A_to_B, k=1)
-                                
-                                source_label = res_A[0][0] if res_A else ""
-                            
-                            param_graph.G.add_edge(
-                                node_id, 
-                                node_ids[neighbor_idx], 
-                                id=f"edge-{node_id}-dist-{node_ids[neighbor_idx]}",
-                                type='spring', 
-                                spring_type='distant',
-                                weight=float(1 - full_distances[i][neighbor_idx]),
-                                group=group_type,
-                                source_label=source_label
-                            )
-
-                    param_graph.save()
-            print("Embeddings updated and similarity edges created successfully")
-
-        except Exception as e:
-            print(f"Failed to update embeddings: {e}")
-            traceback.print_exc()
-            
     if background:
-        thread = threading.Thread(target=update_embeddings_task)
-        thread.start()
+        with _embedding_worker_lock:
+            if job_id:
+                _pending_embedding_job_ids.append(job_id)
+            if force_recalculate:
+                _force_recalculate_pending = True
+
+            if _embedding_worker_running:
+                _embedding_update_pending = True
+                return
+
+            _embedding_worker_running = True
+            thread = threading.Thread(target=_run_embedding_worker_loop, daemon=True)
+            thread.start()
     else:
-        update_embeddings_task()
+        # Synchronous execution
+        job_ids = [job_id] if job_id else []
+        _execute_embedding_pass(force_recalculate=force_recalculate, job_ids=job_ids)
 
 @app.route("/update_embeddings", methods=["POST"])
 def update_embeddings():
-    """Update all embeddings and create similarity edges."""
+    """Update all embeddings and create similarity edges asynchronously."""
     if param_graph is None:
         return jsonify({"error": "No project loaded"}), 400
 
     data = request.get_json(silent=True) or {}
     force = data.get("force", False)
-    
-    # Run synchronously so the frontend's HTTP request waits for completion
-    trigger_embedding_update(force_recalculate=force, background=False)
+
+    job_id = f"update_embeddings_{uuid.uuid4().hex[:12]}"
+    local_jobs[job_id] = {
+        "status": "pending",
+        "progress": {"value": 0, "total": 100, "description": "Starting embeddings update..."},
+        "result": None,
+        "error": None,
+        "traceback": None,
+        "name": "Update Embeddings"
+    }
+
+    trigger_embedding_update(force_recalculate=force, background=True, job_id=job_id)
 
     return jsonify({
-        "message": "Embeddings updated successfully.",
-        "success": True
-    }), 200
+        "success": True,
+        "job_id": job_id,
+        "message": "Embeddings update started"
+    }), 202
 
 @app.route("/update_labels", methods=["POST"])
 def update_labels():
@@ -1848,37 +2483,11 @@ def repair_edges():
         with graph_lock:
             edges_added = 0
             
-            for node_id, node_data in param_graph.G.nodes(data=True):
+            for node_id in list(param_graph.G.nodes()):
                 element = param_graph.get_element(node_id)
                 if not element:
                     continue
-
-                potential_source_ids = []
-                
-                if hasattr(element, 'base_model_id') and element.base_model_id:
-                    potential_source_ids.append((element.base_model_id, 'binds_to'))
-                    
-                if hasattr(element, 'context') and isinstance(element.context, dict):
-                    for key, value in element.context.items():
-                        if key.endswith('_id') and isinstance(value, str):
-                            potential_source_ids.append((value, 'source'))
-                        elif key == 'gratings' and isinstance(value, list):
-                            for grating_item in value:
-                                g_id = grating_item.get('id')
-                                if g_id:
-                                    potential_source_ids.append((g_id, 'source'))
-                                    
-                for source_id, relation in potential_source_ids:
-                    if param_graph.G.has_node(source_id):
-                        # We check out_edges explicitly to ensure we don't skip structural edges 
-                        # just because a 'spring' edge already exists between the nodes.
-                        edge_exists = any(v == node_id and attrs.get('type') != 'spring' 
-                                          for _, v, attrs in param_graph.G.out_edges(source_id, data=True))
-                        if not edge_exists:
-                            print(f"Restoring missing edge: {source_id} -> {node_id}")
-                            source_el = param_graph.get_element(source_id)
-                            param_graph.link(source_el, element, relation=relation)
-                            edges_added += 1
+                edges_added += link_artifact_dependencies(element, param_graph)
 
             if edges_added > 0:
                 param_graph.save()
@@ -2009,74 +2618,261 @@ def serve_image(image_id):
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
-@app.route("/export", methods=["POST"])
-def export_audio():
-    """Export audio files"""
-    if param_graph is None:
-        return jsonify({"error": "No project loaded"}), 400
-    
+def simplify_dynamic_label(label: str | None) -> str:
+    """
+    Simplifies a dynamic label or alias into a clean, filesystem-safe filename stem
+    with ultra-compact abbreviations for bending parameters (e.g. c1_f1.5_c3_f-0.5).
+    E.g.:
+      'seed: 1001' -> 'seed_1001'
+      'seed: 1001\ncfg_scale: 7.0' -> 'seed_1001_cfg_scale_7.0'
+      'cluster: 1 (conv1.conv)' -> 'c1'
+      'cluster: 1 (convs.2.conv)\nfactor: 1.5 (convs.2.conv)\ncluster: 3 (convs.4.conv)\nfactor: -0.5 (convs.4.conv)' -> 'c1_f1.5_c3_f-0.5'
+      'prompt: ambient pad...' -> 'prompt_ambient_pad'
+      'strength: 0.8 (layer4)' -> 's0.8'
+    """
+    if not label or not isinstance(label, str):
+        return ""
+
+    import re
+    # Remove ellipsis
+    cleaned = label.replace("...", "")
+
+    # Process line-by-line / item-by-item to apply ultra-compact abbreviations
+    lines = [l.strip() for l in cleaned.splitlines() if l.strip()]
+    processed_parts = []
+
+    for line in lines:
+        # Check for bending cluster: e.g. "cluster: 1 (convs.2.conv)" or "cluster: 1"
+        m_cluster = re.match(r'^(?:cluster|c):\s*([^\s\(\)]+)', line, re.IGNORECASE)
+        if m_cluster:
+            processed_parts.append(f"c{m_cluster.group(1)}")
+            continue
+
+        # Check for bending factor: e.g. "factor: 1.5 (convs.2.conv)" or "factor: -0.5"
+        m_factor = re.match(r'^(?:factor|f):\s*([^\s\(\)]+)', line, re.IGNORECASE)
+        if m_factor:
+            processed_parts.append(f"f{m_factor.group(1)}")
+            continue
+
+        # Check for bending strength: e.g. "strength: 0.8 (layer4)"
+        m_strength = re.match(r'^(?:strength|s):\s*([^\s\(\)]+)', line, re.IGNORECASE)
+        if m_strength:
+            processed_parts.append(f"s{m_strength.group(1)}")
+            continue
+
+        # Check for bending bias: e.g. "bias: 0.2 (layer4)"
+        m_bias = re.match(r'^(?:bias|b):\s*([^\s\(\)]+)', line, re.IGNORECASE)
+        if m_bias:
+            processed_parts.append(f"b{m_bias.group(1)}")
+            continue
+
+        # General key-value or text: strip parenthesized addresses/comments
+        line_no_parens = re.sub(r'\s*\([^\)]*\)', '', line)
+        line_clean = re.sub(r':\s*', '_', line_no_parens)
+        line_clean = re.sub(r'[\r\n\t\s\(\)\[\]\{\}]+', '_', line_clean)
+        line_clean = re.sub(r'[<>:"/\\|?*+=,;`~!@#$%^&]', '_', line_clean)
+        line_clean = re.sub(r'_+', '_', line_clean)
+        line_clean = line_clean.strip(' _.-')
+        if line_clean:
+            processed_parts.append(line_clean)
+
+    if not processed_parts:
+        # Fallback if no lines matched
+        res = re.sub(r'\s*\([^\)]*\)', '', cleaned)
+        res = re.sub(r'[\r\n\t\s\(\)\[\]\{\}]+', '_', res)
+        res = re.sub(r'[<>:"/\\|?*+=,;`~!@#$%^&]', '_', res)
+        res = re.sub(r'_+', '_', res)
+        return res.strip(' _.-')
+
+    result = "_".join(processed_parts)
+    # Collapse multiple underscores or dots
+    result = re.sub(r'_+', '_', result)
+    result = re.sub(r'\.+', '.', result)
+    result = result.strip(' _.-')
+    # Limit maximum length for filename safety (up to 220 characters)
+    if len(result) > 220:
+        result = result[:220].rstrip(' _.-')
+    return result
+
+async def _export_audio_task(job_id: str, names: list[str], export_dir_str: str | None) -> None:
     try:
-        data = request.get_json()
-        names = data.get('names', [])
-        export_dir_str = data.get('export_dir')
-        
-        if not names:
-            return jsonify({"error": "names list is required"}), 400
-        
+        local_jobs[job_id]["status"] = "running"
+        local_jobs[job_id]["progress"] = {
+            "value": 5,
+            "total": 100,
+            "description": "Preparing export directory..."
+        }
+
+        # Resolve all elements and expand groups if present
+        elements_to_export: list[tuple[GraphElement, str | None]] = []
+        with graph_lock:
+            for name in names:
+                element = None
+                node_data = None
+                if param_graph.G.has_node(name):
+                    element = param_graph.get_element(name)
+                    node_data = param_graph.G.nodes[name]
+                else:
+                    for node_id, data in param_graph.G.nodes(data=True):
+                        if data.get('name') == name:
+                            element = param_graph.get_element(node_id)
+                            node_data = data
+                            break
+
+                if not element:
+                    raise ValueError(f"Element '{name}' not found")
+
+                # If element is a Group, expand to its members
+                if node_data.get('type') == 'group' or hasattr(element, 'member_ids'):
+                    update_group_labels(element.id)
+                    member_ids = getattr(element, 'member_ids', []) or node_data.get('member_ids', [])
+                    for m_id in member_ids:
+                        if param_graph.G.has_node(m_id):
+                            m_element = param_graph.get_element(m_id)
+                            elements_to_export.append((m_element, element.id))
+                else:
+                    parent_id = node_data.get('parent')
+                    if parent_id and param_graph.G.has_node(parent_id):
+                        p_data = param_graph.G.nodes[parent_id]
+                        if p_data.get('type') == 'group':
+                            update_group_labels(parent_id)
+                    elements_to_export.append((element, parent_id))
+
+        if not elements_to_export:
+            raise ValueError("No elements found to export")
+
         is_file_target = False
         if export_dir_str:
             export_path_obj = Path(export_dir_str)
-            if len(names) == 1 and export_path_obj.suffix:
+            if len(elements_to_export) == 1 and export_path_obj.suffix:
                 export_dir = export_path_obj.parent
                 is_file_target = True
             else:
                 export_dir = export_path_obj
         else:
             export_dir = Path(param_graph.root) / "export"
-        
+
         export_dir.mkdir(parents=True, exist_ok=True)
-        
+
         exported_paths = []
-        for name in names:
-            # Look up element by id or by name
-            element = None
-            if param_graph.G.has_node(name):
-                element = param_graph.get_element(name)
-            else:
-                for node_id, node_data in param_graph.G.nodes(data=True):
-                    if node_data.get('name') == name:
-                        element = param_graph.get_element(node_id)
-                        break
-            
-            if not element:
-                return jsonify({"error": f"Element '{name}' not found"}), 404
-            
+        used_filenames = set()
+        total_items = len(elements_to_export)
+
+        for idx, (element, parent_id) in enumerate(elements_to_export):
+            local_jobs[job_id]["progress"] = {
+                "value": int(10 + (idx / max(total_items, 1)) * 85),
+                "total": 100,
+                "description": f"Exporting file {idx + 1} of {total_items}: {element.name}"
+            }
+
             audio_path = resolve_audio_path(element.id)
             if not audio_path or not audio_path.exists():
-                return jsonify({"error": f"Audio file for element '{name}' not found"}), 404
-            
+                raise ValueError(f"Audio file for element '{element.name}' not found")
+
             if is_file_target:
                 dest_path = export_path_obj
             else:
-                dest_filename = f"{element.name}{audio_path.suffix}"
+                ext = audio_path.suffix if audio_path.suffix else ".wav"
+                
+                # Check for untruncated dynamic label (full_alias) or fallback alias on the node
+                node_alias = None
+                with graph_lock:
+                    if param_graph.G.has_node(element.id):
+                        node_alias = (
+                            param_graph.G.nodes[element.id].get('full_alias')
+                            or param_graph.G.nodes[element.id].get('alias')
+                        )
+
+                if not node_alias and hasattr(element, 'full_alias'):
+                    node_alias = getattr(element, 'full_alias')
+                if not node_alias and hasattr(element, 'alias'):
+                    node_alias = getattr(element, 'alias')
+
+                simplified_alias = simplify_dynamic_label(node_alias) if node_alias else ""
+
+                if simplified_alias:
+                    stem = simplified_alias
+                else:
+                    name_stem = element.name
+                    if name_stem.endswith(ext):
+                        name_stem = name_stem[:-len(ext)]
+                    stem = simplify_dynamic_label(name_stem) or name_stem or element.id
+
+                dest_filename = f"{stem}{ext}"
+                counter = 1
+                while dest_filename in used_filenames or (export_dir / dest_filename).exists():
+                    dest_filename = f"{stem}_{counter}{ext}"
+                    counter += 1
+
+                used_filenames.add(dest_filename)
                 dest_path = export_dir / dest_filename
-            
+
             shutil.copy2(audio_path, dest_path)
             exported_paths.append(dest_path)
-        
-        # If we exported a single file, return that file's path. Otherwise return the export directory.
+
         export_path = exported_paths[0] if len(exported_paths) == 1 else export_dir
-        
-        return jsonify({
+
+        local_jobs[job_id]["status"] = "completed"
+        local_jobs[job_id]["progress"] = {
+            "value": 100,
+            "total": 100,
+            "description": "Export completed."
+        }
+        local_jobs[job_id]["result"] = {
             "message": "Export completed",
             "export_path": str(export_path),
-            "success": True
-        })
-        
+            "exported_files": [str(p) for p in exported_paths]
+        }
+
     except Exception as e:
-        print(f"Export failed: {e}")
+        print(f"Failed in async audio export: {e}")
         traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
+        local_jobs[job_id]["status"] = "failed"
+        local_jobs[job_id]["progress"] = None
+        local_jobs[job_id]["error"] = str(e)
+        local_jobs[job_id]["traceback"] = traceback.format_exc()
+
+
+@app.route("/export", methods=["POST"])
+async def export_audio():
+    """Export audio files asynchronously as a local background job."""
+    if param_graph is None:
+        return jsonify({"error": "No project loaded"}), 400
+
+    try:
+        data = request.get_json() or {}
+        names = data.get('names', [])
+        export_dir_str = data.get('export_dir') or data.get('custom_path')
+
+        if not names:
+            return jsonify({"error": "names list is required"}), 400
+
+        job_id = f"export_{uuid.uuid4().hex[:12]}"
+        local_jobs[job_id] = {
+            "status": "pending",
+            "progress": {"value": 0, "total": 100, "description": "Starting export..."},
+            "result": None,
+            "error": None,
+            "traceback": None,
+            "name": "Export Audio"
+        }
+
+        threading.Thread(
+            target=contextvars.copy_context().run,
+            args=(lambda: asyncio.run(_export_audio_task(job_id, names, export_dir_str)),),
+            daemon=True
+        ).start()
+
+        return jsonify({
+            "success": True,
+            "job_id": job_id,
+            "message": "Export job started"
+        }), 202
+
+    except Exception as e:
+        print(f"Failed to start export: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
 # --------------------
 #  Element Updates
@@ -2089,12 +2885,12 @@ def update_element():
         return jsonify({"error": "No project loaded"}), 400
     
     try:
-        data = request.get_json()
-        element_name = data.get('name')
+        data = request.get_json() or {}
+        element_name = data.get('id') or data.get('name')
         attributes = data.get('attributes', {})
         
         if not element_name:
-            return jsonify({"error": "name is required"}), 400
+            return jsonify({"error": "id or name is required"}), 400
         
         with graph_lock:
             param_graph.update_element(element_name, attributes)
@@ -2202,12 +2998,12 @@ def remove_elements():
                     for child_id in children:
                         param_graph.update_element(child_id, {"parent": None, "alias": None})
 
-                    if node_attrs.get('type') == 'batch':
+                    if node_attrs.get('type') == 'group':
                         member_ids = node_attrs.get('member_ids', [])
                         for m_id in member_ids:
                             param_graph.update_element(m_id, {"parent": None, "alias": None})
                         
-                        # CRITICAL: strip the batch of its members so remove_element doesn't cascade
+                        # CRITICAL: strip the group of its members so remove_element doesn't cascade
                         param_graph.update_element(element_id, {"member_ids": []})
                         node_attrs['member_ids'] = []
 
@@ -2241,6 +3037,8 @@ def internal_error(error):
 # --------------------
 
 if __name__ == "__main__":
+    # Started here rather than at import so test runs do not write to the backend log
+    start_log_capture(data_cache_root / "logs", "backend")
     print(f"Starting StemmA2A backend on device: {device_accelerator}")
     app.run(
         host="127.0.0.1",

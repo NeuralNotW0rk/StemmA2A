@@ -1,3 +1,4 @@
+import threading
 import torch
 import torchaudio
 import torchaudio.transforms as T
@@ -21,27 +22,30 @@ class CLAPEncoder(Encoder):
         self._model = None
         self._processor = None
         self.target_sr = 48000
+        self._lock = threading.Lock()
 
     def load_model(self):
         """
         Loads the pre-trained CLAP model and processor from Hugging Face.
         """
         if self._model is None:
-            model_id = "laion/clap-htsat-unfused"
-            print(f"Loading CLAP model ({model_id})...")
-            try:
-                # Fast path: attempt to load from local cache to bypass network overhead
-                self._processor = ClapProcessor.from_pretrained(model_id, local_files_only=True)
-                self._model = ClapModel.from_pretrained(model_id, local_files_only=True).to(self.device)
-                print("CLAP model loaded directly from local cache.")
-            except Exception:
-                # Fallback: go online to download and cache if not fully present
-                print("CLAP model not fully cached. Downloading from Hugging Face Hub...")
-                self._processor = ClapProcessor.from_pretrained(model_id)
-                self._model = ClapModel.from_pretrained(model_id).to(self.device)
-                print("CLAP model downloaded and loaded.")
-                
-            self._model.eval()
+            with self._lock:
+                if self._model is None:
+                    model_id = "laion/clap-htsat-unfused"
+                    print(f"Loading CLAP model ({model_id})...")
+                    try:
+                        # Fast path: attempt to load from local cache to bypass network overhead
+                        self._processor = ClapProcessor.from_pretrained(model_id, local_files_only=True)
+                        self._model = ClapModel.from_pretrained(model_id, local_files_only=True).to(self.device)
+                        print("CLAP model loaded directly from local cache.")
+                    except Exception:
+                        # Fallback: go online to download and cache if not fully present
+                        print("CLAP model not fully cached. Downloading from Hugging Face Hub...")
+                        self._processor = ClapProcessor.from_pretrained(model_id)
+                        self._model = ClapModel.from_pretrained(model_id).to(self.device)
+                        print("CLAP model downloaded and loaded.")
+                        
+                    self._model.eval()
 
     @property
     def name(self) -> str:

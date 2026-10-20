@@ -90,7 +90,7 @@ async def test_grating_override():
             status = await engine.get_job_status(job_id)
             if status["status"] in ["completed", "failed"]:
                 break
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.01)
             
         print(f"Job finished with status: {status['status']}")
         if status["status"] == "failed":
@@ -132,6 +132,7 @@ def test_flask_endpoints():
     tmp_dir = tempfile.mkdtemp()
     
     # Instantiate clean graph and engine provider
+    from unittest.mock import AsyncMock, MagicMock
     from engine.engine_provider import EngineProvider
     import app as app_module
     
@@ -141,11 +142,14 @@ def test_flask_endpoints():
     
     old_graph = app_module.param_graph
     old_provider = app_module.engine_provider
+    old_trigger = app_module.trigger_embedding_update
     app_module.param_graph = g
     app_module.engine_provider = provider
+    app_module.trigger_embedding_update = MagicMock()
     
     # Import and register model in the graph using asyncio.run
     engine = provider.get_engine()
+    engine.cluster_features = AsyncMock(return_value=[i % 3 for i in range(512)])
     model_info = asyncio.run(engine.register_model(
         "stylegan2",
         name="Test StyleGAN2",
@@ -190,12 +194,22 @@ def test_flask_endpoints():
             ]
         }
         resp = client.post("/create_grating", json=payload)
-        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
+        assert resp.status_code == 202, f"Expected 202, got {resp.status_code}"
         data = resp.get_json()
         assert data["success"] is True
-        assert "grating" in data
-        
-        grating_node = data["grating"]
+        job_id = data["job_id"]
+
+        for _ in range(120):
+            import time
+            time.sleep(0.01)
+            status_resp = client.get(f"/job_status/{job_id}")
+            assert status_resp.status_code == 200
+            status_data = status_resp.get_json()
+            if status_data.get("status") in ("completed", "failed"):
+                break
+
+        assert status_data.get("status") == "completed", f"Job failed: {status_data.get('error')}"
+        grating_node = status_data["result"]["grating"]
         assert grating_node["id"].startswith("grating_")
         assert grating_node["base_model_id"] == model_info.id
         
@@ -210,12 +224,12 @@ def test_flask_endpoints():
         assert len(el["metadata"]["cluster_map"]) > 0, "Cluster map was not populated!"
         print("Feature clustering and dynamic grating creation verified successfully!")
         
-        # 3. Test update_batch_labels recursive comparison
-        print("Testing update_batch_labels recursive labeling...")
-        from param_graph.elements.collections.batch_element import Batch
+        # 3. Test update_group_labels recursive comparison
+        print("Testing update_group_labels recursive labeling...")
+        from param_graph.elements.collections.group_element import Group
         from param_graph.elements.artifacts.audio_element import Audio
         
-        batch_id = "test_batch_id"
+        group_id = "test_group_id"
         m1_id = "member_1"
         m2_id = "member_2"
         
@@ -268,15 +282,15 @@ def test_flask_endpoints():
             }
         )
         
-        batch_node = Batch(id=batch_id, member_ids=[m1_id, m2_id], member_type="audio")
+        group_node = Group(id=group_id, member_ids=[m1_id, m2_id], member_type="audio")
         
         g.add_element(m1)
         g.add_element(m2)
-        g.add_element(batch_node)
+        g.add_element(group_node)
         
-        # Trigger update_batch_labels
-        from app import update_batch_labels
-        update_batch_labels(batch_id)
+        # Trigger update_group_labels
+        from app import update_group_labels
+        update_group_labels(group_id)
         
         # Verify labels/aliases
         m1_alias = g.G.nodes[m1_id].get("alias")
@@ -284,7 +298,7 @@ def test_flask_endpoints():
         
         assert m1_alias == "cluster: 1 (conv1.conv)", f"Expected 'cluster: 1 (conv1.conv)', got '{m1_alias}'"
         assert m2_alias == "cluster: 2 (conv1.conv)", f"Expected 'cluster: 2 (conv1.conv)', got '{m2_alias}'"
-        print("Recursive batch member labeling verified successfully!")
+        print("Recursive group member labeling verified successfully!")
 
         # 4. Test POST /export_shared_model
         print("Testing POST /export_shared_model...")
@@ -292,10 +306,23 @@ def test_flask_endpoints():
             "model_id": model_info.id
         }
         resp = client.post("/export_shared_model", json=export_payload)
-        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
+        assert resp.status_code == 202, f"Expected 202, got {resp.status_code}"
         export_data = resp.get_json()
         assert export_data["success"] is True
-        assert "Successfully exported" in export_data["message"]
+        export_job_id = export_data["job_id"]
+
+        # Poll export job status
+        for _ in range(50):
+            import time
+            time.sleep(0.01)
+            status_resp = client.get(f"/job_status/{export_job_id}")
+            assert status_resp.status_code == 200
+            status_data = status_resp.get_json()
+            if status_data.get("status") in ("completed", "failed"):
+                break
+
+        assert status_data.get("status") == "completed", f"Job failed: {status_data.get('error')}"
+        assert "Successfully exported" in status_data["result"]["message"]
         
         # Verify dummy config file was created
         dummy_file = Path(tmp_dir) / "shared_models_dummy.json"
@@ -313,12 +340,21 @@ def test_flask_endpoints():
     finally:
         app_module.param_graph = old_graph
         app_module.engine_provider = old_provider
+        app_module.trigger_embedding_update = old_trigger
         try:
             shutil.rmtree(tmp_dir)
             print("Temporary test directory cleared.")
         except Exception as e:
             print(f"Non-critical cleanup warning: {e}")
 
+import unittest
+
+class TestEngineGratingOverride(unittest.TestCase):
+    def test_grating_override_async(self):
+        asyncio.run(test_grating_override())
+
+    def test_flask_endpoints_suite(self):
+        test_flask_endpoints()
+
 if __name__ == "__main__":
-    asyncio.run(test_grating_override())
-    test_flask_endpoints()
+    unittest.main()

@@ -1,5 +1,5 @@
 import { app, shell, BrowserWindow, ipcMain, dialog, protocol } from 'electron'
-import { join, extname } from 'path'
+import { join, extname, dirname, basename } from 'path'
 import { promises as fs } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
@@ -46,17 +46,34 @@ function startPythonBackend(): Promise<void> {
 
     if (is.dev && process.platform === 'win32') {
       // In dev mode on Windows, open a new terminal that stays open
-      console.log('Starting Python backend in new window')
+      console.log('Starting Python backend in new window...')
       const command = ['/c', 'start', 'cmd.exe', '/k', venvPath, '-u', appPyPath]
       pythonBackend = spawn('cmd.exe', command, {
         cwd: join(app.getAppPath(), 'backend'),
         env: spawnEnv
       })
-      // Resolve after a delay to allow the backend to initialize
-      setTimeout(() => {
-        console.log('Assuming Python backend is ready')
-        resolve()
-      }, 5000) // 5 seconds delay
+
+      // Actively poll health endpoint until Python server is ready
+      const startTime = Date.now()
+      const pollHealth = async (): Promise<void> => {
+        try {
+          const res = await fetch(`${BACKEND_URL}/health`)
+          if (res.ok) {
+            console.log('Python backend is ready and responding.')
+            resolve()
+            return
+          }
+        } catch (_) {
+          // Not ready yet
+        }
+        if (Date.now() - startTime > 45000) {
+          console.warn('Timed out waiting for Python backend to respond to health check.')
+          resolve()
+          return
+        }
+        setTimeout(pollHealth, 500)
+      }
+      setTimeout(pollHealth, 1000)
     } else {
       // For production or other dev platforms
       const cwd = is.dev ? join(app.getAppPath(), 'backend') : undefined
@@ -76,27 +93,27 @@ function startPythonBackend(): Promise<void> {
       }
 
       const stdoutReader = readline.createInterface({ input: pythonBackend.stdout! })
-      stdoutReader.on('line', (line) => {
+      stdoutReader.on('line', (line): void => {
         console.log(`Python Backend: ${line}`)
         handleMessage(line)
       })
 
       const stderrReader = readline.createInterface({ input: pythonBackend.stderr! })
-      stderrReader.on('line', (line) => {
+      stderrReader.on('line', (line): void => {
         // Log stderr as regular output, since Flask/Werkzeug logs INFO here
         console.log(`Python Backend: ${line}`)
         handleMessage(line)
       })
+
+      pythonBackend.on('error', (error): void => {
+        console.error('Failed to start Python backend:', error)
+        reject(error)
+      })
+
+      pythonBackend.on('exit', (code): void => {
+        console.log(`Python backend exited with code ${code}`)
+      })
     }
-
-    pythonBackend.on('error', (error) => {
-      console.error('Failed to start Python backend:', error)
-      reject(error)
-    })
-
-    pythonBackend.on('exit', (code) => {
-      console.log(`Python backend exited with code ${code}`)
-    })
   })
 }
 
@@ -125,7 +142,7 @@ function createWindow(): void {
 
   mainWindow.setMenu(null)
 
-  mainWindow.on('ready-to-show', () => {
+  mainWindow.on('ready-to-show', (): void => {
     mainWindow.show()
   })
 
@@ -146,7 +163,7 @@ function createWindow(): void {
 // This method will be called when Electron has finished
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
-app.whenReady().then(async () => {
+app.whenReady().then(async (): Promise<void> => {
   // Set app user model id for windows
   electronApp.setAppUserModelId('com.electron')
 
@@ -155,39 +172,65 @@ app.whenReady().then(async () => {
     callback({ path: decodeURIComponent(url) })
   })
 
-  ipcMain.handle('getHealth', async () => {
-    const response = await fetchWithAuth(`${BACKEND_URL}/health`)
-    if (!response.ok) {
-      const errorBody = await response.text()
-      throw new Error(`Failed to get health status. Status: ${response.status}. Error: ${errorBody}`)
-    }
-    return await response.json()
-  })
-
-  ipcMain.handle('dialog:newProject', async () => {
-    const { canceled, filePath } = await dialog.showSaveDialog({
-      title: 'Create New Project',
-      defaultPath: 'New Project',
-      buttonLabel: 'Create',
-      properties: ['createDirectory', 'showOverwriteConfirmation']
-    })
-    if (canceled) {
-      return null
-    } else {
-      return filePath
+  ipcMain.handle('getHealth', async (): Promise<unknown> => {
+    try {
+      const response = await fetchWithAuth(`${BACKEND_URL}/health`)
+      if (!response.ok) {
+        const errorBody = await response.text()
+        return {
+          status: 'unhealthy',
+          error: `Failed to get health status. Status: ${response.status}. Error: ${errorBody}`
+        }
+      }
+      return await response.json()
+    } catch (error: unknown) {
+      return {
+        status: 'offline',
+        error: error instanceof Error ? error.message : String(error)
+      }
     }
   })
 
-  ipcMain.handle('dialog:openProject', async () => {
+  // Picks the parent folder a new project folder will be created inside
+  ipcMain.handle('dialog:newProject', async (_event, defaultPath?: string) => {
     const { canceled, filePaths } = await dialog.showOpenDialog({
-      properties: ['openDirectory'],
-      defaultPath: app.getPath('documents')
+      title: 'Choose Project Location',
+      buttonLabel: 'Select Folder',
+      defaultPath: defaultPath || app.getPath('documents'),
+      properties: ['openDirectory', 'createDirectory']
     })
     if (canceled) {
       return null
     } else {
       return filePaths[0]
     }
+  })
+
+  ipcMain.handle('getDefaultProjectLocation', async () => {
+    return store.get('lastProjectLocation', app.getPath('documents')) as string
+  })
+
+  ipcMain.handle('dialog:openProject', async () => {
+    const { canceled, filePaths } = await dialog.showOpenDialog({
+      title: 'Open Project (select graph.json)',
+      buttonLabel: 'Open Project',
+      properties: ['openFile'],
+      filters: [{ name: 'Project Graph', extensions: ['json'] }],
+      defaultPath: app.getPath('documents')
+    })
+    if (canceled) {
+      return null
+    }
+    if (basename(filePaths[0]).toLowerCase() !== 'graph.json') {
+      await dialog.showMessageBox({
+        type: 'warning',
+        title: 'Not a project file',
+        message: 'Please select a project graph.json file.'
+      })
+      return null
+    }
+    // The project root is the directory containing graph.json
+    return dirname(filePaths[0])
   })
 
   ipcMain.handle('dialog:selectDirectory', async () => {
@@ -251,9 +294,7 @@ app.whenReady().then(async () => {
     })
     if (!response.ok) {
       const errorBody = await response.text()
-      throw new Error(
-        `Failed to import model. Status: ${response.status}. Error: ${errorBody}`
-      )
+      throw new Error(`Failed to import model. Status: ${response.status}. Error: ${errorBody}`)
     }
     return await response.json()
   })
@@ -281,9 +322,7 @@ app.whenReady().then(async () => {
     })
     if (!response.ok) {
       const errorBody = await response.text()
-      throw new Error(
-        `Failed to register grating. Status: ${response.status}. Error: ${errorBody}`
-      )
+      throw new Error(`Failed to register grating. Status: ${response.status}. Error: ${errorBody}`)
     }
     return await response.json()
   })
@@ -292,9 +331,7 @@ app.whenReady().then(async () => {
     const response = await fetchWithAuth(`${BACKEND_URL}/model/${modelId}/layers`)
     if (!response.ok) {
       const errorBody = await response.text()
-      throw new Error(
-        `Failed to get model layers. Status: ${response.status}. Error: ${errorBody}`
-      )
+      throw new Error(`Failed to get model layers. Status: ${response.status}. Error: ${errorBody}`)
     }
     return await response.json()
   })
@@ -307,8 +344,34 @@ app.whenReady().then(async () => {
     })
     if (!response.ok) {
       const errorBody = await response.text()
+      throw new Error(`Failed to create grating. Status: ${response.status}. Error: ${errorBody}`)
+    }
+    return await response.json()
+  })
+
+  ipcMain.handle('startEvolution', async (_event, evolutionData) => {
+    const response = await fetchWithAuth(`${BACKEND_URL}/scatter_evolution`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(evolutionData)
+    })
+    if (!response.ok) {
+      const errorBody = await response.text()
+      throw new Error(`Failed to start evolution. Status: ${response.status}. Error: ${errorBody}`)
+    }
+    return await response.json()
+  })
+
+  ipcMain.handle('expressIndividual', async (_event, expressData) => {
+    const response = await fetchWithAuth(`${BACKEND_URL}/express_individual`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(expressData)
+    })
+    if (!response.ok) {
+      const errorBody = await response.text()
       throw new Error(
-        `Failed to create grating. Status: ${response.status}. Error: ${errorBody}`
+        `Failed to express individual. Status: ${response.status}. Error: ${errorBody}`
       )
     }
     return await response.json()
@@ -322,9 +385,7 @@ app.whenReady().then(async () => {
     })
     if (!response.ok) {
       const errorBody = await response.text()
-      throw new Error(
-        `Failed to export audio. Status: ${response.status}. Error: ${errorBody}`
-      )
+      throw new Error(`Failed to export audio. Status: ${response.status}. Error: ${errorBody}`)
     }
     return await response.json()
   })
@@ -351,7 +412,8 @@ app.whenReady().then(async () => {
         try {
           const parsed = JSON.parse(errorBody)
           if (parsed.error) {
-            parsedError = parsed.error + (parsed.traceback ? `\n\nTraceback:\n${parsed.traceback}` : '')
+            parsedError =
+              parsed.error + (parsed.traceback ? `\n\nTraceback:\n${parsed.traceback}` : '')
           }
         } catch (_) {}
         throw new Error(parsedError)
@@ -368,7 +430,9 @@ app.whenReady().then(async () => {
       const response = await fetchWithAuth(`${BACKEND_URL}/job_status/${jobId}`)
       if (!response.ok && response.status !== 500 && response.status !== 404) {
         const errorBody = await response.text()
-        throw new Error(`Failed to poll job status. Status: ${response.status}. Error: ${errorBody}`)
+        throw new Error(
+          `Failed to poll job status. Status: ${response.status}. Error: ${errorBody}`
+        )
       }
       return await response.json()
     } catch (error) {
@@ -403,9 +467,7 @@ app.whenReady().then(async () => {
     })
     if (!response.ok) {
       const errorBody = await response.text()
-      throw new Error(
-        `Failed to remove element. Status: ${response.status}. Error: ${errorBody}`
-      )
+      throw new Error(`Failed to remove element. Status: ${response.status}. Error: ${errorBody}`)
     }
     return await response.json()
   })
@@ -418,9 +480,7 @@ app.whenReady().then(async () => {
     })
     if (!response.ok) {
       const errorBody = await response.text()
-      throw new Error(
-        `Failed to remove elements. Status: ${response.status}. Error: ${errorBody}`
-      )
+      throw new Error(`Failed to remove elements. Status: ${response.status}. Error: ${errorBody}`)
     }
     return await response.json()
   })
@@ -433,7 +493,22 @@ app.whenReady().then(async () => {
     })
     if (!response.ok) {
       const errorBody = await response.text()
-      throw new Error(`Failed to add external source. Status: ${response.status}. Error: ${errorBody}`)
+      throw new Error(
+        `Failed to add external source. Status: ${response.status}. Error: ${errorBody}`
+      )
+    }
+    return await response.json()
+  })
+
+  ipcMain.handle('rescanSource', async (_event, sourceName: string) => {
+    const response = await fetchWithAuth(`${BACKEND_URL}/rescan_source`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source_name: sourceName })
+    })
+    if (!response.ok) {
+      const errorBody = await response.text()
+      throw new Error(`Failed to rescan source. Status: ${response.status}. Error: ${errorBody}`)
     }
     return await response.json()
   })
@@ -457,9 +532,7 @@ app.whenReady().then(async () => {
     })
     if (!response.ok) {
       const errorBody = await response.text()
-      throw new Error(
-        `Failed to update labels. Status: ${response.status}. Error: ${errorBody}`
-      )
+      throw new Error(`Failed to update labels. Status: ${response.status}. Error: ${errorBody}`)
     }
     return await response.json()
   })
@@ -470,9 +543,7 @@ app.whenReady().then(async () => {
     })
     if (!response.ok) {
       const errorBody = await response.text()
-      throw new Error(
-        `Failed to repair edges. Status: ${response.status}. Error: ${errorBody}`
-      )
+      throw new Error(`Failed to repair edges. Status: ${response.status}. Error: ${errorBody}`)
     }
     return await response.json()
   })
@@ -490,31 +561,42 @@ app.whenReady().then(async () => {
     return await response.json()
   })
 
-  ipcMain.handle('batchElements', async (_event, memberIds) => {
-    const response = await fetchWithAuth(`${BACKEND_URL}/graph/create_batch`, {
+  ipcMain.handle('groupElements', async (_event, memberIds) => {
+    const response = await fetchWithAuth(`${BACKEND_URL}/graph/create_group`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ member_ids: memberIds })
     })
     if (!response.ok) {
       const errorBody = await response.text()
-      throw new Error(
-        `Failed to create batch. Status: ${response.status}. Error: ${errorBody}`
-      )
+      throw new Error(`Failed to create group. Status: ${response.status}. Error: ${errorBody}`)
     }
     return await response.json()
   })
 
-  ipcMain.handle('updateBatch', async (_event, batchId, memberIds) => {
-    const response = await fetchWithAuth(`${BACKEND_URL}/graph/update_batch/${batchId}`, {
+  ipcMain.handle('updateGroup', async (_event, groupId, memberIds) => {
+    const response = await fetchWithAuth(`${BACKEND_URL}/graph/update_group/${groupId}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ member_ids: memberIds })
     })
     if (!response.ok) {
       const errorBody = await response.text()
+      throw new Error(`Failed to update group. Status: ${response.status}. Error: ${errorBody}`)
+    }
+    return await response.json()
+  })
+
+  ipcMain.handle('getExemplarPresets', async (_event, individualIds: string[]) => {
+    const response = await fetchWithAuth(`${BACKEND_URL}/exemplar_presets`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ individual_ids: individualIds })
+    })
+    if (!response.ok) {
+      const errorBody = await response.text()
       throw new Error(
-        `Failed to update batch. Status: ${response.status}. Error: ${errorBody}`
+        `Failed to get exemplar presets. Status: ${response.status}. Error: ${errorBody}`
       )
     }
     return await response.json()
@@ -540,7 +622,6 @@ app.whenReady().then(async () => {
   ipcMain.handle('getAdapterConfig', async (_event, adapterName) => {
     return await _getAdapterConfig(adapterName)
   })
-
 
   ipcMain.handle('get_generate_form_config', async (_event, adapterName) => {
     const config = await _getAdapterConfig(adapterName)
@@ -637,6 +718,10 @@ app.whenReady().then(async () => {
         mimeType = 'image/jpeg'
       } else if (extension === '.webp') {
         mimeType = 'image/webp'
+      } else if (extension === '.gif') {
+        mimeType = 'image/gif'
+      } else if (extension === '.bmp') {
+        mimeType = 'image/bmp'
       }
 
       // 4. Return buffer and mime type
@@ -666,6 +751,7 @@ app.whenReady().then(async () => {
         console.error(`Main Process: /load_project error data: ${errorText}`)
         throw new Error(`Failed to load project. Status code: ${loadResponse.status}`)
       }
+      return await loadResponse.json()
     }
   )
 
@@ -674,7 +760,18 @@ app.whenReady().then(async () => {
     async (_event, projectData: { project_path?: string; project_name?: string }) => {
       // In local mode, we might still want to create the directory from the electron app
       if (projectData.project_path) {
+        const graphFile = join(projectData.project_path, 'graph.json')
+        const exists = await fs
+          .access(graphFile)
+          .then(() => true)
+          .catch(() => false)
+        if (exists) {
+          throw new Error(
+            `A project already exists at ${projectData.project_path}. Use Open Project instead.`
+          )
+        }
         await fs.mkdir(projectData.project_path, { recursive: true })
+        store.set('lastProjectLocation', dirname(projectData.project_path))
       }
 
       const payload: { project_path?: string; project_name?: string } = { ...projectData }
@@ -699,6 +796,35 @@ app.whenReady().then(async () => {
         throw new Error(`Failed to create project. Status code: ${createResponse.status}`)
       }
     }
+  )
+
+  const postJson = async (path: string, body: unknown, action: string): Promise<unknown> => {
+    const response = await fetchWithAuth(`${BACKEND_URL}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    })
+    const result = await response.json()
+    if (!response.ok) {
+      throw new Error(result.error || `${action} failed. Status: ${response.status}`)
+    }
+    return result
+  }
+
+  ipcMain.handle('forkProject', async (_event, elementIds: string[]) =>
+    postJson('/fork_project', { element_ids: elementIds }, 'Fork to project')
+  )
+
+  ipcMain.handle('createRoom', async (_event, elementIds: string[]) =>
+    postJson('/rooms', { element_ids: elementIds }, 'Break out')
+  )
+
+  ipcMain.handle('dissolveRoom', async (_event, roomId: string) =>
+    postJson(`/rooms/${encodeURIComponent(roomId)}/dissolve`, {}, 'Rejoin')
+  )
+
+  ipcMain.handle('setViewRoom', async (_event, roomId: string | null) =>
+    postJson('/rooms/view', { room_id: roomId }, 'Changing room')
   )
 
   ipcMain.handle('getGraphData', async (_event, viewMode) => {

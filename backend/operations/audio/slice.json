@@ -1,0 +1,25 @@
+[
+  {
+    "name": "source_audio",
+    "type": "node",
+    "label": "Source Audio",
+    "filter": {
+      "type": "audio"
+    },
+    "required": true
+  },
+  {
+    "name": "chunk_duration",
+    "type": "float",
+    "label": "Chunk Duration (s)",
+    "defaultValue": 1.0,
+    "required": true
+  },
+  {
+    "name": "overlap",
+    "type": "float",
+    "label": "Overlap (s)",
+    "defaultValue": 0.0,
+    "required": false
+  }
+]

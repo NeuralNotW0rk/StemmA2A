@@ -1,11 +1,15 @@
 # backend/param_graph/utils.py
 import shutil
+import threading
 from pathlib import Path
 from dataclasses import replace
-from typing import Dict, Any, Tuple, List, TYPE_CHECKING
+from typing import Dict, Any, Tuple, List, TYPE_CHECKING, TypeVar
 
 from .elements.base_elements import GraphElement
 from .registry import resolve_element
+
+T = TypeVar("T", bound=GraphElement)
+_save_asset_lock = threading.Lock()
 
 if TYPE_CHECKING:
     from .graph import ParameterGraph
@@ -55,11 +59,11 @@ def find_elements(d: dict) -> dict[str, GraphElement]:
 
 
 def save_artifact_asset(
-    artifact: GraphElement, destination_dir: Path, asset_name: str = "file"
-) -> GraphElement:
+    artifact: T, destination_dir: Path, asset_name: str = "file"
+) -> T:
     """
-    Moves a specific asset within an artifact from its current temporary
-    location to a permanent one.
+    Copies a specific asset within an artifact from its current temporary or CAS cache
+    location to a permanent project location.
 
     Args:
         artifact: The artifact containing the asset to save.
@@ -77,21 +81,25 @@ def save_artifact_asset(
 
     temp_path = Path(asset_to_save.path)
 
-    # Use artifact's name for a human-readable filename, handling collisions
-    base_name = artifact.name
-    suffix = asset_to_save.extension
-    permanent_path = destination_dir / f"{base_name}{suffix}"
+    with _save_asset_lock:
+        # Use artifact's name for a human-readable filename, handling collisions
+        base_name = artifact.name
+        suffix = asset_to_save.extension
+        permanent_path = destination_dir / f"{base_name}{suffix}"
 
-    counter = 1
-    while permanent_path.exists():
-        permanent_path = destination_dir / f"{base_name}_{counter}{suffix}"
-        counter += 1
+        counter = 1
+        while permanent_path.exists():
+            permanent_path = destination_dir / f"{base_name}_{counter}{suffix}"
+            counter += 1
 
-    # Ensure the destination directory exists
-    destination_dir.mkdir(parents=True, exist_ok=True)
+        # Ensure the destination directory exists
+        destination_dir.mkdir(parents=True, exist_ok=True)
 
-    # Move the file
-    shutil.move(str(temp_path), permanent_path)
+        # Copy the file to preserve the CAS cache in tmp/cache
+        if temp_path.exists():
+            shutil.copy2(str(temp_path), permanent_path)
+        else:
+            raise FileNotFoundError(f"Source asset file not found at '{temp_path}'")
 
     # Create a new asset object with the updated path
     updated_asset = replace(asset_to_save, path=str(permanent_path))
@@ -102,8 +110,6 @@ def save_artifact_asset(
     # The temporary directory reference is now stale and can be removed.
     # It's attached to the artifact, so we operate on the new instance.
     if hasattr(updated_artifact, "_temp_dir_ref"):
-        # This is not perfectly clean, as a new temp dir object will be created
-        # for each asset. However, for now, we assume one temp dir per artifact.
         del updated_artifact._temp_dir_ref
 
     return updated_artifact

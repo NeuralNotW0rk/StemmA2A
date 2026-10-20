@@ -15,9 +15,13 @@ from torchvision.utils import save_image
 from .base_adapter import ModelAdapter, operation
 from param_graph.elements.base_elements import Asset, GraphElement
 from param_graph.elements.artifacts.image_element import Image
+from param_graph.elements.artifacts.grating_element import Grating as GratingArtifact
+from param_graph.elements.artifacts.latent_element import Latent
 from param_graph.elements.models.stylegan_element import StyleGANModel
 from utils.uid import XXH3_64, UIDMismatchError
 from utils.filesystem import get_path_size
+from .stylegan_pti import load_target_image, pivotal_tuning_inversion
+from ..results import ArtifactLink, OperationResult
 
 # ==============================================================================
 # Dynamic TensorFlow (NVIDIA legacy pkl) check-pointing utilities
@@ -56,18 +60,43 @@ class DummyFinder:
 if not any(isinstance(f, DummyFinder) for f in sys.meta_path):
     sys.meta_path.insert(0, DummyFinder())
 
+def is_tensorflow_checkpoint(checkpoint) -> bool:
+    """Detects if the unpickled object represents a legacy TensorFlow StyleGAN checkpoint."""
+    if isinstance(checkpoint, (tuple, list)) and len(checkpoint) >= 3:
+        target = checkpoint[2]
+    elif isinstance(checkpoint, dict) and 'G_ema' in checkpoint:
+        target = checkpoint['G_ema']
+    elif isinstance(checkpoint, dict) and any(isinstance(v, torch.Tensor) for v in checkpoint.values()):
+        return False
+    else:
+        target = checkpoint
+
+    if hasattr(target, 'state_dict') and callable(getattr(target, 'state_dict')):
+        return False
+
+    if hasattr(target, 'variables'):
+        return True
+    
+    components = getattr(target, 'components', None)
+    if components and hasattr(components, 'values'):
+        for comp in components.values():
+            if hasattr(comp, 'variables'):
+                return True
+                
+    return False
+
 def load_stylegan_checkpoint(ckpt_path):
-    """Loads a StyleGAN2 checkpoint, supporting standard PyTorch state_dict and TensorFlow legacy pickle (.pkl)."""
+    """Loads a StyleGAN2 checkpoint, supporting standard PyTorch state_dict, PyTorch pickled objects, and TensorFlow legacy pickle (.pkl)."""
     try:
         # Try loading as a standard PyTorch state_dict
         checkpoint = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-        return checkpoint, False
+        return checkpoint, is_tensorflow_checkpoint(checkpoint)
     except Exception as e:
-        # Try loading as a standard TensorFlow legacy pickle
+        # Try loading as a pickle (for legacy TF .pkl or raw pickled PyTorch models)
         try:
             with open(ckpt_path, "rb") as f:
                 checkpoint = pickle.load(f)
-            return checkpoint, True
+            return checkpoint, is_tensorflow_checkpoint(checkpoint)
         except Exception as p_err:
             raise RuntimeError(f"Failed to load checkpoint as PyTorch ({e}) or legacy Pickle ({p_err})")
 
@@ -620,11 +649,30 @@ def _compute_stylegan_uid(file_path: str, uid_generator) -> str:
     abs_path = os.path.abspath(file_path)
     if not os.path.exists(abs_path):
         raise FileNotFoundError(f"Checkpoint file not found: {abs_path}")
-    checkpoint = torch.load(abs_path, map_location="cpu", weights_only=False)
-    if not isinstance(checkpoint, dict):
-        raise ValueError("Loaded checkpoint is not a dictionary. Ensure it is a valid PyTorch model file.")
+    try:
+        checkpoint, is_tf = load_stylegan_checkpoint(abs_path)
+    except Exception as e:
+        is_container = os.environ.get("RUNNING_IN_CONTAINER") == "true"
+        if is_container:
+            try:
+                print(f"Removing corrupt cached checkpoint file: {abs_path}")
+                os.remove(abs_path)
+            except Exception:
+                pass
+        raise
+    if is_tf:
+        state_dict, _, _, _ = convert_tf_to_pytorch(checkpoint)
+    else:
+        if isinstance(checkpoint, dict):
+            state_dict = checkpoint.get('g_ema') or checkpoint.get('g') or checkpoint
+        elif hasattr(checkpoint, 'state_dict'):
+            state_dict = checkpoint.state_dict()
+        else:
+            state_dict = checkpoint
+            
+    if hasattr(state_dict, 'state_dict'):
+        state_dict = state_dict.state_dict()
         
-    state_dict = checkpoint.get('g_ema') or checkpoint.get('g') or checkpoint
     if not isinstance(state_dict, dict):
         raise ValueError("Checkpoint weights are not serialized as a dictionary.")
         
@@ -676,25 +724,34 @@ class StyleGANAdapter(ModelAdapter):
                     print("Detected legacy TensorFlow .pkl checkpoint on registration. Extracting configuration...")
                     _, size, channel_multiplier, _ = convert_tf_to_pytorch(checkpoint)
                 else:
-                    state_dict = checkpoint.get('g_ema') or checkpoint.get('g') or checkpoint
+                    if isinstance(checkpoint, dict):
+                        state_dict = checkpoint.get('g_ema') or checkpoint.get('g') or checkpoint
+                    elif hasattr(checkpoint, 'state_dict'):
+                        state_dict = checkpoint.state_dict()
+                    else:
+                        state_dict = checkpoint
+
+                    if hasattr(state_dict, 'state_dict'):
+                        state_dict = state_dict.state_dict()
                     
-                    conv_keys = [k for k in state_dict.keys() if k.startswith("convs.")]
-                    if conv_keys:
-                        indices = [int(k.split(".")[1]) for k in conv_keys if k.split(".")[1].isdigit()]
-                        if indices:
-                            max_idx = max(indices)
-                            log_size = (max_idx // 2) + 3
-                            size = 2 ** log_size
-                            
-                            # Detect channel multiplier from a high-resolution block (res >= 64)
-                            for idx in sorted(list(set(indices))):
-                                res = 2 ** ((idx // 2) + 3)
-                                if res >= 64:
-                                    key = f"convs.{idx}.conv.weight"
-                                    if key in state_dict:
-                                        out_channels = state_dict[key].shape[1]
-                                        channel_multiplier = out_channels // (16384 // res)
-                                        break
+                    if isinstance(state_dict, dict):
+                        conv_keys = [k for k in state_dict.keys() if k.startswith("convs.")]
+                        if conv_keys:
+                            indices = [int(k.split(".")[1]) for k in conv_keys if k.split(".")[1].isdigit()]
+                            if indices:
+                                max_idx = max(indices)
+                                log_size = (max_idx // 2) + 3
+                                size = 2 ** log_size
+                                
+                                # Detect channel multiplier from a high-resolution block (res >= 64)
+                                for idx in sorted(list(set(indices))):
+                                    res = 2 ** ((idx // 2) + 3)
+                                    if res >= 64:
+                                        key = f"convs.{idx}.conv.weight"
+                                        if key in state_dict:
+                                            out_channels = state_dict[key].shape[1]
+                                            channel_multiplier = out_channels // (16384 // res)
+                                            break
                 print(f"Registered StyleGAN2 model with auto-detected shape: size={size}, multiplier={channel_multiplier}")
             except Exception as e:
                 print(f"Warning: Failed to inspect checkpoint parameters on registration: {e}. Using defaults.")
@@ -757,12 +814,20 @@ class StyleGANAdapter(ModelAdapter):
                     print("Detected legacy TensorFlow .pkl checkpoint. Converting weights...")
                     loaded_state_dict, size, channel_multiplier, loaded_mean_latent = convert_tf_to_pytorch(checkpoint)
                 else:
-                    if 'g_ema' in checkpoint:
-                        state_dict = checkpoint['g_ema']
-                    elif 'g' in checkpoint:
-                        state_dict = checkpoint['g']
+                    if isinstance(checkpoint, dict):
+                        if 'g_ema' in checkpoint:
+                            state_dict = checkpoint['g_ema']
+                        elif 'g' in checkpoint:
+                            state_dict = checkpoint['g']
+                        else:
+                            state_dict = checkpoint
+                    elif hasattr(checkpoint, 'state_dict'):
+                        state_dict = checkpoint.state_dict()
                     else:
                         state_dict = checkpoint
+                    
+                    if hasattr(state_dict, 'state_dict'):
+                        state_dict = state_dict.state_dict()
                     
                     loaded_state_dict = {k: v for k, v in state_dict.items() if 'manipulation' not in k}
 
@@ -789,7 +854,14 @@ class StyleGANAdapter(ModelAdapter):
                 info.config["size"] = size
                 info.config["channel_multiplier"] = channel_multiplier
             except Exception as e:
-                print(f"Failed to auto-detect model shape from checkpoint: {e}. Falling back to default/config values.")
+                is_container = os.environ.get("RUNNING_IN_CONTAINER") == "true"
+                if is_container:
+                    try:
+                        print(f"Removing corrupt cached checkpoint file: {ckpt_path}")
+                        os.remove(ckpt_path)
+                    except Exception:
+                        pass
+                raise RuntimeError(f"Failed to load checkpoint into StyleGAN2 model from '{ckpt_path}': {e}")
 
         self.model = Generator(
             size=size,
@@ -809,7 +881,7 @@ class StyleGANAdapter(ModelAdapter):
                 if unexpected:
                     print(f"Warning: Loaded checkpoint has {len(unexpected)} unexpected keys! First 10: {unexpected[:10]}")
             except Exception as e:
-                print(f"Failed to load weights: {e}. Running with random weights.")
+                raise RuntimeError(f"Failed to load weights into StyleGAN2 model from '{ckpt_path}': {e}")
         else:
             print("No valid checkpoint file. Initializing model with random weights.")
 
@@ -834,7 +906,7 @@ class StyleGANAdapter(ModelAdapter):
         name="generate",
         is_standard=True,
         description="Generate images using StyleGAN2 model",
-        initiator_types=["model", "grating", "latent"],
+        initiator_types=["model", "grating", "latent", "individual"],
         context_overrides={
             "model": {
                 "name": "Generate Image",
@@ -843,6 +915,10 @@ class StyleGANAdapter(ModelAdapter):
             "grating": {
                 "name": "generate from grating",
                 "description": "Generate image guided by the selected grating structure"
+            },
+            "individual": {
+                "name": "generate exemplar",
+                "description": "Generate an image exemplar expressing the selected individual's genome"
             }
         }
     )
@@ -850,21 +926,28 @@ class StyleGANAdapter(ModelAdapter):
         truncation = float(kwargs.get("truncation", 0.7))
         seed = kwargs.get("seed", None)
         randomize_noise = bool(kwargs.get("randomize_noise", False))
+        init_latent = kwargs.get("init_latent_element")
 
         if seed is not None:
             torch.manual_seed(seed)
             import random
             random.seed(seed)
-        
+
         with torch.no_grad():
-            z = torch.randn(1, self.style_dim, device=self.device)
-            img, _ = self.model([z], truncation=truncation, truncation_latent=self.mean_latent, randomize_noise=randomize_noise)
+            if init_latent is not None:
+                # An explicit w (e.g. an inversion pivot) is rendered as is: truncating it would pull
+                # it toward the average and away from the image it encodes
+                w = self._load_w(init_latent)
+                img, _ = self.model([w], input_is_latent=True, randomize_noise=randomize_noise)
+            else:
+                z = torch.randn(1, self.style_dim, device=self.device)
+                img, _ = self.model([z], truncation=truncation, truncation_latent=self.mean_latent, randomize_noise=randomize_noise)
             img = img.squeeze(0) # Shape: [3, H, W]
 
         # Generate unique IDs
         uid_gen = XXH3_64()
         img_id = uid_gen.from_tensor(img)
-        
+
         # Save output temporarily (engine will move it to the project files)
         temp_dir = tempfile.mkdtemp()
         temp_path = os.path.join(temp_dir, f"{img_id}.png")
@@ -872,15 +955,18 @@ class StyleGANAdapter(ModelAdapter):
 
         asset = Asset(path=temp_path, uid=img_id, extension=".png")
         size = self.model_info.config.get("size", 256)
-        
+        context = {
+            "seed": seed,
+            "truncation": truncation,
+            "size": size
+        }
+        if init_latent is not None:
+            context["init_latent_id"] = init_latent.id
+
         image_artifact = Image(
             id=img_id,
-            name=f"stylegan_gen_{seed if seed is not None else 'rand'}",
-            context={
-                "seed": seed,
-                "truncation": truncation,
-                "size": size
-            },
+            name=f"stylegan_latent_{init_latent.id[:8]}" if init_latent is not None else f"stylegan_gen_{seed if seed is not None else 'rand'}",
+            context=context,
             file=asset,
             width=size,
             height=size
@@ -889,33 +975,123 @@ class StyleGANAdapter(ModelAdapter):
 
         return image_artifact, img
 
+    def _load_w(self, latent_element) -> torch.Tensor:
+        """Loads a W ([1, style_dim]) or W+ ([1, n_latent, style_dim]) latent saved as a tensor file."""
+        path = latent_element.file.path
+        if not path or not os.path.exists(path):
+            raise FileNotFoundError(f"Latent file not found at {path}")
+        w = torch.load(path, map_location=self.device, weights_only=True)
+        if w.dim() == 1:
+            w = w.unsqueeze(0)
+        if w.shape[-1] != self.style_dim or w.dim() not in (2, 3) or (w.dim() == 3 and w.shape[1] != self.model.n_latent):
+            raise ValueError(
+                f"Latent '{latent_element.id}' has shape {tuple(w.shape)}, which is not a StyleGAN2 W or W+ latent "
+                f"for this model (style dim {self.style_dim}, {self.model.n_latent} layers)."
+            )
+        return w.float()
+
     @operation(
         name="invert",
         is_standard=True,
-        description="StyleGAN2 latent space projection",
-        initiator_types=["model", "image"]
+        description="Invert an audio or image artifact into the selected model's latent space",
+        initiator_types=["model", "image"],
+        context_overrides={
+            "image": {
+                "name": "Invert Image",
+                "description": "Invert the selected image with a StyleGAN2 model (pivotal tuning) into a pivot latent and a LoRA grating that reproduces it there"
+            }
+        }
     )
-    def invert(self, **kwargs) -> tuple[GraphElement, torch.Tensor]:
-        # Return a mock mapping or a w-latent for test purposes
-        # Since StyleGAN2 inversion involves optimization, we can generate a random/empty w-latent mapping
-        import uuid
-        from param_graph.elements.artifacts.latent_element import Latent
-        
-        latent_id = "latent_" + str(uuid.uuid4())[:8]
-        temp_dir = tempfile.mkdtemp()
-        temp_path = os.path.join(temp_dir, f"{latent_id}.pt")
-        
-        # Mock projection vector of shape [1, 14, 512]
-        latent_vector = torch.zeros(1, self.model.n_latent, self.style_dim)
-        torch.save(latent_vector, temp_path)
-        
-        asset = Asset(path=temp_path, uid=latent_id, extension=".pt")
-        latent_artifact = Latent(
-            id=latent_id,
-            name="stylegan_inversion_latent",
-            context={"inversion_strength": 1.0},
-            file=asset
+    def invert(self, **kwargs) -> OperationResult:
+        """
+        Pivotal Tuning Inversion: projects the source image to a pivot w, then tunes a LoRA grating on the
+        synthesis convs so G(w) reproduces it. Returns the pivot Latent and the Grating, linked pivot -> grating:
+        generating from the pivot with the grating applied renders the inverted image.
+        """
+        source_image = kwargs.get("source_image_element")
+        if source_image is None or not getattr(source_image, "file", None) or not source_image.file.path:
+            raise ValueError("StyleGAN inversion needs a source image.")
+        if not os.path.exists(source_image.file.path):
+            raise FileNotFoundError(f"Source image not found at {source_image.file.path}")
+
+        projection_steps = int(kwargs.get("projection_steps", 500))
+        tuning_steps = int(kwargs.get("tuning_steps", 350))
+        rank = int(kwargs.get("rank", 4))
+        projection_lr = float(kwargs.get("projection_lr", 0.1))
+        tuning_lr = float(kwargs.get("tuning_lr", 1e-3))
+        use_lpips = bool(kwargs.get("use_lpips", True))
+        seed = kwargs.get("seed", 0)
+        if seed is not None:
+            torch.manual_seed(int(seed))
+
+        size = self.model_info.config.get("size", 256)
+        target = load_target_image(source_image.file.path, size, self.device)
+
+        def progress(phase, step, total, loss):
+            if step == total or step % 50 == 0:
+                print(f"PTI {phase}: step {step}/{total}, loss {loss:.4f}")
+
+        result = pivotal_tuning_inversion(
+            self.model,
+            target,
+            w_avg=self.mean_latent,
+            projection_steps=projection_steps,
+            tuning_steps=tuning_steps,
+            rank=rank,
+            projection_lr=projection_lr,
+            tuning_lr=tuning_lr,
+            use_lpips=use_lpips,
+            progress=progress
         )
-        latent_artifact._temp_dir_ref = temp_dir
-        
-        return latent_artifact, latent_vector
+        grating = result["grating"].cpu()
+        w_pivot = result["w_pivot"].cpu()
+        source_name = os.path.splitext(os.path.basename(source_image.file.path))[0]
+        temp_dir = tempfile.mkdtemp()
+
+        # The pivot: a W latent, rendered with the grating applied to reproduce the image
+        latent_id = self.uid_generator.from_tensor(w_pivot)
+        latent_path = os.path.join(temp_dir, f"{latent_id}.pt")
+        torch.save(w_pivot, latent_path)
+        latent = Latent(
+            id=latent_id,
+            name=f"pti_pivot_{source_name}",
+            context={
+                "inversion_method": "pti",
+                "source_image_id": source_image.id,
+                "projection_steps": projection_steps,
+                "projection_loss": result["projection_loss"],
+                "reconstruction_loss": result["loss"]
+            },
+            file=Asset(path=latent_path, uid=latent_id, extension=".pt")
+        )
+        latent._temp_dir_ref = temp_dir
+
+        # The grating tuned around the pivot. Content-addressed over its factors and the pivot it belongs to
+        grating_id = self.uid_generator.from_state_dict({**grating.state_dict(), "pivot": w_pivot})
+        grating_path = os.path.join(temp_dir, f"{grating_id}.safetensors")
+        grating.save(grating_path)
+
+        grating_artifact = GratingArtifact(
+            id=grating_id,
+            name=f"pti_{source_name}",
+            context={
+                "inversion_method": "pti",
+                "pivot_latent": latent_id,
+                "rank": rank,
+                "tuning_steps": tuning_steps,
+                "tuning_loss": result["tuning_loss"],
+                "reconstruction_loss": result["loss"]
+            },
+            file=Asset(path=grating_path, uid=grating_id, extension=".safetensors"),
+            base_model_id=self.model_info.id,
+            elements=[{
+                "address": element.address,
+                "kernel_type": element.kernel_type,
+                "metadata": element.metadata
+            } for element in grating._nodes]
+        )
+
+        return OperationResult(
+            outputs=[(latent, w_pivot), (grating_artifact, None)],
+            links=[ArtifactLink(source=latent_id, target=grating_id, relation="pivot")]
+        )

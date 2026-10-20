@@ -97,36 +97,54 @@ class Engine(ABC):
                             supported_ops[op_name] = {
                                 "name": op_name,
                                 "description": description,
+                                "category": "generative",
+                                "execution": "queued",
+                                "execution_mode": "async",  # backward compatibility alias
                                 "initiator_types": set(initiator_types),
+                                # A standard op is shared across adapters, each implementing it for its own artifact types
+                                "adapter_initiator_types": {adapter_name: list(initiator_types)},
                                 "context_overrides": dict(context_overrides),
                                 "form_config": [
                                     {"name": "model", "type": "node", "label": "Model", "filter": {"type": "model"}, "required": True}
                                 ]
                             }
-                            if op_name == "invert":
-                                supported_ops[op_name]["form_config"].append(
-                                    {"name": "source_audio", "type": "node", "label": "Source Audio", "filter": {"type": "audio"}, "required": True}
-                                )
                         else:
                             supported_ops[op_name]["initiator_types"].update(initiator_types)
+                            supported_ops[op_name]["adapter_initiator_types"][adapter_name] = list(initiator_types)
                             supported_ops[op_name]["context_overrides"].update(context_overrides)
                     else:
                         namespaced_name = f"{op_name}:{adapter_name}"
                         supported_ops[namespaced_name] = {
                             "name": namespaced_name,
                             "description": description,
+                            "category": "generative",
+                            "execution": "queued",
+                            "execution_mode": "async",
                             "initiator_types": list(initiator_types),
+                            "adapter_initiator_types": {adapter_name: list(initiator_types)},
                             "context_overrides": dict(context_overrides),
                             "form_config": [
                                 {"name": "model", "type": "node", "label": "Model", "filter": {"type": "model"}, "required": True}
                             ]
                         }
-
         for op in supported_ops.values():
             if isinstance(op["initiator_types"], set):
                 op["initiator_types"] = list(op["initiator_types"])
 
         return list(supported_ops.values())
+
+    def get_operation_adapters(self, op_name: str) -> dict[str, list[str]]:
+        """
+        Maps each adapter implementing op_name to the initiator types it accepts. Read from the local
+        adapter classes, so it needs no round trip to a remote engine.
+        """
+        adapters = {}
+        for adapter_name, adapter_class in self.adapter_registry.items():
+            for attr_name in dir(adapter_class):
+                member = getattr(adapter_class, attr_name)
+                if getattr(member, "_is_operation", False) and member._op_name == op_name:
+                    adapters[adapter_name] = list(member._op_initiator_types)
+        return adapters
 
     @abstractmethod
     async def execute(self, operation_id: str, **kwargs) -> str:
@@ -167,8 +185,40 @@ class Engine(ABC):
         return await self.cluster_features(model_element, address, num_clusters)
 
     async def create_grating(self, model_element: GraphElement, name: str, elements: list) -> GraphElement:
+        grating = await self.build_grating(model_element, elements)
+
+        # Create output directory for the grating file
+        output_dir = self.data_root / "generate"
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Save Grating safetensors file
+        grating_uid = "grating_" + str(uuid.uuid4())[:8]
+        file_name = f"{grating_uid}.safetensors"
+        grating_path = output_dir / file_name
+        grating.save(str(grating_path))
+
+        # Add Grating Artifact to project graph
+        elements_config = [{
+            "address": element.address,
+            "kernel_type": element.kernel_type,
+            "metadata": element.metadata
+        } for element in grating._nodes]
+
+        asset = Asset(path=str(grating_path.resolve()), uid=grating_uid, extension=".safetensors")
+        grating_artifact = GratingArtifact(
+            id=grating_uid,
+            name=name,
+            context={},
+            file=asset,
+            base_model_id=model_element.id,
+            elements=elements_config
+        )
+        return grating_artifact
+
+    async def build_grating(self, model_element: GraphElement, elements: list) -> DiffractureGrating:
+        """Builds a freshly initialized Grating in memory from element configs, without saving it."""
         grating = DiffractureGrating()
-        
+
         # Build the elements
         for el_data in elements:
             addr = el_data.get("address")
@@ -193,32 +243,6 @@ class Engine(ABC):
             }
             element = el_cls.from_metadata(addr, metadata)
             grating.add_element(element)
-            
-        # Create output directory for the grating file
-        output_dir = self.data_root / "generate"
-        output_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Save Grating safetensors file
-        grating_uid = "grating_" + str(uuid.uuid4())[:8]
-        file_name = f"{grating_uid}.safetensors"
-        grating_path = output_dir / file_name
-        grating.save(str(grating_path))
-        
-        # Add Grating Artifact to project graph
-        elements_config = [{
-            "address": element.address,
-            "kernel_type": element.kernel_type,
-            "metadata": element.metadata
-        } for element in grating._nodes]
-        
-        asset = Asset(path=str(grating_path.resolve()), uid=grating_uid, extension=".safetensors")
-        grating_artifact = GratingArtifact(
-            id=grating_uid,
-            name=name,
-            context={},
-            file=asset,
-            base_model_id=model_element.id,
-            elements=elements_config
-        )
-        return grating_artifact
+
+        return grating
 

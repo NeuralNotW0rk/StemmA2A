@@ -1,9 +1,16 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { isCreatingNewProject } from '../utils/stores'
+  import type { ProjectOrigin } from '../utils/types'
+  import type { RoomCrumb } from '../utils/rooms'
 
   interface Props {
     currentProject?: string | null
+    projectOrigin?: ProjectOrigin | null
+    onreturnToOrigin?: () => void
+    // Rooms from the outermost to the one being viewed; empty in the main graph
+    roomCrumbs?: RoomCrumb[]
+    onnavigateRoom?: (roomId: string | null) => void
     viewMode?: 'batch' | 'cluster'
     onprojectLoad?: (data: { project_path?: string; project_name?: string }) => void
     onviewModeChange?: (mode: 'batch' | 'cluster') => void
@@ -16,10 +23,16 @@
     showSpringEdges?: boolean
     showDetailedLabels?: boolean
     chronologicalConstraint?: boolean
+    hideEvolutionaryEdges?: boolean
+    hideAllEdges?: boolean
   }
 
   let {
     currentProject = null,
+    projectOrigin = null,
+    onreturnToOrigin,
+    roomCrumbs = [],
+    onnavigateRoom,
     viewMode = 'batch',
     onprojectLoad,
     onviewModeChange,
@@ -31,7 +44,9 @@
     onrepairEdges,
     showSpringEdges = $bindable(false),
     showDetailedLabels = $bindable(false),
-    chronologicalConstraint = $bindable(false)
+    chronologicalConstraint = $bindable(false),
+    hideEvolutionaryEdges = $bindable(false),
+    hideAllEdges = $bindable(false)
   }: Props = $props()
 
   let showFileMenu = $state(false)
@@ -85,6 +100,16 @@
   function toggleViewMode(): void {
     const newMode = viewMode === 'batch' ? 'cluster' : 'batch'
     onviewModeChange?.(newMode)
+  }
+
+  function toggleEvolutionaryEdges(): void {
+    hideEvolutionaryEdges = !hideEvolutionaryEdges
+    showUtilitiesMenu = false
+  }
+
+  function toggleAllEdges(): void {
+    hideAllEdges = !hideAllEdges
+    showUtilitiesMenu = false
   }
 
   function toggleSprings(): void {
@@ -188,8 +213,35 @@
         </div>
       {/if}
     </div>
-    <div class="current-project">
-      {currentProject ? currentProject.split(/[\\/]/).pop() : 'No Project Loaded'}
+    {#if projectOrigin}
+      <button
+        class="toolbar-button"
+        onclick={() => onreturnToOrigin?.()}
+        title={`Return to ${projectOrigin.project_name}, the project this was forked from`}
+        aria-label={`Return to ${projectOrigin.project_name}`}
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z" />
+        </svg>
+        {projectOrigin.project_name}
+      </button>
+    {/if}
+    <div class="current-project" title={projectOrigin ? 'Forked project' : undefined}>
+      {#if roomCrumbs.length > 0}
+        <button class="crumb" onclick={() => onnavigateRoom?.(null)}>
+          {currentProject ? currentProject.split(/[\\/]/).pop() : 'Main'}
+        </button>
+        {#each roomCrumbs as crumb, i (crumb.id)}
+          <span class="crumb-separator">›</span>
+          {#if i < roomCrumbs.length - 1}
+            <button class="crumb" onclick={() => onnavigateRoom?.(crumb.id)}>{crumb.name}</button>
+          {:else}
+            <span class="crumb current">{crumb.name}</span>
+          {/if}
+        {/each}
+      {:else}
+        {currentProject ? currentProject.split(/[\\/]/).pop() : 'No Project Loaded'}
+      {/if}
     </div>
     <button
       class="toolbar-button"
@@ -302,6 +354,15 @@
             }}
           >
             Repair Edges
+          </button>
+          <div class="dropdown-divider"></div>
+          <button class="dropdown-item" onclick={toggleEvolutionaryEdges}>
+            {hideEvolutionaryEdges
+              ? 'Show Evolutionary Edges'
+              : 'Hide Evolutionary Edges (Show on Select)'}
+          </button>
+          <button class="dropdown-item" onclick={toggleAllEdges}>
+            {hideAllEdges ? 'Show All Edges' : 'Hide All Edges (Show on Select)'}
           </button>
           <button class="dropdown-item" onclick={toggleSprings}>
             {showSpringEdges ? 'Hide Spring Edges' : 'Show Spring Edges'}
@@ -461,6 +522,28 @@
     font-size: 0.875rem;
     font-style: italic;
     opacity: 0.7;
+  }
+
+  .crumb {
+    background: none;
+    border: none;
+    padding: 0;
+    color: inherit;
+    font: inherit;
+  }
+
+  button.crumb {
+    cursor: pointer;
+    text-decoration: underline;
+  }
+
+  .crumb.current {
+    font-weight: bold;
+    font-style: normal;
+  }
+
+  .crumb-separator {
+    margin: 0 0.35rem;
   }
 
   .view-toggle .toggle-button {

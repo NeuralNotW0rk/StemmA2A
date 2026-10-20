@@ -13,7 +13,8 @@ services:
     volumes:
       - ./backend:/app # Maps your code folder
       - ${LOCAL_DATA_PATH}:${CONTAINER_DATA_PATH}
-      - ${LOCAL_DIFFRACTURE_PATH:-../Diffracture}:/Diffracture
+      - ${LOCAL_DIFFRACTURE_PATH:-../diffracture}:/diffracture
+      - ${LOCAL_NEUTRAL_SELECTION_PATH:-../neutral-selection}:/neutral-selection
     environment:
       PYTHONUNBUFFERED: 1
       RUNNING_IN_CONTAINER: "true"
