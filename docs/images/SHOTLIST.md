@@ -15,7 +15,7 @@ link to these filenames, so the image appears as soon as the file exists.
 
 | File | Used in | Setup / what to capture |
 |---|---|---|
-| `overview.png` | concepts | A mid-sized project zoomed to fit. It should show a model, a grating bound to it, a group of generated clips, and a short evolved lineage (gen-0 individual → Scatter group → Recombination group). Turn on Edge Labels. |
+| `overview.png` | README, concepts | A mid-sized project zoomed to fit. It should show a model, a grating bound to it, a group of generated clips, and a short evolved lineage (gen-0 individual → Scatter group → Recombination group). Turn on Edge Labels. |
 | `main-window.png` | interface | The full window: one audio node selected (details panel open, player at the bottom) while one job is running (Jobs panel visible). |
 | `evolution-lineage.png` | workflows | Close-up of an individual box holding exemplars, with `[fit: X]` labels. Include one child marked `[Duplicate]` if you have one. |
 | `radial-menu-model.png` | interface | Right-click held on a model node, with the radial menu open. |

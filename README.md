@@ -2,6 +2,8 @@
 
 **StemmA2A** is a desktop workbench for exploring generative models (Stable Audio, StyleGAN2) through a node graph. You can generate audio and images, bend a model's internals with *gratings*, and evolve model modifications by ear: you listen, score, and breed the variants you like. Every artifact, model and modification is a node, and the edges between nodes record where each one came from.
 
+![A StemmA2A project: a Stable Audio model with a LoRA grating, groups of generated clips, and an evolved Scatter → Recombination lineage](docs/images/overview.png)
+
 StemmA2A is built on two companion libraries:
 
 - [Diffracture](https://github.com/NeuralNotW0rk/Diffracture) handles model interventions: LoRA, network bending, and gratings.

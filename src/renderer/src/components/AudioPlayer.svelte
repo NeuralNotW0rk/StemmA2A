@@ -322,6 +322,9 @@
     backdrop-filter: blur(10px);
     border-radius: 0.5rem;
     padding: 1rem 0.5rem;
+    /* Sized for the rotated slider; rotate() doesn't affect layout */
+    width: 2.5rem;
+    height: calc(100px + 2rem);
     display: flex;
     justify-content: center;
     align-items: center;
@@ -333,6 +336,7 @@
     background: transparent;
     cursor: pointer;
     width: 100px; /* Length of the slider */
+    flex-shrink: 0;
     transform: rotate(-90deg);
   }
 
