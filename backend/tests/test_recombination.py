@@ -318,7 +318,10 @@ class TestRecombinationAPI(unittest.TestCase):
                 "selection_type": "tournament",
                 "crossover_type": "blend_crossover",
                 "mutation_rate": 1.0,
-                "noise_scale": 0.05
+                "noise_scale": 0.05,
+                # A toggled layer is frozen, so on these 2-layer genomes toggles could leave a child
+                # unperturbed and identical to another child of the same two parents, which gets discarded
+                "active_flips": 0.0
             }
 
             resp = client.post("/recombine_evolution", json=payload)

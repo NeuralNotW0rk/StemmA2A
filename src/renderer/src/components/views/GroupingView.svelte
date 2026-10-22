@@ -3,7 +3,7 @@
   import NodeSelectorList from '../NodeSelectorList.svelte'
   import type { NodeData, GroupData } from '../../utils/forms'
   import { GROUPING_CONFIG } from '../../utils/app-config'
-  import type { ErrorInfo, NodeListItem } from '../../utils/types'
+  import type { PanelMessage, NodeListItem } from '../../utils/types'
 
   let {
     initiatorNode = $initiatorNodeStore,
@@ -14,7 +14,7 @@
     initiatorNode?: GraphElement | null
     onclose: () => void
     onrefresh: () => void
-    onerror: (error: ErrorInfo) => void
+    onerror: (error: PanelMessage) => void
   }>()
 
   $effect(() => {

@@ -827,8 +827,8 @@ app.whenReady().then(async (): Promise<void> => {
     postJson('/rooms/view', { room_id: roomId }, 'Changing room')
   )
 
-  ipcMain.handle('getGraphData', async (_event, viewMode) => {
-    const endpoint = viewMode === 'cluster' ? '/graph_tsne' : '/graph'
+  ipcMain.handle('getGraphData', async () => {
+    const endpoint = '/graph'
     console.log(`Main Process: getting ${endpoint}`)
     const graphResponse = await fetchWithAuth(`${BACKEND_URL}${endpoint}`)
     console.log(`Main Process: ${endpoint} status: ${graphResponse.status}`)

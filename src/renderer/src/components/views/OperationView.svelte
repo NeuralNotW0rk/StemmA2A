@@ -21,7 +21,7 @@
   import NodeSelectorList from '../NodeSelectorList.svelte'
   import ExemplarPresetList from '../ExemplarPresetList.svelte'
   import type {
-    ErrorInfo,
+    PanelMessage,
     NodeListItem,
     GratingOverride,
     GratingListItem,
@@ -30,7 +30,7 @@
 
   let { onClose, onError } = $props<{
     onClose: () => void
-    onError: (error: ErrorInfo) => void
+    onError: (error: PanelMessage) => void
   }>()
 
   // A model op shared across adapters (e.g. invert) is implemented per adapter for different artifact

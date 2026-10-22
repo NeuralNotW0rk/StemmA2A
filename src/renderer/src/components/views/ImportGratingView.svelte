@@ -3,12 +3,12 @@
   import { initiatorNodeStore } from '../../utils/stores'
   import NodeSelector from '../NodeSelector.svelte'
   import type { NodeData } from '../../utils/forms'
-  import type { ErrorInfo } from '../../utils/types'
+  import type { PanelMessage } from '../../utils/types'
 
   let { onclose, onrefresh, onError } = $props<{
     onclose: () => void
     onrefresh: () => void
-    onError: (error: ErrorInfo) => void
+    onError: (error: PanelMessage) => void
   }>()
 
   let name = $state('')

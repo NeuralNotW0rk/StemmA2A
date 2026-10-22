@@ -33,7 +33,8 @@ export type ElementData = Record<string, unknown>
 
 export type NodeFilter = Record<string, unknown>
 
-export type ErrorInfo = { title: string; message: string }
+/** A message for the info panel. `kind` defaults to 'error'. */
+export type PanelMessage = { title: string; message: string; kind?: 'error' | 'success' | 'info' }
 
 /** The project a forked project was copied from. */
 export interface ProjectOrigin {

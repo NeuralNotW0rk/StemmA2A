@@ -23,7 +23,7 @@ interface API {
   createRoom: (elementIds: string[]) => Promise<{ room_id: string }>
   dissolveRoom: (roomId: string) => Promise<{ member_ids: string[] }>
   setViewRoom: (roomId: string | null) => Promise<{ room_id: string | null }>
-  getGraphData: (viewMode: 'batch' | 'cluster') => Promise<any>
+  getGraphData: () => Promise<any>
   get_generate_form_config: (adapterName: string) => Promise<any>
   get_import_form_config: (adapterName: string) => Promise<any>
   getAdapterConfig: (adapterName: string) => Promise<any>
@@ -47,7 +47,6 @@ interface API {
   getExemplarPresets: (individualIds: string[]) => Promise<any>
   removeElement: (elementId: string, keepChildren?: boolean) => Promise<any>
   removeElements: (elementIds: string[], keepChildren?: boolean) => Promise<any>
-  logMessage: (message: string) => Promise<any>
   updateLabels: () => Promise<any>
   repairEdges: () => Promise<any>
   pollJobStatus: (jobId: string) => Promise<any>

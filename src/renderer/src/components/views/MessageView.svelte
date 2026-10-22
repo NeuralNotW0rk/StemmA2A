@@ -1,18 +1,25 @@
-<!-- src/renderer/src/components/views/ErrorView.svelte -->
+<!-- src/renderer/src/components/views/MessageView.svelte -->
 <script lang="ts">
-  let { title, message } = $props<{
+  import type { PanelMessage } from '../../utils/types'
+
+  let {
+    title,
+    message,
+    kind = 'error'
+  } = $props<{
     title: string
     message: string
+    kind?: PanelMessage['kind']
   }>()
 </script>
 
-<div class="error-view">
+<div class="message-view {kind}">
   <h4>{title}</h4>
   <p>{message}</p>
 </div>
 
 <style>
-  .error-view {
+  .message-view {
     padding: 1rem;
     color: var(--color-error);
     height: 100%;
@@ -20,6 +27,12 @@
     flex-direction: column;
     gap: 1rem;
     overflow-y: auto;
+  }
+  .message-view.success {
+    color: var(--color-success);
+  }
+  .message-view.info {
+    color: var(--color-text);
   }
   h4 {
     margin: 0;

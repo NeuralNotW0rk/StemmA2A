@@ -72,6 +72,16 @@
       "allowSequence": false
     },
     {
+      "name": "tournament_size",
+      "type": "integer",
+      "label": "Tournament Size",
+      "description": "Tournament selection only. Each parent is the fittest of this many individuals drawn at random, so larger tournaments favour the top scorers more strongly. Only the order of fitness scores matters, not how far apart they are. Capped at the number of parents.",
+      "defaultValue": 3,
+      "min": 1,
+      "max": 20,
+      "allowSequence": false
+    },
+    {
       "name": "default_fitness",
       "type": "float",
       "label": "Default / Null Fitness Override",

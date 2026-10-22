@@ -2,7 +2,7 @@
 <script lang="ts">
   import NodeSelector from '../NodeSelector.svelte'
   import type { NodeData } from '../../utils/forms'
-  import type { ErrorInfo } from '../../utils/types'
+  import type { PanelMessage } from '../../utils/types'
 
   interface ModelLayer {
     address: string
@@ -14,7 +14,7 @@
     modelElement: NodeData | null
     onclose: () => void
     onrefresh: () => void
-    onError: (error: ErrorInfo) => void
+    onError: (error: PanelMessage) => void
   }>()
 
   let selectedModel = $state<NodeData | null>(null)

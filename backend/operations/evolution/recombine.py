@@ -69,9 +69,12 @@ def recombine_offspring(
     crossover_prob: float = 0.8,
     elitism: int = 0,
     parent_ids: Optional[list[str]] = None,
+    num_children: int = 1,
 ) -> list[RecombinedOffspring]:
     """
     Breeds an offspring population from given parents using NeutralSelection's composable operators.
+    Each parent pair yields num_children children; the default of 1 spreads a small generation over
+    more pairings, so offspring counts per parent vary less.
     """
     parent_pop = parents if isinstance(parents, Population) else Population(list(parents))
     if len(parent_pop) == 0:
@@ -83,6 +86,7 @@ def recombine_offspring(
         mutation_strategy=mutation_strategy,
         crossover_prob=crossover_prob,
         elitism=elitism,
+        num_children=num_children,
     )
 
     offspring_pop = pipeline.step(
@@ -275,6 +279,12 @@ def recombine_evolution_task(
             )
             parent_ns_individuals.append(ns_ind)
 
+        # A tournament cannot draw more contestants than there are parents
+        if isinstance(selection_cfg, dict) and "tournament_size" in selection_cfg:
+            selection_cfg = {
+                **selection_cfg,
+                "tournament_size": max(1, min(int(selection_cfg["tournament_size"]), len(parent_ns_individuals))),
+            }
         selection_strat = build_selection_strategy(selection_cfg)
         crossover_type = crossover_cfg.get("type", "two_point") if isinstance(crossover_cfg, dict) else str(crossover_cfg)
         crossover_strat = get_lora_crossover_strategy(
@@ -551,7 +561,6 @@ async def dispatch_recombine_operation(
     s_type = data.get("selection_type") or params.get("selection_type") or "tournament"
     c_type = data.get("crossover_type") or params.get("crossover_type") or "two_point"
 
-    selection_cfg = data.get("selection") or params.get("selection") or {"type": s_type, "tournament_size": 2}
     crossover_cfg = data.get("crossover") or params.get("crossover") or {"type": c_type}
     def _numeric_param(key: str, default: float) -> float:
         # Checks for None rather than truthiness so an explicit 0 is not replaced by the default
@@ -559,6 +568,11 @@ async def dispatch_recombine_operation(
         if value is None:
             value = params.get(key)
         return float(value) if value is not None else default
+
+    selection_cfg = data.get("selection") or params.get("selection") or {
+        "type": s_type,
+        "tournament_size": int(_numeric_param("tournament_size", 3)),
+    }
 
     mutation_cfg = data.get("mutation") or params.get("mutation") or {
         "mutation_rate": _numeric_param("mutation_rate", 0.1),
@@ -661,7 +675,7 @@ class RecombineOperation(Operation):
             parent_ids=kwargs.get("parent_ids"),
             parent_bundle_id=kwargs.get("parent_bundle_id"),
             offspring_size=kwargs.get("offspring_size"),
-            selection_cfg=kwargs.get("selection_cfg", {"type": "tournament", "tournament_size": 2}),
+            selection_cfg=kwargs.get("selection_cfg", {"type": "tournament", "tournament_size": 3}),
             crossover_cfg=kwargs.get("crossover_cfg", {"type": "two_point"}),
             mutation_cfg=kwargs.get("mutation_cfg", {"mutation_rate": 0.1}),
             crossover_prob=kwargs.get("crossover_prob", 1.0),

@@ -441,13 +441,13 @@ def set_view_room():
 
 @app.route("/graph", methods=["GET"])
 def get_graph():
-    """Get graph data in batch mode"""
+    """Get graph data"""
     if param_graph is None:
         return jsonify({"error": "No project loaded"}), 400
     
     try:
         with graph_lock:
-            graph_data = param_graph.to_json(mode='batch')
+            graph_data = param_graph.to_json()
         return jsonify({
             "message": "success",
             "graph_data": graph_data,
@@ -1294,6 +1294,9 @@ async def get_job_status(job_id):
                         return stored
 
                     def _add_to_group(artifact):
+                        # The group may have been deleted while the job was running
+                        if not param_graph.G.has_node(group_id):
+                            return
                         param_graph.update_element(artifact.id, {"parent": group_id})
                         group_node_attrs = param_graph.G.nodes[group_id]
                         if 'member_ids' not in group_node_attrs or not isinstance(group_node_attrs['member_ids'], list):

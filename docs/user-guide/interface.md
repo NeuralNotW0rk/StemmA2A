@@ -26,7 +26,6 @@ The app has no native menu bar. Every command is in the in-app toolbar or on the
 - **Breadcrumb**: shows the project name and, when you are inside a room, the path
   `Project › Room › Subroom`. Click any earlier crumb to go back up to it.
 - **Refresh**: reloads the graph from the backend.
-- **Batch / Cluster**: switches the layout. *(Cluster is not working yet. See [Known issues](../developer/known-issues.md).)*
 - **+ Import Model**: opens the [Import Model](workflows.md#import-a-model) panel.
 - **Add Source**: adds an external folder of audio or images to the graph.
 - **Utilities ▾**:
@@ -40,6 +39,7 @@ The app has no native menu bar. Every command is in the in-app toolbar or on the
   | Hide/Show All Edges | Hides every edge except spring edges. Edges reappear for the selected node. |
   | Show/Hide Spring Edges | Shows or hides the similarity edges. |
   | Show/Hide Detailed Labels | Shows each node's name with its alias or prompt. Hold **Alt** to peek without turning it on. |
+  | Show/Hide Edge Labels | Labels each edge with what it means, such as *generated*, *binds to* or *parent of*. Spring edges keep their own labels. |
   | Enable/Disable Chronological Layout | Lays generated items out from left to right in creation order. |
 
 ![Utilities menu](../images/toolbar-utilities.png)
@@ -164,6 +164,9 @@ The Jobs panel lists running jobs first, then pending jobs, then finished jobs w
 | Failed | **Details** shows the error and the Python traceback · **×** dismisses the job |
 
 Use **Cancel All** and **Clear Completed** in the panel header to manage several jobs at once.
+
+> **Stop** discards the job's result, but the work already started finishes in the background.
+> Jobs queued behind it start once it's done.
 The graph refreshes automatically when a job succeeds.
 
 ![Jobs panel with running, finished, and failed jobs](../images/jobs-panel.png)

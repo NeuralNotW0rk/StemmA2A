@@ -109,7 +109,6 @@ On PowerShell, use `npm.cmd` rather than `npm` so the execution policy doesn't b
 
 - **Packaged installers don't include the Python backend yet.** Run from source with `npm.cmd run dev`.
 - **The setup scripts and the backend launch path assume Windows.**
-- **The Cluster view and the host DSP operations are currently broken.**
 
 [Known issues](docs/developer/known-issues.md) has the full list.
 

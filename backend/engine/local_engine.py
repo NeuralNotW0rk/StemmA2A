@@ -35,6 +35,8 @@ class LocalEngine(Engine):
         # --- Job Queue and Worker Setup ---
         self.job_queue = queue.Queue()
         self.job_statuses = {}
+        # Held while checking and changing a job's status, so a cancel can't race the worker's transitions
+        self.job_status_lock = threading.Lock()
         self.is_sleeping = False
         self.idle_timeout = int(os.environ.get("ENGINE_IDLE_TIMEOUT", 6000))  # 30 minutes default
         self.worker_thread = threading.Thread(target=self._worker, daemon=True)
@@ -432,12 +434,14 @@ class LocalEngine(Engine):
             print(f"Worker: Picked up job {job_id} for operation '{operation_id}'")
 
             # Check if the job was cancelled while in the queue
-            if self.job_statuses.get(job_id, {}).get("status") == "cancelled":
+            with self.job_status_lock:
+                cancelled = self.job_statuses.get(job_id, {}).get("status") == "cancelled"
+                if not cancelled:
+                    self.job_statuses[job_id] = {"status": "running"}
+            if cancelled:
                 print(f"Worker: Job {job_id} was cancelled before execution. Skipping.")
                 self.job_queue.task_done()
                 continue
-
-            self.job_statuses[job_id] = {"status": "running"}
 
             try:
                 # Get the actual operation function (e.g., self._generate_logic)
@@ -449,16 +453,28 @@ class LocalEngine(Engine):
                 # Run the async operation function in the current thread's event loop
                 result = asyncio.run(func(**op_kwargs))
 
-                self.job_statuses[job_id] = {"status": "completed", "result": result}
-                print(f"Worker: Job {job_id} completed successfully.")
+                # A job cancelled while running stays cancelled and its result is discarded. Its output file is
+                # left in place: files are content-addressed, so another artifact may share it
+                if self._finish_job(job_id, {"status": "completed", "result": result}):
+                    print(f"Worker: Job {job_id} completed successfully.")
+                else:
+                    print(f"Worker: Job {job_id} finished after being cancelled. Discarding its result.")
 
             except Exception as e:
                 print(f"Worker: Job {job_id} failed. Error: {e}")
                 import traceback
                 traceback.print_exc()
-                self.job_statuses[job_id] = {"status": "failed", "error": str(e)}
+                self._finish_job(job_id, {"status": "failed", "error": str(e)})
             finally:
                 self.job_queue.task_done()
+
+    def _finish_job(self, job_id: str, final_status: dict) -> bool:
+        """Records a running job's final status. Returns False, leaving the status untouched, if it was cancelled."""
+        with self.job_status_lock:
+            if self.job_statuses.get(job_id, {}).get("status") != "running":
+                return False
+            self.job_statuses[job_id] = final_status
+            return True
 
     async def execute(self, operation_id: str, **kwargs) -> str:
         """
@@ -472,8 +488,9 @@ class LocalEngine(Engine):
         if not hasattr(self, op_to_run):
             raise ValueError(f"Operation '{operation_id}' is not supported by the LocalEngine.")
 
-        self.job_queue.put((job_id, op_to_run, kwargs))
+        # Set before queueing, or the worker could start the job and then have 'running' overwritten
         self.job_statuses[job_id] = {"status": "pending"}
+        self.job_queue.put((job_id, op_to_run, kwargs))
         print(f"Queued job {job_id} for operation '{operation_id}'")
         
         return job_id
@@ -498,55 +515,15 @@ class LocalEngine(Engine):
         """
         Requests cancellation of a job.
         """
-        status_info = self.job_statuses.get(job_id, {})
-        current_status = status_info.get("status")
-
-        if not current_status or current_status in ["completed", "failed", "cancelled"]:
-            print(f"Job {job_id} is already in a terminal state ('{current_status}'). Cannot cancel.")
-            return
+        with self.job_status_lock:
+            current_status = self.job_statuses.get(job_id, {}).get("status")
+            if current_status in ["pending", "running"]:
+                self.job_statuses[job_id] = {"status": "cancelled"}
 
         if current_status in ["pending", "running"]:
-            self.job_statuses[job_id] = {"status": "cancelled"}
             print(f"Job {job_id} cancellation requested. Status set to 'cancelled'.")
-
-    async def update_embedding(self, artifact: GraphElement) -> GraphElement:
-        """
-        Calculates and adds embeddings to an existing audio or image artifact.
-        """
-        if not artifact or not hasattr(artifact, 'file'):
-            raise ValueError("A valid artifact with a file asset is required.")
-
-        artifact_type = getattr(artifact, 'type', None)
-        if artifact_type == "audio":
-            encoder = self.encoders.get("clap")
-            encoder_name = "CLAPEncoder"
-        elif artifact_type == "image":
-            encoder = self.encoders.get("clip")
-            encoder_name = "CLIPEncoder"
         else:
-            print(f"Unsupported artifact type '{artifact_type}' for embedding update.")
-            return artifact
-
-        if not encoder:
-            print(f"{encoder_name} not available, cannot update embeddings.")
-            return artifact
-
-        file_path = Path(artifact.file.path)
-        if not file_path.exists():
-            raise FileNotFoundError(f"File not found at {file_path}")
-
-        try:
-            embedding = encoder.get_embedding(str(file_path))
-            
-            new_embeddings = getattr(artifact, 'embeddings', {}).copy()
-            new_embeddings[encoder.embedding_type] = embedding.tolist()
-            
-            updated_artifact = replace(artifact, embeddings=new_embeddings)
-            return updated_artifact
-
-        except Exception as e:
-            print(f"Error during embedding update: {e}")
-            return audio_artifact
+            print(f"Job {job_id} is already in a terminal state ('{current_status}'). Cannot cancel.")
 
     async def get_model_layers(self, model_element: GraphElement) -> list[dict]:
         model_element = self._resolve_model_element(model_element)

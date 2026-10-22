@@ -11,9 +11,7 @@
     // Rooms from the outermost to the one being viewed; empty in the main graph
     roomCrumbs?: RoomCrumb[]
     onnavigateRoom?: (roomId: string | null) => void
-    viewMode?: 'batch' | 'cluster'
     onprojectLoad?: (data: { project_path?: string; project_name?: string }) => void
-    onviewModeChange?: (mode: 'batch' | 'cluster') => void
     onrefresh?: () => void
     onaddExternalSource?: (path: string) => void
     onimportModel?: () => void
@@ -22,6 +20,7 @@
     onrepairEdges?: () => void
     showSpringEdges?: boolean
     showDetailedLabels?: boolean
+    showEdgeLabels?: boolean
     chronologicalConstraint?: boolean
     hideEvolutionaryEdges?: boolean
     hideAllEdges?: boolean
@@ -33,9 +32,7 @@
     onreturnToOrigin,
     roomCrumbs = [],
     onnavigateRoom,
-    viewMode = 'batch',
     onprojectLoad,
-    onviewModeChange,
     onrefresh,
     onaddExternalSource,
     onimportModel,
@@ -44,6 +41,7 @@
     onrepairEdges,
     showSpringEdges = $bindable(false),
     showDetailedLabels = $bindable(false),
+    showEdgeLabels = $bindable(false),
     chronologicalConstraint = $bindable(false),
     hideEvolutionaryEdges = $bindable(false),
     hideAllEdges = $bindable(false)
@@ -97,11 +95,6 @@
     await refreshRecentProjects()
   }
 
-  function toggleViewMode(): void {
-    const newMode = viewMode === 'batch' ? 'cluster' : 'batch'
-    onviewModeChange?.(newMode)
-  }
-
   function toggleEvolutionaryEdges(): void {
     hideEvolutionaryEdges = !hideEvolutionaryEdges
     showUtilitiesMenu = false
@@ -119,6 +112,11 @@
 
   function toggleDetailedLabels(): void {
     showDetailedLabels = !showDetailedLabels
+    showUtilitiesMenu = false
+  }
+
+  function toggleEdgeLabels(): void {
+    showEdgeLabels = !showEdgeLabels
     showUtilitiesMenu = false
   }
 
@@ -259,23 +257,6 @@
   </div>
 
   <div class="toolbar-section">
-    <div class="view-toggle">
-      <button
-        class="toggle-button"
-        class:active={viewMode === 'batch'}
-        onclick={toggleViewMode}
-        title="Toggle between batch and cluster view"
-        aria-label="Toggle between batch and cluster view"
-      >
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-          <path d="M4 6h16v2H4zm0 5h16v2H4zm0 5h16v2H4z" />
-        </svg>
-        {viewMode === 'batch' ? 'Batch' : 'Cluster'}
-      </button>
-    </div>
-  </div>
-
-  <div class="toolbar-section">
     <button
       class="toolbar-button"
       onclick={() => onimportModel?.()}
@@ -369,6 +350,9 @@
           </button>
           <button class="dropdown-item" onclick={toggleDetailedLabels}>
             {showDetailedLabels ? 'Hide Detailed Labels' : 'Show Detailed Labels'}
+          </button>
+          <button class="dropdown-item" onclick={toggleEdgeLabels}>
+            {showEdgeLabels ? 'Hide Edge Labels' : 'Show Edge Labels'}
           </button>
           <button class="dropdown-item" onclick={toggleChronological}>
             {chronologicalConstraint
@@ -544,24 +528,6 @@
 
   .crumb-separator {
     margin: 0 0.35rem;
-  }
-
-  .view-toggle .toggle-button {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    background: var(--color-border-glass-1);
-    border: 1px solid var(--color-overlay-border-primary);
-    color: var(--color-overlay-text);
-    padding: 0.5rem 1rem;
-    border-radius: 0.375rem;
-    cursor: pointer;
-    transition: all 0.2s;
-  }
-
-  .toggle-button.active {
-    background: var(--color-primary-t-30);
-    border-color: var(--color-primary-t-50);
   }
 
   .toolbar-button {

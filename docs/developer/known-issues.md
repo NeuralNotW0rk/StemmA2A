@@ -9,13 +9,7 @@ Delete each entry once it is resolved.
 
 | Issue | Where | Effect |
 |---|---|---|
-| `final_artifacts` / `is_batch` are referenced but never defined. They were lost in commit 85fdbc3. | [operations/dispatcher.py:192](../../backend/operations/dispatcher.py#L192) | **Every immediate DSP operation fails** (gain, normalize, slice, onset slice) with a `NameError` that surfaces as a 500. |
-| The `/graph_tsne` route doesn't exist | [src/main/index.ts:831](../../src/main/index.ts#L831) | The toolbar's **Cluster** view returns a 404. `ParameterGraph.to_json(mode='cluster')` exists but has no route. |
-| Success messages are shown in the error panel | `App.svelte` → `ErrorView` | "Export Successful" and similar messages appear in error colors. |
-| `logMessage` is exposed in the preload, but nothing handles it in `ipcMain` | src/preload/index.ts | Calling it rejects. |
-| Cancelling a *running* LocalEngine job only sets its status | engine/local_engine.py | The worker later overwrites the status with completed or failed. |
-| `update_embedding` returns the undefined name `audio_artifact` on its error path | engine/local_engine.py:549 | The original error is replaced by a `NameError`. |
-| The test venv can't import `neutral_selection` | backend/.venv | The editable installs point at the paths from before the rename (`Diffracture`, `NeutralSelection`). Re-run `npm.cmd run backend:setup`. |
+| Stopping a *running* LocalEngine job doesn't interrupt it | engine/local_engine.py | The job stays cancelled and its result is discarded, but the operation still runs to the end, and queued jobs wait for it. Interrupting it needs a cancel check in the adapters' per-step hooks. |
 
 ---
 

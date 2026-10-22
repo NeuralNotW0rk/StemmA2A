@@ -1,7 +1,7 @@
 <!-- src/renderer/src/components/views/ImportModelView.svelte -->
 <script lang="ts">
   import type { FormConfig } from '../../utils/forms'
-  import type { ErrorInfo } from '../../utils/types'
+  import type { PanelMessage } from '../../utils/types'
   import DynamicForm from '../DynamicForm.svelte'
 
   interface AdapterConfig {
@@ -36,7 +36,7 @@
   let { onclose, onrefresh, onError } = $props<{
     onclose: () => void
     onrefresh: () => void
-    onError: (error: ErrorInfo) => void
+    onError: (error: PanelMessage) => void
   }>()
 
   let selectedAdapter = $state(adapters[0].id)

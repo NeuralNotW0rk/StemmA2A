@@ -3,7 +3,7 @@ import json
 import uuid
 import shutil
 from pathlib import Path
-from time import time
+from time import time, sleep
 
 import networkx as nx
 
@@ -12,6 +12,18 @@ from .const import *
 from .elements.base_elements import GraphElement
 from .registry import resolve_element
 from .rooms import placement_room, release_members
+
+
+def _replace_with_retry(src, dst, attempts: int = 6) -> None:
+    """os.replace that retries while a sync client (e.g. Proton Drive, OneDrive) briefly locks dst."""
+    for attempt in range(attempts):
+        try:
+            os.replace(str(src), str(dst))
+            return
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            sleep(0.05 * 2 ** attempt)
 
 DEFAULT_SR = 48000
 
@@ -192,7 +204,18 @@ class ParameterGraph:
         }
         temp_path = self.root / f"{EMBEDDINGS_FILE}.{uuid.uuid4().hex[:8]}.tmp"
         save_file(tensors, str(temp_path))
-        os.replace(str(temp_path), str(sidecar_path))
+        try:
+            _replace_with_retry(temp_path, sidecar_path)
+        except OSError:
+            # A sync client still holding the sidecar blocks the rename; fall back to overwriting in place
+            try:
+                shutil.copyfile(str(temp_path), str(sidecar_path))
+            except OSError as e:
+                # Leave _saved_embeddings stale so the next save() retries; the graph itself still saves
+                print(f"[ParameterGraph] Warning: Failed to write embeddings {sidecar_path}: {e}")
+                return
+            finally:
+                temp_path.unlink(missing_ok=True)
         self._saved_embeddings = embeddings
 
     def save(self):
@@ -238,18 +261,9 @@ class ParameterGraph:
                     print(f"[ParameterGraph] Warning: Failed to create backup {bak_path}: {e}")
 
         # 4. Atomically swap temp_path to data_path (with retry on Windows)
-        last_err = None
-        for attempt in range(5):
-            try:
-                os.replace(str(temp_path), str(data_path))
-                last_err = None
-                break
-            except Exception as e:
-                last_err = e
-                import time
-                time.sleep(0.05 * (attempt + 1))
-        
-        if last_err is not None:
+        try:
+            _replace_with_retry(temp_path, data_path)
+        except OSError:
             try:
                 if os.path.exists(str(data_path)):
                     os.remove(str(data_path))
@@ -262,19 +276,9 @@ class ParameterGraph:
                         pass
                 raise final_err
 
-    def to_json(self, mode='batch'):
+    def to_json(self):
         """Returns the graph in Cytoscape format for the frontend, without node embedding vectors."""
-        if mode == 'batch':
-            graph_data = nx.cytoscape.cytoscape_data(self.G, ident='id')
-        elif mode == 'cluster':
-            C = nx.DiGraph()
-            for node, data in self.G.nodes(data=True):
-                if data['type'] == 'audio':
-                    C.add_node(node, **data)
-                    C.nodes[node].pop('parent', None)
-            graph_data = nx.cytoscape.cytoscape_data(C, ident='id')
-        else:
-            return None
+        graph_data = nx.cytoscape.cytoscape_data(self.G, ident='id')
 
         # cytoscape_data copies each node's dict, so this leaves the graph untouched
         for node in graph_data['elements']['nodes']:

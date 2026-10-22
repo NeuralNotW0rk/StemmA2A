@@ -147,14 +147,16 @@ genomes. The children go into a group named **Scatter (Gen N)**.
 ## recombine
 
 Breeds a new generation from scored parents. It selects parents, crosses over their genomes and
-applies light mutation. The children go into a group named **Recombination (Gen N)**.
+applies light mutation. Each pair of parents produces one child, so ten children come from ten separate
+pairings. The children go into a group named **Recombination (Gen N)**.
 
 | Field | Default | Notes |
 |---|---|---|
 | Parent Individuals | required | |
 | Offspring Count (N) | 10 | |
 | Recombination Strategy | Two-Point | See the table below |
-| Selection Strategy | Tournament | **Tournament (Fitness-Biased)** picks the fitter of two random parents. **Uniform Random** picks any parent. |
+| Selection Strategy | Tournament | **Tournament (Fitness-Biased)** picks the fittest of a few random parents. **Uniform Random** picks any parent. |
+| Tournament Size | 3 | Tournament only. How many random parents compete for each slot. Larger values favour the top scorers more. Only the order of scores matters, not the gaps between them. Capped at the number of parents. |
 | Default / Null Fitness Override | 0.0 | Fitness used for parents you haven't scored |
 | Crossover Probability | 1.0 | |
 | Mutation Rate | 0.01 | Fraction of layers perturbed |
@@ -190,8 +192,6 @@ Each of these takes a **Source Audio** node and produces new audio.
 | normalize | Target Peak, 1.0 | Scales the clip so its peak equals the target |
 | slice | Chunk Duration (s), 1.0 · Overlap (s), 0.0 | Cuts the clip into fixed-length chunks |
 | librosa_onset_slice | Backtrack to Local Minima, on | Cuts the clip at detected onsets |
-
-> These are currently broken by a backend bug. See [Known issues](../developer/known-issues.md).
 
 ---
 

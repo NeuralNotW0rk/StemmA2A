@@ -91,6 +91,36 @@ function getBundleColor(memberType?: string): string {
   }
 }
 
+// Phrased to read along the arrow, source -> target
+const RELATION_LABELS: Record<string, string> = {
+  binds_to: 'binds to',
+  parent: 'parent of',
+  precursor: 'precursor of',
+  shares_phenotype: 'shares phenotype',
+  expressed_to: 'expressed as',
+  member: 'member of',
+  expands: 'contains',
+  pivot: 'pivot'
+}
+
+export function edgeRelationLabel(edge: EdgeSingular): string {
+  const relation = edge.data('relation') as string | undefined
+  if (relation && relation !== 'source') {
+    return RELATION_LABELS[relation] ?? relation.replace(/_/g, ' ')
+  }
+  // 'source' just means "fed the operation that made this", so name the role by what the source is
+  const sourceNode = edge.source()
+  const sourceType = sourceNode.data('member_type') || sourceNode.data('type')
+  switch (sourceType) {
+    case 'model':
+      return 'generated'
+    case 'grating':
+      return 'applied'
+    default:
+      return 'input'
+  }
+}
+
 const defaultStyle: CssStyleDeclaration[] = [
   // General style configuration
   {
@@ -637,6 +667,18 @@ const defaultStyle: CssStyleDeclaration[] = [
       'line-color': genomeColor,
       'target-arrow-color': genomeColor,
       'line-style': 'dotted'
+    }
+  },
+
+  {
+    selector: 'edge.relation-labeled',
+    style: {
+      label: edgeRelationLabel,
+      'font-size': 12,
+      'text-background-color': '#111111',
+      'text-background-opacity': 0.8,
+      'text-background-padding': 2,
+      'text-background-shape': 'roundrectangle'
     }
   },
 

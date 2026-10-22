@@ -5,7 +5,7 @@
   import AudioPlayer from './components/AudioPlayer.svelte'
   import ContentPanel from './components/ContentPanel.svelte'
   import ElementInfoView from './components/views/ElementInfoView.svelte'
-  import ErrorView from './components/views/ErrorView.svelte'
+  import MessageView from './components/views/MessageView.svelte'
   import ImportGratingView from './components/views/ImportGratingView.svelte'
   import ImportModelView from './components/views/ImportModelView.svelte'
   import RemovalView from './components/views/RemovalView.svelte'
@@ -38,7 +38,7 @@
     ActionPanelView,
     ForkResult,
     ElementData,
-    ErrorInfo,
+    PanelMessage,
     ProjectOrigin
   } from './utils/types'
   import { flattenElements, roomPath } from './utils/rooms'
@@ -50,11 +50,11 @@
   // The room being viewed, or null for the main graph
   let activeRoom: string | null = $state(null)
   let roomCrumbs = $derived(roomPath(flattenElements(graphData), activeRoom))
-  let viewMode: 'batch' | 'cluster' = $state('batch')
   let audioSrc: string | null = $state(null)
   let audioTitle: string | null = $state(null)
   let showSpringEdges = $state(false)
   let showDetailedLabelsToggle = $state(false)
+  let showEdgeLabels = $state(false)
   let chronologicalConstraint = $state(false)
   let hideEvolutionaryEdges = $state(false)
   let hideAllEdges = $state(false)
@@ -64,7 +64,7 @@
   let actionPanelView: ActionPanelView = $state('none')
   let activeModelElement: any = $state(null)
   let activeAudioElement: ElementData | null = $state(null)
-  let errorInInfoPanel: ErrorInfo | null = $state(null)
+  let panelMessage: PanelMessage | null = $state(null)
   let allOperations: any[] = $state([])
   let toolbarComponent: Toolbar
 
@@ -178,7 +178,7 @@
       }
     }
     isWaitingForBackend = false
-    errorInInfoPanel = {
+    panelMessage = {
       title: 'Backend Connection Failed',
       message:
         'Could not connect to the backend server. Please ensure it is running and accessible.'
@@ -229,7 +229,7 @@
       await startEmbeddingUpdate()
     } catch (error: any) {
       console.error('Failed to update embeddings:', error)
-      errorInInfoPanel = {
+      panelMessage = {
         title: 'Update Embeddings Failed',
         message: error?.message || String(error)
       }
@@ -242,7 +242,7 @@
       await refreshGraphData()
     } catch (error: any) {
       console.error('Failed to update labels:', error)
-      errorInInfoPanel = {
+      panelMessage = {
         title: 'Update Labels Failed',
         message: error?.message || String(error)
       }
@@ -254,13 +254,14 @@
       const response = await window.api.repairEdges()
       await refreshGraphData()
 
-      errorInInfoPanel = {
+      panelMessage = {
         title: 'Repair Edges Successful',
-        message: response?.message || 'Missing edges were successfully restored.'
+        message: response?.message || 'Missing edges were successfully restored.',
+        kind: 'success'
       }
     } catch (error: any) {
       console.error('Failed to repair edges:', error)
-      errorInInfoPanel = {
+      panelMessage = {
         title: 'Repair Edges Failed',
         message: error?.message || String(error)
       }
@@ -285,7 +286,7 @@
       console.log(`Loading project: ${projectName}`)
       const loaded = await window.api.loadProject(data)
       await loadOperations()
-      graphData = await window.api.getGraphData(viewMode)
+      graphData = await window.api.getGraphData()
       currentProject = projectName || null
       projectOrigin = loaded.origin ?? null
       // Loading a project resets the backend to its main graph
@@ -297,7 +298,7 @@
       return true
     } catch (error) {
       console.error('Failed to load project:', error)
-      errorInInfoPanel = { title: 'Project Load Failed', message: error.message }
+      panelMessage = { title: 'Project Load Failed', message: error.message }
       return false
     }
   }
@@ -310,7 +311,7 @@
     console.log(`Creating project: ${projectName} at ${data.project_path}`)
     await window.api.createProject(data) // Pass the whole data object
     await loadOperations()
-    graphData = await window.api.getGraphData(viewMode)
+    graphData = await window.api.getGraphData()
     currentProject = projectName || null
     projectOrigin = null
     activeRoom = null
@@ -340,7 +341,7 @@
       await refreshGraphData()
     } catch (error: any) {
       console.error('Error adding external source:', error)
-      errorInInfoPanel = { title: 'Add Source Failed', message: error.message || String(error) }
+      panelMessage = { title: 'Add Source Failed', message: error.message || String(error) }
     }
   }
 
@@ -354,7 +355,7 @@
       await refreshGraphData()
     } catch (error: any) {
       console.error('Error expanding path:', error)
-      errorInInfoPanel = { title: 'Expand Path Failed', message: error.message || String(error) }
+      panelMessage = { title: 'Expand Path Failed', message: error.message || String(error) }
     }
   }
 
@@ -368,17 +369,7 @@
       await refreshGraphData()
     } catch (error: any) {
       console.error('Error rescanning source:', error)
-      errorInInfoPanel = { title: 'Rescan Source Failed', message: error.message || String(error) }
-    }
-  }
-
-  async function handleViewModeChange(mode: 'batch' | 'cluster'): Promise<void> {
-    viewMode = mode
-    try {
-      graphData = await window.api.getGraphData(viewMode)
-    } catch (error) {
-      console.error('Failed to get graph data:', error)
-      errorInInfoPanel = { title: 'View Change Failed', message: error.message }
+      panelMessage = { title: 'Rescan Source Failed', message: error.message || String(error) }
     }
   }
 
@@ -412,7 +403,7 @@
       }
     } catch (error) {
       console.error('Error getting audio file:', error)
-      errorInInfoPanel = { title: 'Audio Load Failed', message: error.message }
+      panelMessage = { title: 'Audio Load Failed', message: error.message }
       audioSrc = null
       audioTitle = null
     }
@@ -423,7 +414,7 @@
 
   async function handleElementSelect(elementData: any): Promise<void> {
     selectedElementData = elementData
-    errorInInfoPanel = null // Clear any existing errors when a new element is selected
+    panelMessage = null // Clear any existing errors when a new element is selected
     console.log(`Element selected: ${(selectedElementData?.name as string) || 'Unknown'}`)
 
     if (imageSrc && imageSrc.startsWith('blob:')) {
@@ -456,7 +447,7 @@
         }
       } catch (error: any) {
         console.error('Failed to get image file:', error)
-        errorInInfoPanel = {
+        panelMessage = {
           title: 'Image Load Failed',
           message: error?.message || String(error)
         }
@@ -498,7 +489,7 @@
     } catch (error: unknown) {
       console.error('Failed to change room:', error)
       const message = error instanceof Error ? error.message : String(error)
-      errorInInfoPanel = { title: 'Changing Room Failed', message }
+      panelMessage = { title: 'Changing Room Failed', message }
     }
   }
 
@@ -509,7 +500,7 @@
     } catch (error: unknown) {
       console.error('Break out failed:', error)
       const message = error instanceof Error ? error.message : String(error)
-      errorInInfoPanel = { title: 'Break Out Failed', message }
+      panelMessage = { title: 'Break Out Failed', message }
     }
   }
 
@@ -525,7 +516,7 @@
     } catch (error: unknown) {
       console.error('Rejoin failed:', error)
       const message = error instanceof Error ? error.message : String(error)
-      errorInInfoPanel = { title: 'Rejoin Failed', message }
+      panelMessage = { title: 'Rejoin Failed', message }
     }
   }
 
@@ -536,7 +527,7 @@
     } catch (error: unknown) {
       console.error('Fork to project failed:', error)
       const message = error instanceof Error ? error.message : String(error)
-      errorInInfoPanel = { title: 'Fork to Project Failed', message }
+      panelMessage = { title: 'Fork to Project Failed', message }
       return
     }
 
@@ -548,9 +539,10 @@
 
     const converted = result.converted_exemplars.length
     if (converted) {
-      errorInInfoPanel = {
+      panelMessage = {
         title: 'Forked to Project',
-        message: `${converted} exemplar(s) were forked without their individual and are now plain audio. Their lineage is kept in their context.`
+        message: `${converted} exemplar(s) were forked without their individual and are now plain audio. Their lineage is kept in their context.`,
+        kind: 'info'
       }
     }
   }
@@ -592,14 +584,15 @@
         }
         exportPath = jobResult?.result?.export_path || customPath
       }
-      errorInInfoPanel = {
+      panelMessage = {
         title: 'Export Successful',
-        message: `Successfully exported to: ${exportPath}`
+        message: `Successfully exported to: ${exportPath}`,
+        kind: 'success'
       }
     } catch (error: unknown) {
       console.error('Export failed:', error)
       const message = error instanceof Error ? error.message : String(error)
-      errorInInfoPanel = { title: 'Export Failed', message }
+      panelMessage = { title: 'Export Failed', message }
     }
   }
 
@@ -622,26 +615,26 @@
       await refreshGraphData()
     } catch (error: any) {
       console.error('Error changing group membership:', error)
-      errorInInfoPanel = { title: 'Group Update Failed', message: error.message || String(error) }
+      panelMessage = { title: 'Group Update Failed', message: error.message || String(error) }
     }
   }
 
-  function handleGenerationError(error: ErrorInfo): void {
-    errorInInfoPanel = error
+  function handleGenerationError(error: PanelMessage): void {
+    panelMessage = error
   }
 
   async function refreshGraphData(): Promise<void> {
     try {
       await loadOperations()
-      graphData = await window.api.getGraphData(viewMode)
+      graphData = await window.api.getGraphData()
       // The viewed room may have been removed
       if (activeRoom && roomCrumbs.length === 0) {
         await enterRoom(null)
       }
-      console.log(`Graph data refreshed for view mode ${viewMode}`)
+      console.log('Graph data refreshed')
     } catch (error) {
       console.error('Failed to get graph data:', error)
-      errorInInfoPanel = { title: 'View Change Failed', message: error.message }
+      panelMessage = { title: 'View Change Failed', message: error.message }
     }
   }
 
@@ -737,7 +730,7 @@
       await window.api.updateElement(data.id, { favorite: isFavorite })
     } catch (error: any) {
       console.error('Error toggling favorite:', error)
-      errorInInfoPanel = {
+      panelMessage = {
         title: 'Favorite Toggle Failed',
         message: error.message || String(error)
       }
@@ -782,7 +775,6 @@
   <Toolbar
     bind:this={toolbarComponent}
     onprojectLoad={handleProjectLoad}
-    onviewModeChange={handleViewModeChange}
     onrefresh={refreshGraphData}
     onimportModel={() => (actionPanelView = 'import-model')}
     onaddExternalSource={handleAddExternalSource}
@@ -794,21 +786,21 @@
     {currentProject}
     {projectOrigin}
     {roomCrumbs}
-    {viewMode}
     bind:showSpringEdges
     bind:showDetailedLabels={showDetailedLabelsToggle}
+    bind:showEdgeLabels
     bind:chronologicalConstraint
     bind:hideEvolutionaryEdges
     bind:hideAllEdges
   />
 
-  {#if errorInInfoPanel}
-    <ContentPanel
-      title={errorInInfoPanel.title}
-      onclose={() => (errorInInfoPanel = null)}
-      position="left"
-    >
-      <ErrorView title={errorInInfoPanel.title} message={errorInInfoPanel.message} />
+  {#if panelMessage}
+    <ContentPanel title={panelMessage.title} onclose={() => (panelMessage = null)} position="left">
+      <MessageView
+        title={panelMessage.title}
+        message={panelMessage.message}
+        kind={panelMessage.kind}
+      />
     </ContentPanel>
   {:else if actionPanelView !== 'none'}
     <ContentPanel title={getActionPanelTitle()} onclose={closeActionPanel} position="left">
@@ -822,7 +814,7 @@
           onError={(error) => {
             console.error('Import error:', error)
             closeActionPanel()
-            errorInInfoPanel = error
+            panelMessage = error
           }}
         />
       {:else if actionPanelView === 'import-grating'}
@@ -835,7 +827,7 @@
           onError={(error) => {
             console.error('Grating import error:', error)
             closeActionPanel()
-            errorInInfoPanel = error
+            panelMessage = error
           }}
         />
       {:else if actionPanelView === 'removal'}
@@ -848,7 +840,7 @@
           onerror={(error) => {
             console.error('Removal error:', error)
             closeActionPanel()
-            errorInInfoPanel = error
+            panelMessage = error
           }}
         />
       {:else if actionPanelView === 'grouping'}
@@ -861,7 +853,7 @@
           onerror={(error) => {
             console.error('Grouping error:', error)
             closeActionPanel()
-            errorInInfoPanel = error
+            panelMessage = error
           }}
         />
       {:else if actionPanelView === 'operation'}
@@ -877,7 +869,7 @@
           onError={(error) => {
             console.error('Bending setup error:', error)
             closeActionPanel()
-            errorInInfoPanel = error
+            panelMessage = error
           }}
         />
       {/if}
@@ -928,7 +920,6 @@
   <ParameterGraph
     {graphData}
     {showSpringEdges}
-    {viewMode}
     operations={allOperations}
     onaudioSelect={handleAudioSelect}
     onimportGrating={handleImportGrating}
@@ -948,6 +939,7 @@
     onrescanSource={handleRescanSource}
     ontoggleFavorite={handleToggleFavorite}
     {showDetailedLabels}
+    {showEdgeLabels}
     {chronologicalConstraint}
     {hideEvolutionaryEdges}
     {hideAllEdges}

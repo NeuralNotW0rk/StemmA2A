@@ -26,8 +26,7 @@ const api = {
   dissolveRoom: (roomId: string): Promise<unknown> => ipcRenderer.invoke('dissolveRoom', roomId),
   setViewRoom: (roomId: string | null): Promise<unknown> =>
     ipcRenderer.invoke('setViewRoom', roomId),
-  getGraphData: (viewMode: 'batch' | 'cluster'): Promise<any> =>
-    ipcRenderer.invoke('getGraphData', viewMode),
+  getGraphData: (): Promise<any> => ipcRenderer.invoke('getGraphData'),
   get_generate_form_config: (adapterName: string): Promise<any> =>
     ipcRenderer.invoke('get_generate_form_config', adapterName),
   get_import_form_config: (adapterName: string): Promise<any> =>
@@ -56,7 +55,6 @@ const api = {
     ipcRenderer.invoke('removeElement', elementId, keepChildren),
   removeElements: (elementIds: string[], keepChildren?: boolean): Promise<any> =>
     ipcRenderer.invoke('removeElements', elementIds, keepChildren),
-  logMessage: (message: string): Promise<any> => ipcRenderer.invoke('logMessage', message),
   updateLabels: (): Promise<any> => ipcRenderer.invoke('updateLabels'),
   repairEdges: (): Promise<any> => ipcRenderer.invoke('repairEdges'),
   updateEmbeddings: (): Promise<any> => ipcRenderer.invoke('updateEmbeddings'),

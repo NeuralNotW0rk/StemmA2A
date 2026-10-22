@@ -165,6 +165,9 @@ async def dispatch_operation(
                 output_dir = param_graph.root / "process"
                 output_dir.mkdir(parents=True, exist_ok=True)
 
+                final_artifacts = []
+                is_batch = len(process_results) > 1
+
                 # Integrate into graph
                 collection_dict = None
                 req_group_id = (

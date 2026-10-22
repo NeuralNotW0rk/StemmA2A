@@ -19,11 +19,11 @@
     graphData?: {
       elements: cytoscape.ElementDefinition[] | cytoscape.ElementsDefinition
     } | null
-    viewMode?: 'batch' | 'cluster'
     // The room being viewed, or null for the main graph
     activeRoom?: string | null
     showSpringEdges?: boolean
     showDetailedLabels?: boolean
+    showEdgeLabels?: boolean
     chronologicalConstraint?: boolean
     hideEvolutionaryEdges?: boolean
     hideAllEdges?: boolean
@@ -60,6 +60,7 @@
     activeRoom = null,
     showSpringEdges = false,
     showDetailedLabels = true,
+    showEdgeLabels = false,
     chronologicalConstraint = false,
     hideEvolutionaryEdges = false,
     hideAllEdges = false,
@@ -603,6 +604,17 @@
         cy.edges('edge[type="spring"]').addClass('visible')
       } else {
         cy.edges('edge[type="spring"]').removeClass('visible')
+      }
+    }
+  })
+
+  // Spring edges carry their own similarity labels, so only structural edges get relation labels
+  $effect(() => {
+    if (isInitialized && cy) {
+      if (showEdgeLabels) {
+        cy.edges('[type != "spring"]').addClass('relation-labeled')
+      } else {
+        cy.edges().removeClass('relation-labeled')
       }
     }
   })
@@ -1833,6 +1845,9 @@
       }
       if (showDetailedLabels) {
         addedElements.nodes().addClass('detailed')
+      }
+      if (showEdgeLabels) {
+        addedElements.edges('[type != "spring"]').addClass('relation-labeled')
       }
       updateEdgeVisibility()
 
