@@ -33,6 +33,37 @@ def _request_error(e: Exception) -> Exception:
     return Exception("Cannot reach engine service. Please verify that the remote server is running.")
 
 
+async def check_engine_service(remote_url: str, timeout: float = 5.0) -> dict[str, Any]:
+    """
+    Probes an engine service's /health. Returns {"reachable": True, "device": ...} or
+    {"reachable": False, "error": ...}. Works without a RemoteEngine, so it can check a URL before any project loads.
+    """
+    headers = {}
+    if os.environ.get("CF_ACCESS_CLIENT_ID") and os.environ.get("CF_ACCESS_CLIENT_SECRET"):
+        headers["CF-Access-Client-Id"] = os.environ["CF_ACCESS_CLIENT_ID"]
+        headers["CF-Access-Client-Secret"] = os.environ["CF_ACCESS_CLIENT_SECRET"]
+
+    try:
+        async with aiohttp.ClientSession(headers=headers, timeout=aiohttp.ClientTimeout(total=timeout)) as session:
+            # Cloudflare Access answers rejected credentials with a redirect to its login page
+            async with session.get(f"{remote_url}/health", allow_redirects=False) as response:
+                if 300 <= response.status < 400:
+                    return {"reachable": False, "error": "Redirected to a login page. Check the Cloudflare Access credentials."}
+                if response.status != 200:
+                    return {"reachable": False, "error": f"Engine service responded with HTTP {response.status}."}
+                res = await response.json(content_type=None)
+    except asyncio.TimeoutError:
+        return {"reachable": False, "error": f"No response within {timeout:g} s."}
+    except aiohttp.ClientError as e:
+        return {"reachable": False, "error": f"Cannot connect: {e}"}
+    except ValueError:
+        return {"reachable": False, "error": "The response isn't from an engine service."}
+
+    if not isinstance(res, dict) or res.get("status") != "healthy":
+        return {"reachable": False, "error": "The response isn't from an engine service."}
+    return {"reachable": True, "device": res.get("device")}
+
+
 def _format_bytes(num_bytes: int | float) -> str:
     if num_bytes < 1024:
         return f"{num_bytes:.0f} B"

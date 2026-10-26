@@ -36,6 +36,8 @@
   } from './utils/job-management'
   import type {
     ActionPanelView,
+    EngineSettings,
+    EngineState,
     ForkResult,
     ElementData,
     PanelMessage,
@@ -66,6 +68,7 @@
   let activeAudioElement: ElementData | null = $state(null)
   let panelMessage: PanelMessage | null = $state(null)
   let allOperations: any[] = $state([])
+  let engineState: EngineState | null = $state(null)
   let toolbarComponent: Toolbar
 
   let isWaitingForBackend = $state(true)
@@ -125,9 +128,39 @@
     const ready = await initialHealthCheck()
     setupHealthCheckPolling()
     if (ready) {
+      await restoreEngine()
       await loadOperations()
     }
   })
+
+  // Reapplies the saved engine choice, which the backend forgets when it restarts
+  async function restoreEngine(): Promise<void> {
+    try {
+      const restored = await window.api.restoreEngine()
+      engineState =
+        restored && !('conflict' in restored) ? restored : await window.api.getEngine()
+    } catch (error: unknown) {
+      console.error('Failed to restore engine choice:', error)
+      const message = error instanceof Error ? error.message : String(error)
+      panelMessage = { title: 'Engine Restore Failed', message }
+    }
+  }
+
+  // Throws on failure so the engine menu can show the error in place
+  async function handleSwitchEngine(settings: EngineSettings): Promise<void> {
+    let result = await window.api.setEngine(settings)
+    if ('conflict' in result) {
+      const confirmed = window.confirm(
+        `${result.unfinished_jobs} job(s) are still running. Their results will be lost if you switch engines now. Switch anyway?`
+      )
+      if (!confirmed) return
+      result = await window.api.setEngine(settings, true)
+      if ('conflict' in result) throw new Error(result.error)
+    }
+    engineState = result
+    // Generative operations come from the active engine
+    await loadOperations()
+  }
 
   async function loadOperations(): Promise<void> {
     try {
@@ -199,6 +232,7 @@
           if (serverInstanceId && status.server_instance_id !== serverInstanceId) {
             console.warn('Backend has restarted. Resetting project state.')
             handleBackendRestart()
+            void restoreEngine()
           }
           serverInstanceId = status.server_instance_id || null
         }
@@ -774,6 +808,8 @@
 
   <Toolbar
     bind:this={toolbarComponent}
+    engine={engineState}
+    onswitchEngine={handleSwitchEngine}
     onprojectLoad={handleProjectLoad}
     onrefresh={refreshGraphData}
     onimportModel={() => (actionPanelView = 'import-model')}

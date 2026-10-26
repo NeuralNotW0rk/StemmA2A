@@ -60,6 +60,16 @@ CF_ACCESS_CLIENT_ID=...
 CF_ACCESS_CLIENT_SECRET=...
 ```
 
+`ENGINE_URL` is only the default. The engine menu in the toolbar switches between the local engine
+and a remote URL without a restart, and the app remembers your choice. A switch is refused while
+jobs are running, unless you confirm that their results can be lost. The Cloudflare credentials
+still come from `.env`.
+
+While the remote engine is active, a dot on the engine menu shows whether its `/health` answers:
+green when it does, red when it doesn't, with the reason in the tooltip. The check runs every 20
+seconds and whenever the menu opens. A red dot with "Redirected to a login page" means Cloudflare
+Access rejected the credentials.
+
 ---
 
 ## How assets move

@@ -44,6 +44,37 @@ export interface ProjectOrigin {
   created: number
 }
 
+export type EngineMode = 'local' | 'remote'
+
+export interface EngineSettings {
+  mode: EngineMode
+  // Omitted to reuse the backend's last remote URL
+  remote_url?: string
+}
+
+export interface EngineState {
+  mode: EngineMode
+  // Used when switching to remote; kept while the local engine is active
+  remote_url: string | null
+  unfinished_jobs: number
+  // Only present when a check was requested and the remote engine is active
+  connection?: EngineConnection
+}
+
+export interface EngineConnection {
+  reachable: boolean
+  // The engine service's device, such as "cuda", when reachable
+  device?: string
+  error?: string
+}
+
+// Returned instead of an EngineState when jobs would be abandoned by the switch
+export interface EngineConflict {
+  conflict: true
+  error: string
+  unfinished_jobs: number
+}
+
 export interface ForkResult {
   project_name: string
   project_path: string

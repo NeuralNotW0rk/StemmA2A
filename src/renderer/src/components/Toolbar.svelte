@@ -1,10 +1,13 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import { isCreatingNewProject } from '../utils/stores'
-  import type { ProjectOrigin } from '../utils/types'
+  import EngineMenu from './EngineMenu.svelte'
+  import type { EngineSettings, EngineState, ProjectOrigin } from '../utils/types'
   import type { RoomCrumb } from '../utils/rooms'
 
   interface Props {
+    engine?: EngineState | null
+    onswitchEngine?: (settings: EngineSettings) => Promise<void>
     currentProject?: string | null
     projectOrigin?: ProjectOrigin | null
     onreturnToOrigin?: () => void
@@ -27,6 +30,8 @@
   }
 
   let {
+    engine = null,
+    onswitchEngine,
     currentProject = null,
     projectOrigin = null,
     onreturnToOrigin,
@@ -257,6 +262,8 @@
   </div>
 
   <div class="toolbar-section">
+    <EngineMenu {engine} onswitch={onswitchEngine} />
+
     <button
       class="toolbar-button"
       onclick={() => onimportModel?.()}

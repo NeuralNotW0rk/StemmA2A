@@ -1,5 +1,11 @@
 import { ElectronAPI } from '@electron-toolkit/preload'
-import type { ForkResult, ProjectOrigin } from '../renderer/src/utils/types'
+import type {
+  EngineConflict,
+  EngineSettings,
+  EngineState,
+  ForkResult,
+  ProjectOrigin
+} from '../renderer/src/utils/types'
 
 interface API {
   getRunMode: () => Promise<'local' | 'remote'>
@@ -23,6 +29,11 @@ interface API {
   createRoom: (elementIds: string[]) => Promise<{ room_id: string }>
   dissolveRoom: (roomId: string) => Promise<{ member_ids: string[] }>
   setViewRoom: (roomId: string | null) => Promise<{ room_id: string | null }>
+  // check probes the remote engine service and fills in EngineState.connection
+  getEngine: (check?: boolean) => Promise<EngineState>
+  setEngine: (settings: EngineSettings, force?: boolean) => Promise<EngineState | EngineConflict>
+  // Reapplies the saved engine choice; null when none has been saved
+  restoreEngine: () => Promise<EngineState | EngineConflict | null>
   getGraphData: () => Promise<any>
   get_generate_form_config: (adapterName: string) => Promise<any>
   get_import_form_config: (adapterName: string) => Promise<any>

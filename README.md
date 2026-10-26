@@ -110,7 +110,8 @@ On PowerShell, use `npm.cmd` rather than `npm` so the execution policy doesn't b
 ## Known limitations
 
 - **Packaged installers don't include the Python backend yet.** Run from source with `npm.cmd run dev`.
-- **The setup scripts and the backend launch path assume Windows.**
+- **Only Windows is tested.** Apple Silicon Macs have an untested setup path (`npm run backend:setup:mac`),
+  and they run on the CPU only. See [Getting started](docs/getting-started.md#macos-untested).
 
 [Known issues](docs/developer/known-issues.md) has the full list.
 

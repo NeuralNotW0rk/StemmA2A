@@ -30,10 +30,12 @@ const store = new Store()
 // Backend management
 function startPythonBackend(): Promise<void> {
   return new Promise((resolve, reject) => {
-    const pythonExecutable = process.platform === 'win32' ? 'python.exe' : 'python'
+    // venv layout differs by OS: Scripts/python.exe on Windows, bin/python elsewhere
+    const venvPython =
+      process.platform === 'win32' ? join('Scripts', 'python.exe') : join('bin', 'python')
     const venvPath = is.dev
-      ? join(app.getAppPath(), 'backend', '.venv', 'Scripts', pythonExecutable)
-      : join(process.resourcesPath, 'backend', '.venv', 'Scripts', pythonExecutable)
+      ? join(app.getAppPath(), 'backend', '.venv', venvPython)
+      : join(process.resourcesPath, 'backend', '.venv', venvPython)
 
     const appPyPath = is.dev
       ? join(app.getAppPath(), 'backend', 'app.py')
@@ -826,6 +828,50 @@ app.whenReady().then(async (): Promise<void> => {
   ipcMain.handle('setViewRoom', async (_event, roomId: string | null) =>
     postJson('/rooms/view', { room_id: roomId }, 'Changing room')
   )
+
+  // With check set, the backend also probes the remote engine service for the connection indicator
+  ipcMain.handle('getEngine', async (_event, check = false) => {
+    const response = await fetchWithAuth(`${BACKEND_URL}/engine${check ? '?check=1' : ''}`)
+    const result = await response.json()
+    if (!response.ok) {
+      throw new Error(result.error || `Getting engine failed. Status: ${response.status}`)
+    }
+    return result
+  })
+
+  // Returns the backend's reply rather than throwing on 409, so the renderer can offer to abandon
+  // unfinished jobs. A successful choice is saved and reapplied whenever the backend starts.
+  const setEngine = async (
+    settings: { mode: 'local' | 'remote'; remote_url?: string },
+    force = false
+  ): Promise<unknown> => {
+    const response = await fetchWithAuth(`${BACKEND_URL}/engine`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...settings, force })
+    })
+    const result = await response.json()
+    if (response.status === 409) {
+      return { conflict: true, ...result }
+    }
+    if (!response.ok) {
+      throw new Error(result.error || `Switching engine failed. Status: ${response.status}`)
+    }
+    store.set('engine', { mode: result.mode, remote_url: result.remote_url })
+    return result
+  }
+
+  ipcMain.handle(
+    'setEngine',
+    async (_event, settings: { mode: 'local' | 'remote'; remote_url?: string }, force = false) =>
+      setEngine(settings, force)
+  )
+
+  ipcMain.handle('restoreEngine', async () => {
+    const saved = store.get('engine') as { mode: 'local' | 'remote'; remote_url?: string } | undefined
+    if (!saved) return null
+    return setEngine(saved)
+  })
 
   ipcMain.handle('getGraphData', async () => {
     const endpoint = '/graph'

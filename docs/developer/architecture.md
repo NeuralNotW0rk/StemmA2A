@@ -36,8 +36,11 @@
 - **[app.py](../../backend/app.py) is the orchestrator.** It holds the in-memory `ParameterGraph`,
   guarded by `graph_lock`. It also runs the job registries: `active_jobs` for engine jobs and
   `local_jobs` (the TaskManager) for host jobs.
-- **The engine runs generative models.** `EngineProvider` builds a `RemoteEngine` if `ENGINE_URL` is
-  set, otherwise a `LocalEngine`. The engine is created only when a project is loaded or created.
+- **The engine runs generative models.** `EngineProvider` holds a `LocalEngine` and any
+  `RemoteEngine`s, and one of them is active. The first is created when a project is first loaded or
+  created: remote if `ENGINE_URL` is set, local otherwise. `POST /engine` switches between them at
+  runtime. Engines are kept after a switch and reused across project loads, with their data root
+  pointed at the current project.
 
 ---
 

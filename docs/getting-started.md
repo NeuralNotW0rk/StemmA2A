@@ -6,8 +6,8 @@ This page takes you from a fresh clone to a running app with your first project.
 
 ## Requirements
 
-- **Windows** is the main development platform. The setup scripts are PowerShell, and the Electron
-  main process expects `backend/.venv/Scripts/python.exe`.
+- **Windows** is the main development platform and the only one tested. Apple Silicon Macs have a
+  preliminary setup path that hasn't been tested yet. See [macOS (untested)](#macos-untested).
 - **Node.js** and npm.
 - **Python 3.10**, available as `py -3.10`.
 - An NVIDIA GPU is strongly recommended. The CPU works for small tests only.
@@ -39,6 +39,29 @@ npm.cmd run backend:setup  # creates backend/.venv and installs PyTorch + requir
 
 > On PowerShell, use `npm.cmd` instead of `npm` so the execution policy doesn't block the scripts.
 
+### macOS (untested)
+
+> **Warning:** Nobody has run this path on a Mac yet. Expect to fix things the first time through.
+
+On macOS, use the bash version of the setup script:
+
+```bash
+brew install python@3.10 ffmpeg  # or any other way to get python3.10 on PATH
+npm install
+npm run backend:setup:mac        # runs backend/setup.sh
+```
+
+[`backend/setup.sh`](../backend/setup.sh) follows the same steps as `setup.ps1`, with these
+differences:
+
+- It requires Apple Silicon. `torch==2.7.1` has no Intel macOS build.
+- It finds Python as `python3.10`, or uses the `PYTHON` environment variable if you set it.
+- It installs PyTorch from PyPI. There is no CUDA, and it skips `flash-attn`.
+- It warns if `ffmpeg` is missing, because `torchcodec` needs FFmpeg's libraries.
+
+The backend currently picks `cuda` or `cpu` only, so a Mac runs everything on the CPU. Run the
+backend tests with `npm run test:backend:mac`.
+
 ---
 
 ## 2. Configure (optional)
@@ -47,7 +70,7 @@ Copy `.env.example` to `.env` at the repo root. Every setting has a default. You
 
 | Variable | Use |
 |---|---|
-| `ENGINE_URL` | Runs generation on a remote GPU engine instead of in-process. See [Remote GPU engine](developer/remote-engine.md). |
+| `ENGINE_URL` | The default remote GPU engine, used until you pick one from the engine menu in the toolbar. See [Remote GPU engine](developer/remote-engine.md). |
 | `LOCAL_DATA_PATH` | Where the shared data cache lives. The default is `~/.stemma2a_data`. |
 | `CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET` | Credentials for a Cloudflare-tunneled remote engine. |
 | `RUN_LOCAL_BACKEND=false` | Stops Electron from starting the Python backend, for when you run it yourself. |

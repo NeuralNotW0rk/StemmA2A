@@ -54,6 +54,7 @@ from param_graph.transfer import collect_subgraph, write_subgraph
 from param_graph.rooms import placement_room, room_of, break_out, dissolve
 from coolname import generate_slug
 from engine.engine_provider import EngineProvider
+from engine.remote_engine import check_engine_service
 from engine.results import is_multi_result, result_artifacts, root_ids
 from engine.encoders.clap_encoder import CLAPEncoder
 from engine.encoders.clip_encoder import CLIPEncoder
@@ -151,7 +152,10 @@ SIMILARITY_GROUPS = {
 }
 
 param_graph: ParameterGraph = None
-execution_url = os.environ.get("ENGINE_URL")
+# Active remote engine URL, or None for the local engine; switchable at runtime through /engine
+execution_url = os.environ.get("ENGINE_URL") or None
+# Remote URL used when switching back to remote, kept while the local engine is active
+remote_engine_url = execution_url
 uid_generator = XXH3_64()
 sync_registry = operation_registry
 # EngineProvider is now initialized after a project is loaded
@@ -189,15 +193,91 @@ def health_check():
 
 
 # --------------------
+#  Engine Selection
+# --------------------
+
+def _unfinished_job_ids() -> list[str]:
+    """Jobs that would be lost by an engine switch: engine jobs not yet collected, and host jobs still running."""
+    host_jobs = [k for k, v in local_jobs.items() if v.get("status") not in ("completed", "failed")]
+    return list(active_jobs.keys()) + host_jobs
+
+
+def _engine_state() -> dict:
+    return {
+        "mode": "remote" if execution_url else "local",
+        "remote_url": remote_engine_url,
+        "unfinished_jobs": len(_unfinished_job_ids()),
+        "success": True,
+    }
+
+
+@app.route("/engine", methods=["GET"])
+async def get_engine_state():
+    """
+    Reports whether the local or remote engine is active, and the remote URL used when switching to remote.
+    With ?check=1 and the remote engine active, also probes the engine service and adds "connection".
+    """
+    state = _engine_state()
+    if request.args.get("check") and execution_url:
+        state["connection"] = await check_engine_service(execution_url)
+    return jsonify(state)
+
+
+@app.route("/engine", methods=["POST"])
+def set_engine():
+    """
+    Switches between the local and a remote engine without restarting.
+    Body: {"mode": "local" | "remote", "remote_url": optional, "force": optional}
+    Refused while jobs are unfinished unless force is set, since their results can't be collected
+    from the other engine. With no project loaded, the choice applies when the next one loads.
+    """
+    global execution_url, remote_engine_url
+
+    data = request.get_json() or {}
+    mode = data.get("mode")
+    if mode not in ("local", "remote"):
+        return jsonify({"error": "mode must be 'local' or 'remote'"}), 400
+
+    if mode == "remote":
+        url = (data.get("remote_url") or remote_engine_url or "").strip().rstrip("/")
+        if not url:
+            return jsonify({"error": "remote_url is required; no ENGINE_URL is configured"}), 400
+    else:
+        url = None
+
+    if url != execution_url and not data.get("force"):
+        unfinished = _unfinished_job_ids()
+        if unfinished:
+            return jsonify({
+                "error": f"{len(unfinished)} job(s) are still running. Wait for them to finish, or switch with force to abandon them.",
+                "unfinished_jobs": len(unfinished),
+            }), 409
+
+    try:
+        if engine_provider is not None:
+            engine_provider.switch(url)
+        if url:
+            remote_engine_url = url
+        execution_url = url
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": f"Failed to switch engine: {e}"}), 500
+
+    print(f"Engine: Switched to {f'remote engine at {url}' if url else 'local engine'}")
+    return jsonify(_engine_state())
+
+
+# --------------------
 #  Project Management
 # --------------------
 
 def initialize_engine(project_path: str):
-    """Initializes the engine provider for a given project."""
+    """Initializes the engine provider on the first project load, and retargets its engines on later ones."""
     global engine_provider, execution_url
-    # Reset the singleton instance
-    EngineProvider._engine_instance = None
-    engine_provider = EngineProvider(remote_url=execution_url, data_root=project_path)
+    if engine_provider is None:
+        engine_provider = EngineProvider(remote_url=execution_url, data_root=project_path)
+    engine_provider.set_data_root(project_path)
+    engine_provider.switch(execution_url)
     if execution_url:
         print(f"Engine: Using remote engine at {execution_url}")
     else:

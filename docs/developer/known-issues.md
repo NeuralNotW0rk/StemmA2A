@@ -10,6 +10,7 @@ Delete each entry once it is resolved.
 | Issue | Where | Effect |
 |---|---|---|
 | Stopping a *running* LocalEngine job doesn't interrupt it | engine/local_engine.py | The job stays cancelled and its result is discarded, but the operation still runs to the end, and queued jobs wait for it. Interrupting it needs a cancel check in the adapters' per-step hooks. |
+| Loading a project while jobs are running moves their output | engine/engine_provider.py | Engines are reused across projects, and `set_data_root` repoints them immediately. A job still running writes its output under the newly loaded project, whose graph then receives the result. Unlike `POST /engine`, project loads don't check for unfinished jobs. |
 
 ---
 
@@ -52,7 +53,9 @@ Delete each entry once it is resolved.
 ## Packaging and environment
 
 - **Packaged builds don't ship the backend.** `electron-builder.yml` has no `extraResources` for the
-  backend, and the production Python path is Windows-only.
+  backend.
+- **macOS setup is untested.** `backend/setup.sh` and the `bin/python` launch path haven't been run
+  on a Mac. The backend has no MPS device selection, so Macs fall back to the CPU.
 - **`DATA_ROOT` is unused.** Electron sets it, but Python never reads it.
 - **The dev backend window isn't closed on quit.** It is started with `cmd /c start`.
 - **The fallback for `LOCAL_DATA_PATH` differs** between `app.py` (`~/.stemma2a_data`) and

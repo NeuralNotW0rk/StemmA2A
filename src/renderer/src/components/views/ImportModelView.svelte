@@ -198,7 +198,7 @@
           <div class="error-title">Failed to Fetch Shared Models</div>
           <div class="error-message">{loadError}</div>
           <div class="error-action">
-            Verify the connection to your remote engine (configured via <code>ENGINE_URL</code> in your <code>.env</code> file).
+            Verify the connection to your remote engine. You can check or change its URL from the engine menu in the toolbar.
           </div>
         </div>
       {:else if sharedModels.length === 0}

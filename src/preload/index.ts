@@ -26,6 +26,10 @@ const api = {
   dissolveRoom: (roomId: string): Promise<unknown> => ipcRenderer.invoke('dissolveRoom', roomId),
   setViewRoom: (roomId: string | null): Promise<unknown> =>
     ipcRenderer.invoke('setViewRoom', roomId),
+  getEngine: (check?: boolean): Promise<unknown> => ipcRenderer.invoke('getEngine', check),
+  setEngine: (settings: unknown, force?: boolean): Promise<unknown> =>
+    ipcRenderer.invoke('setEngine', settings, force),
+  restoreEngine: (): Promise<unknown> => ipcRenderer.invoke('restoreEngine'),
   getGraphData: (): Promise<any> => ipcRenderer.invoke('getGraphData'),
   get_generate_form_config: (adapterName: string): Promise<any> =>
     ipcRenderer.invoke('get_generate_form_config', adapterName),
