@@ -59,6 +59,7 @@ from engine.results import is_multi_result, result_artifacts, root_ids
 from engine.encoders.clap_encoder import CLAPEncoder
 from engine.encoders.clip_encoder import CLIPEncoder
 from utils.audio import load_audio, save_audio_to_buffer, save_audio
+from utils.provenance import embed_provenance, read_provenance, restore_context, ORIGIN_KEY
 from utils.form import create_dynamic_model
 from utils.uid import XXH3_64, path_from_uid
 from utils.migrations import run_global_migrations, run_project_migrations
@@ -1236,6 +1237,7 @@ DYNAMIC_LABELING_BLACKLIST = {
     "phenotype_status",
     "phenotype_duplicate_of",
     "shared_exemplar_id",
+    ORIGIN_KEY,
     "file",
     "embeddings",
 }
@@ -1460,6 +1462,8 @@ async def get_job_status(job_id):
                     # Deterministically ensure all structural dependencies declared in context are linked
                     for artifact in stored_artifacts.values():
                         link_artifact_dependencies(artifact, param_graph)
+                        # The readable copy carries its context, so it can be traced after leaving the project
+                        embed_provenance(artifact)
 
                     param_graph.save()
 
@@ -1801,7 +1805,9 @@ async def _expand_path_task(job_id: str, path_node_id: str) -> None:
                     element_id = uid_generator.from_tensor(audio_tensor)
                     asset = Asset(path=entry_str, uid=element_id, extension=entry.suffix.lower())
                     duration = audio_tensor.shape[-1] / float(APP_SAMPLE_RATE)
-                    new_elements.append(Audio(id=element_id, name=entry.name, context={}, file=asset, duration=duration))
+                    payload = read_provenance(entry_str)
+                    context = restore_context(payload, element_id) if payload else {}
+                    new_elements.append(Audio(id=element_id, name=entry.name, context=context, file=asset, duration=duration))
                 except Exception as e:
                     print(f"Failed to load audio for {entry.name} to generate UID: {e}")
             elif entry.is_file() and entry.suffix.lower() in image_exts:
@@ -1811,7 +1817,9 @@ async def _expand_path_task(job_id: str, path_node_id: str) -> None:
                     element_id = uid_generator.from_tensor(torch.from_numpy(pixels))
                     asset = Asset(path=entry_str, uid=element_id, extension=entry.suffix.lower())
                     height, width = pixels.shape[:2]
-                    new_elements.append(Image(id=element_id, name=entry.name, context={}, file=asset, width=width, height=height))
+                    payload = read_provenance(entry_str)
+                    context = restore_context(payload, element_id) if payload else {}
+                    new_elements.append(Image(id=element_id, name=entry.name, context=context, file=asset, width=width, height=height))
                 except Exception as e:
                     print(f"Failed to load image for {entry.name} to generate UID: {e}")
 
@@ -1824,6 +1832,9 @@ async def _expand_path_task(job_id: str, path_node_id: str) -> None:
             for el in new_elements:
                 param_graph.add_element(el)
                 param_graph.update_element(el.id, {"parent": existing_dir_id})
+                # Files exported from a project bring their context back, so they rejoin its lineage
+                if getattr(el, "context", None):
+                    link_artifact_dependencies(el, param_graph)
             param_graph.save()
 
         # Trigger background incremental embedding updates
@@ -2891,6 +2902,7 @@ async def _export_audio_task(job_id: str, names: list[str], export_dir_str: str 
                 dest_path = export_dir / dest_filename
 
             shutil.copy2(audio_path, dest_path)
+            embed_provenance(element, dest_path)
             exported_paths.append(dest_path)
 
         export_path = exported_paths[0] if len(exported_paths) == 1 else export_dir

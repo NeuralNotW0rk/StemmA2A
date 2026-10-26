@@ -118,6 +118,10 @@ This is StemmA2A's main loop. You evolve **changes to the model**, judged by ear
 Imported audio can be used as **Initial Audio** for audio-to-audio generation, inverted into a
 **latent**, or wrapped as a starting individual.
 
+A file that was exported from StemmA2A keeps its history. When you import it again, it gets back its
+original settings (prompt, seed and so on). It is also linked to the original artifact and the
+artifact's inputs, if those are in the project.
+
 ---
 
 ## Organize: groups, rooms, forks
@@ -151,3 +155,8 @@ Imported audio can be used as **Initial Audio** for audio-to-audio generation, i
   named from their automatic labels, for example `c1_f1.5.wav`.
 - **A model setup:** select a model and click **Export Shared Model Config** in Element details. This
   writes an entry you can paste into `shared_models.json`.
+
+Exported WAV files, and the files in a project's `generate/` and `process/` folders, record how they
+were made. The record lives inside the file, where other software ignores it, and stays with the file
+when it is copied or renamed. Converting the file to another format, or re-saving it in an audio
+editor, usually removes it. Generated PNG images carry the same record.

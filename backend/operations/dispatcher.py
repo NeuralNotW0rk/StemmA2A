@@ -21,6 +21,7 @@ from param_graph.elements.base_elements import Asset
 from param_graph.utils import save_artifact_asset
 from param_graph.rooms import placement_room
 from utils.audio import save_audio
+from utils.provenance import embed_provenance
 from utils.form import create_dynamic_model
 from utils.uid import XXH3_64, path_from_uid
 
@@ -192,6 +193,7 @@ async def dispatch_operation(
 
                         artifact_blueprint.file = replace(artifact_blueprint.file, path=str(local_path))
                         final_artifact = save_artifact_asset(artifact_blueprint, output_dir, asset_name="file")
+                        embed_provenance(final_artifact)
                         final_artifacts.append(final_artifact)
 
                     for artifact in final_artifacts:
