@@ -21,6 +21,7 @@
     onupdateEmbeddings?: () => void
     onupdateLabels?: () => void
     onrepairEdges?: () => void
+    oncleanup?: () => void
     showSpringEdges?: boolean
     showDetailedLabels?: boolean
     showEdgeLabels?: boolean
@@ -44,6 +45,7 @@
     onupdateEmbeddings,
     onupdateLabels,
     onrepairEdges,
+    oncleanup,
     showSpringEdges = $bindable(false),
     showDetailedLabels = $bindable(false),
     showEdgeLabels = $bindable(false),
@@ -342,6 +344,15 @@
             }}
           >
             Repair Edges
+          </button>
+          <button
+            class="dropdown-item"
+            onclick={() => {
+              oncleanup?.()
+              showUtilitiesMenu = false
+            }}
+          >
+            Clean Up Project Files...
           </button>
           <div class="dropdown-divider"></div>
           <button class="dropdown-item" onclick={toggleEvolutionaryEdges}>

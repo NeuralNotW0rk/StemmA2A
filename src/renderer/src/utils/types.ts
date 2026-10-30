@@ -4,6 +4,7 @@ export type ActionPanelView =
   | 'import-model'
   | 'import-grating'
   | 'removal'
+  | 'cleanup'
   | 'grouping'
   | 'operation'
   | 'bend'
@@ -82,6 +83,39 @@ export interface ForkResult {
   edge_count: number
   copied_files: number
   converted_exemplars: string[]
+}
+
+export interface OrphanFile {
+  // Relative to the project root, e.g. "generate/foo.wav"
+  path: string
+  size: number
+}
+
+export interface TrashBatch {
+  id: string
+  created: number | null
+  file_count: number
+  bytes: number
+}
+
+export interface CleanupPreview {
+  orphans: OrphanFile[]
+  orphan_bytes: number
+  trash: TrashBatch[]
+  unfinished_jobs: number
+}
+
+export interface QuarantineResult {
+  message: string
+  batch: { id: string; file_count: number; bytes: number } | null
+  // Previewed files that were no longer unreferenced, or gone, when the move ran
+  skipped: number
+}
+
+export interface RestoreResult {
+  restored: number
+  // Files left in the trash because their original location is occupied again
+  conflicts: string[]
 }
 
 export interface NodeListItem {

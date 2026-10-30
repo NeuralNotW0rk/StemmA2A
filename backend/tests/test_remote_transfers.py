@@ -236,5 +236,42 @@ class TestRemoteTransferDeduplication(unittest.IsolatedAsyncioTestCase):
                     pass
 
 
+class TestRemoteSharedModels(unittest.IsolatedAsyncioTestCase):
+    async def test_add_shared_model_uploads_missing_files(self):
+        from aiohttp import web
+        from aiohttp.test_utils import TestServer
+
+        received = []
+        uploaded = []
+
+        async def add_shared_model(request):
+            received.append(await request.json())
+            if not uploaded:
+                return web.json_response({"error": "Missing assets", "missing_uids": ["ckpt.xxh3_64"]}, status=422)
+            return web.json_response({"shared_model": {"id": "model1"}, "success": True})
+
+        web_app = web.Application()
+        web_app.router.add_post("/shared_models", add_shared_model)
+        async with TestServer(web_app) as server:
+            engine = RemoteEngine(remote_url=str(server.make_url("")).rstrip("/"))
+
+            async def mock_upload_single(asset_uid, asset_path, session):
+                uploaded.append((asset_uid, asset_path))
+                return True
+
+            engine._upload_single_asset = mock_upload_single
+            entry = {
+                "name": "Model", "adapter": "stable_audio_tools", "config": {"sample_rate": 44100},
+                "checkpoint": {"uid": "ckpt.xxh3_64", "size": 7, "path": "C:/Models/model.ckpt"},
+            }
+            shared = await engine.add_shared_model(entry, {"ckpt.xxh3_64": "C:/Models/model.ckpt"})
+
+        self.assertEqual(shared, {"id": "model1"})
+        self.assertEqual(uploaded, [("ckpt.xxh3_64", "C:/Models/model.ckpt")])
+        self.assertEqual(len(received), 2)
+        # Host paths never reach the engine service
+        self.assertEqual(received[0]["checkpoint"], {"uid": "ckpt.xxh3_64", "size": 7})
+
+
 if __name__ == "__main__":
     unittest.main()

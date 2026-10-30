@@ -21,6 +21,11 @@ const api = {
     ipcRenderer.invoke('createProject', projectData),
   forkProject: (elementIds: string[]): Promise<unknown> =>
     ipcRenderer.invoke('forkProject', elementIds),
+  getCleanupPreview: (): Promise<unknown> => ipcRenderer.invoke('getCleanupPreview'),
+  quarantineFiles: (paths: string[]): Promise<unknown> =>
+    ipcRenderer.invoke('quarantineFiles', paths),
+  restoreTrash: (batchId: string): Promise<unknown> => ipcRenderer.invoke('restoreTrash', batchId),
+  purgeTrash: (batchId: string): Promise<unknown> => ipcRenderer.invoke('purgeTrash', batchId),
   createRoom: (elementIds: string[]): Promise<unknown> =>
     ipcRenderer.invoke('createRoom', elementIds),
   dissolveRoom: (roomId: string): Promise<unknown> => ipcRenderer.invoke('dissolveRoom', roomId),

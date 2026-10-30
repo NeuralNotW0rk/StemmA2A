@@ -52,6 +52,7 @@ from param_graph.elements.local_path import LocalPath
 from param_graph.utils import save_artifact_asset, resolve_element
 from param_graph.transfer import collect_subgraph, write_subgraph
 from param_graph.rooms import placement_room, room_of, break_out, dissolve
+from param_graph import cleanup
 from coolname import generate_slug
 from engine.engine_provider import EngineProvider
 from engine.remote_engine import check_engine_service
@@ -674,6 +675,23 @@ async def get_shared_models():
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 
+@app.route("/shared_models/<model_id>", methods=["DELETE"])
+async def remove_shared_model(model_id):
+    """
+    Removes a shared model from the active engine's registry. Its files move back into the engine's
+    cache, so projects that imported it keep working until those files are evicted.
+    """
+    if engine_provider is None:
+        return jsonify({"error": "No engine is running yet; load a project first"}), 400
+    try:
+        await engine_provider.get_engine().remove_shared_model(model_id)
+        return jsonify({"success": True})
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 404
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
 async def _import_model_task(job_id: str, data: dict) -> None:
     try:
         local_jobs[job_id]["status"] = "running"
@@ -836,66 +854,44 @@ async def _export_shared_model_task(job_id: str, model_id: str) -> None:
 
         with graph_lock:
             model = param_graph.get_element(model_id)
-            if not model:
-                raise ValueError(f"Model '{model_id}' not found in parameter graph")
 
-            entry = {
-                "name": model.name,
-                "adapter": model.adapter,
-                "model_type": getattr(model, "model_type", None) or model.adapter,
-                "checkpoint_uid": model.checkpoint.uid if hasattr(model, "checkpoint") and model.checkpoint else None,
-                "checkpoint_path": model.checkpoint.path if hasattr(model, "checkpoint") and model.checkpoint else None,
-                "checkpoint_size": model.checkpoint.size if hasattr(model, "checkpoint") and model.checkpoint else None,
-                "config": model.config
-            }
+        def file_ref(asset: Asset | None) -> dict | None:
+            if not asset or not asset.uid:
+                return None
+            return {k: v for k, v in (("uid", asset.uid), ("path", asset.path), ("size", asset.size)) if v}
 
-            encoder = getattr(model, "encoder", None)
-            if encoder:
-                entry["encoder_uid"] = encoder.uid
-                entry["encoder_path"] = encoder.path
-                entry["encoder_size"] = encoder.size
+        checkpoint = getattr(model, "checkpoint", None)
+        encoder = getattr(model, "encoder", None)
+        entry = {
+            "name": model.name,
+            "adapter": model.adapter,
+            "model_type": getattr(model, "model_type", None) or model.adapter,
+            "checkpoint": file_ref(checkpoint),
+            "config": model.config,
+        }
+        if file_ref(encoder):
+            entry["encoder"] = file_ref(encoder)
+        local_files = {a.uid: a.path for a in (checkpoint, encoder) if a and a.uid and a.path}
 
-            local_jobs[job_id]["progress"] = {
-                "value": 50,
-                "total": 100,
-                "description": "Updating shared models catalog..."
-            }
-
-            dummy_config_path = Path(param_graph.root) / "shared_models_dummy.json"
-            shared_models_list = []
-            if dummy_config_path.exists():
-                try:
-                    with open(dummy_config_path, "r") as f:
-                        shared_models_list = json.load(f)
-                        if not isinstance(shared_models_list, list):
-                            shared_models_list = []
-                except Exception as e:
-                    print(f"Warning: Failed to read existing dummy config: {e}. Resetting.")
-                    shared_models_list = []
-
-            found = False
-            for idx, existing in enumerate(shared_models_list):
-                existing_uid = existing.get("checkpoint_uid") or existing.get("checkpoint", {}).get("uid")
-                if existing_uid == entry["checkpoint_uid"]:
-                    shared_models_list[idx] = entry
-                    found = True
-                    break
-
-            if not found:
-                shared_models_list.append(entry)
-
-            with open(dummy_config_path, "w") as f:
-                json.dump(shared_models_list, f, indent=2)
+        engine = engine_provider.get_engine()
+        where = f"the remote engine ({execution_url})" if execution_url else "the local engine"
+        local_jobs[job_id]["progress"] = {
+            "value": 30,
+            "total": 100,
+            # A remote engine may first need the model's files uploaded, which can take a while
+            "description": f"Registering with {where}..."
+        }
+        shared = await engine.add_shared_model(entry, local_files)
 
         local_jobs[job_id]["status"] = "completed"
         local_jobs[job_id]["progress"] = {
             "value": 100,
             "total": 100,
-            "description": "Shared model exported successfully."
+            "description": "Shared model registered."
         }
         local_jobs[job_id]["result"] = {
-            "message": f"Successfully exported shared model entry to {dummy_config_path.name}",
-            "config_path": str(dummy_config_path),
+            "message": f"'{model.name}' is now a shared model on {where}.",
+            "shared_model_id": shared.get("id"),
             "node_id": model_id
         }
 
@@ -910,7 +906,7 @@ async def _export_shared_model_task(job_id: str, model_id: str) -> None:
 
 @app.route("/export_shared_model", methods=["POST"])
 async def export_shared_model():
-    """Exports a registered model to shared_models_dummy.json as an async local job."""
+    """Registers a project's model as a shared model on the active engine, as an async local job."""
     if param_graph is None:
         return jsonify({"error": "No project loaded"}), 400
 
@@ -3112,6 +3108,114 @@ def remove_elements():
 
     except Exception as e:
         print(f"Failed to remove elements: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+# --------------------
+#  Project Cleanup
+# --------------------
+
+@app.route("/cleanup", methods=["GET"])
+def get_cleanup_preview():
+    """Lists project files no graph element references, and the batches already in the trash."""
+    if param_graph is None:
+        return jsonify({"error": "No project loaded"}), 400
+
+    try:
+        with graph_lock:
+            refs = cleanup.collect_references(param_graph)
+            orphans = cleanup.find_unreferenced(param_graph.root, refs)
+            trash = cleanup.list_trash(param_graph.root)
+        return jsonify({
+            "orphans": [{"path": o.path, "size": o.size} for o in orphans],
+            "orphan_bytes": sum(o.size for o in orphans),
+            "trash": trash,
+            "unfinished_jobs": len(_unfinished_job_ids()),
+            "success": True
+        })
+    except Exception as e:
+        print(f"Failed to scan project files: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/cleanup/quarantine", methods=["POST"])
+def quarantine_unreferenced():
+    """
+    Moves unreferenced files into the project's .trash folder. Only files in the given list (what
+    the user previewed) that are still unreferenced now are moved.
+    """
+    if param_graph is None:
+        return jsonify({"error": "No project loaded"}), 400
+
+    data = request.get_json() or {}
+    requested = data.get("paths")
+    if not isinstance(requested, list) or not requested:
+        return jsonify({"error": "paths is required"}), 400
+
+    # A running job may have written files the graph doesn't reference yet
+    unfinished = _unfinished_job_ids()
+    if unfinished:
+        return jsonify({
+            "error": f"{len(unfinished)} job(s) still running. Wait for them to finish before cleaning up."
+        }), 409
+
+    try:
+        with graph_lock:
+            refs = cleanup.collect_references(param_graph)
+            requested_set = set(requested)
+            orphans = [
+                o for o in cleanup.find_unreferenced(param_graph.root, refs)
+                if o.path in requested_set
+            ]
+            batch = cleanup.quarantine(param_graph.root, orphans) if orphans else None
+        skipped = len(requested) - len(orphans)
+        return jsonify({
+            "message": f"Moved {len(orphans)} file(s) to the project trash.",
+            "batch": batch,
+            "skipped": skipped,
+            "success": True
+        })
+    except Exception as e:
+        print(f"Failed to move files to trash: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/cleanup/restore", methods=["POST"])
+def restore_trash_batch():
+    """Moves a trash batch's files back to their original locations."""
+    if param_graph is None:
+        return jsonify({"error": "No project loaded"}), 400
+
+    batch_id = (request.get_json() or {}).get("batch_id")
+    try:
+        with graph_lock:
+            result = cleanup.restore(param_graph.root, batch_id)
+        return jsonify({**result, "success": True})
+    except (ValueError, FileNotFoundError) as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        print(f"Failed to restore trash batch: {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/cleanup/purge", methods=["POST"])
+def purge_trash_batch():
+    """Permanently deletes a trash batch."""
+    if param_graph is None:
+        return jsonify({"error": "No project loaded"}), 400
+
+    batch_id = (request.get_json() or {}).get("batch_id")
+    try:
+        with graph_lock:
+            result = cleanup.purge(param_graph.root, batch_id)
+        return jsonify({**result, "success": True})
+    except (ValueError, FileNotFoundError) as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        print(f"Failed to delete trash batch: {e}")
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500
 

@@ -35,6 +35,7 @@ The app has no native menu bar. Every command is in the in-app toolbar or on the
   | Update Embeddings | Recomputes the similarity embeddings and spring edges. Runs as a job. |
   | Update Labels | Re-derives automatic group and member labels. |
   | Repair Edges | Rebuilds structural edges from each node's recorded context. |
+  | Clean Up Project Files... | Lists files in `generate/`, `process/` and `cache/` that no element uses any more. **Move to Trash** moves them to the project's `.trash/` folder. From there each batch can be restored, or deleted permanently to free the space. Disabled while jobs are running. |
   | Hide/Show Evolutionary Edges | Hides the lineage edges between individuals. They reappear for the selected node. |
   | Hide/Show All Edges | Hides every edge except spring edges. Edges reappear for the selected node. |
   | Show/Hide Spring Edges | Shows or hides the similarity edges. |
@@ -177,7 +178,8 @@ The graph refreshes automatically when a job succeeds.
 
 The right-hand panel shows every property of the selected element as a tree you can expand and
 collapse. The most useful property is **context**: the exact operation and parameters that produced
-the element. For models, the panel also has an **Export Shared Model Config** button.
+the element. For models, the panel also has a **Share with Engine** button, which makes the model
+available to every project from the **Shared Models** tab of Import Model.
 
 ![Element details for a generated audio clip](../images/element-details.png)
 

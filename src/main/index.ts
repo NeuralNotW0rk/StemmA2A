@@ -817,6 +817,27 @@ app.whenReady().then(async (): Promise<void> => {
     postJson('/fork_project', { element_ids: elementIds }, 'Fork to project')
   )
 
+  ipcMain.handle('getCleanupPreview', async () => {
+    const response = await fetchWithAuth(`${BACKEND_URL}/cleanup`)
+    const result = await response.json()
+    if (!response.ok) {
+      throw new Error(result.error || `Scanning project files failed. Status: ${response.status}`)
+    }
+    return result
+  })
+
+  ipcMain.handle('quarantineFiles', async (_event, paths: string[]) =>
+    postJson('/cleanup/quarantine', { paths }, 'Moving files to trash')
+  )
+
+  ipcMain.handle('restoreTrash', async (_event, batchId: string) =>
+    postJson('/cleanup/restore', { batch_id: batchId }, 'Restoring files')
+  )
+
+  ipcMain.handle('purgeTrash', async (_event, batchId: string) =>
+    postJson('/cleanup/purge', { batch_id: batchId }, 'Deleting trash')
+  )
+
   ipcMain.handle('createRoom', async (_event, elementIds: string[]) =>
     postJson('/rooms', { element_ids: elementIds }, 'Break out')
   )

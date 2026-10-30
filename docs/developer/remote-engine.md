@@ -87,8 +87,50 @@ Access rejected the credentials.
    `/download_asset/<uid>` into `backend/tmp/cache/`. The host then ingests the results into the
    project.
 
-Shared models on the server come from its own `shared_models.json`. The client lists them with
-`GET /shared_models` and matches them by checkpoint or encoder UID.
+Shared models on the server live in its model store, `<data>/models/` (see
+[Architecture](architecture.md#storage-and-ids)). The client lists them with `GET /shared_models`
+and matches them by checkpoint or encoder UID. **Share with Engine** sends a registry entry to
+`POST /shared_models`. Files are named by UID only. If the server lacks any, it replies
+`422 {"missing_uids": [...]}` and the client uploads them through the same chunked `/upload` as for
+`/execute`. The server then moves them from the cache into the store.
+
+---
+
+## Cache eviction
+
+The server's asset cache (`<data>/cache/`) is size-capped. Eviction is always recoverable: if an
+evicted file is needed again, `/execute` reports it missing and the client uploads it again. The
+policy in [cache_policy.py](../../backend/engine/cache_policy.py) only looks at each file's size and
+when it was last used, never at what the file holds.
+
+- **Last use** is the file's modified time. `/execute` and `/download_asset` update it on every hit.
+- **Eviction order.** Once the cache is over its cap, files are evicted until it is under 80% of
+  the cap. The file with the highest `idle_time / (1 + log2(size / 1 MiB))` goes first, so large
+  files outlast small ones by a bounded factor. A 5 GiB checkpoint idle for 13 days ranks with a
+  1 MiB latent idle for 1 day.
+- **Never evicted:**
+  - files used within the minimum age
+  - inputs of jobs that are still pending or running
+- **Shared models aren't in the cache.** Their files live in `<data>/models/`, which eviction never
+  scans and the cap doesn't count. Deleting `cache/` is always safe.
+- **Copying files in.** Last use comes from modified times, so files copied into `cache/` with
+  their original times kept (for example `rsync -a`) look as old as those times. Copy without
+  keeping times, or `touch` the files afterwards.
+- **Upload staging.** `.part` files older than a day are left over from failed uploads and are
+  deleted.
+
+The cap covers `cache/` only, not `huggingface/` or the other folders in the data root. A sweep runs
+at startup and then on an interval. These settings are read from the host's `.env` through
+[compose.yaml](../../compose.yaml):
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `ENGINE_CACHE_MAX_GB` | `50` | Cap in GiB. `0` turns eviction off. |
+| `ENGINE_CACHE_MIN_AGE_HOURS` | `24` | Files used more recently than this are never evicted. |
+| `ENGINE_CACHE_SWEEP_MINUTES` | `15` | Interval between background sweeps. |
+
+> A job result that the client hasn't downloaded within the minimum age can be evicted. Results
+> normally download within seconds, because the client polls running jobs.
 
 ---
 
@@ -99,8 +141,12 @@ Shared models on the server come from its own `shared_models.json`. The client l
 | `GET /health` | Health check |
 | `GET /operations` | Adapter operations |
 | `GET /shared_models` | Server-side shared models |
+| `POST /shared_models` | Registers a shared model (422 with `missing_uids` if files are missing) |
+| `DELETE /shared_models/<id>` | Removes a shared model; its files return to the cache |
 | `POST /execute` | Validates assets (422 with `missing_uids` if any are missing), then queues the job |
 | `GET /job_status/<id>` | Job status and results |
 | `POST /jobs/<id>/cancel` | Cancels a job |
 | `GET /download_asset/<uid>` | Serves a CAS file |
 | `POST /upload` | Chunked, atomic CAS upload |
+| `GET /cache` | Cache size, and what a sweep would evict now (nothing is deleted) |
+| `POST /cache/sweep` | Runs an eviction sweep now |

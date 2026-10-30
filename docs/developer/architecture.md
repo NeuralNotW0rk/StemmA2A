@@ -58,8 +58,18 @@ MyProject/
 ├── embeddings.safetensors   # float32 vectors keyed "<node_id>|<clap|clip>"
 ├── generate/                # engine outputs, human-readable names
 ├── process/                 # host DSP outputs
-└── cache/xx/<uid>           # content-addressed copies
+├── cache/xx/<uid>           # content-addressed copies
+└── .trash/<batch>/          # unreferenced files moved out by cleanup, with a manifest.json
 ```
+
+**Removing an element doesn't delete its files.** Cleanup
+([param_graph/cleanup.py](../../backend/param_graph/cleanup.py)) finds files in `generate/`,
+`process/` and `cache/` that nothing references. It treats every string in the in-memory graph,
+`graph.json` and `graph.json.bak` as a possible reference. It matches paths from the managed
+directory onward, so a moved project keeps its files. It also keeps any file whose name, with its
+suffixes stripped, equals a node ID or UID. Cleanup moves files to `.trash/` first, and refuses to
+run while jobs are unfinished. Restoring a batch never overwrites a file that has reappeared.
+Pre-migration backups and sync-conflict copies of `graph.json` are not protected.
 
 **Saves are atomic.** `save()` works in this order:
 
@@ -106,10 +116,28 @@ off, set `ENABLE_MIGRATIONS=false`. Migrations that rewrite content first save a
   `generate/` or `process/` under a readable name, and the graph node points at that copy.
 - **Models stay where they are.** Model checkpoints are not copied into the project. Model nodes keep
   absolute paths.
-- **`shared_models.json`** lists models available to every project. Each entry gives `name`,
-  `adapter`, `model_type`, the checkpoint as a path, a UID or both, and the config as an inline dict
-  or a path. The format is shown in
-  [shared_models.json.example](../../backend/shared_models.json.example).
+- **Shared models** live in the engine's data root, apart from the cache:
+
+  ```
+  <data>/
+  ├── cache/xx/<uid>              # anonymous, size-capped, evictable
+  └── models/
+      ├── xx/<uid>                # shared model files, never evicted
+      └── shared_models.json      # registry: named references to those files
+  ```
+
+  Each registry entry gives `name`, `adapter` and `model_type`, plus `checkpoint`, optional
+  `encoder` and optional `config_file` as file references. The config can be inline instead (as
+  `config`). A file reference names a file in the store by `uid`, or gives a `path` to a file that
+  already exists on the engine host. The format is shown in
+  [shared_models.json.example](../../backend/shared_models.json.example), and the code is in
+  [model_store.py](../../backend/engine/model_store.py).
+- **Promotion and demotion.** **Share with Engine** calls `Engine.add_shared_model`. That moves the
+  model's files from the cache into `models/` (a remote engine uploads them first if needed) and adds
+  the registry entry. `remove_shared_model` does the reverse: the files go back into the cache and
+  age out like any other entry. Either way the engine reloads its shared models without a restart.
+- **Older setups.** A `backend/shared_models.json` (or `SHARED_MODELS_CONFIG`) from before the
+  model store is converted by a startup migration and renamed to `*.migrated`.
 
 > Don't change the storage layout or the CAS conventions without also updating `engine_service.py`
 > and `/download_asset`. See AGENTS.md §5.
@@ -186,9 +214,10 @@ lineage to find exemplars and to collect exemplar presets.
 | Area | Endpoints |
 |---|---|
 | Project | `GET /health`, `POST /load_project`, `POST /create_project`, `GET /project`, `POST /fork_project` |
+| Cleanup | `GET /cleanup`, `POST /cleanup/quarantine`, `POST /cleanup/restore`, `POST /cleanup/purge` |
 | Rooms | `POST /rooms`, `POST /rooms/<id>/dissolve`, `POST /rooms/view` |
 | Graph | `GET /graph`, `POST /graph/create_group`, `PUT\|POST /graph/update_group[/<id>]`, `POST /update_element`, `POST /save_node_positions`, `DELETE /element/<id>`, `DELETE /elements`, `POST /update_labels`, `POST /repair_edges`, `POST /update_embeddings` |
-| Models | `GET /shared_models`, `POST /register_model`, `POST /export_shared_model`, `GET /model/<id>/layers`, `GET /adapter_config/<adapter>` |
+| Models | `GET /shared_models`, `DELETE /shared_models/<id>`, `POST /register_model`, `POST /export_shared_model`, `GET /model/<id>/layers`, `GET /adapter_config/<adapter>` |
 | Gratings | `POST /register_grating`, `POST /create_grating` |
 | Evolution | `POST /wrap_individual`, `POST /scatter_evolution`, `POST /recombine_evolution`, `POST /express_individual`, `POST /exemplar_presets` |
 | Operations | `GET /operations`, `GET /sync_operations`, `POST /execute_operation` |

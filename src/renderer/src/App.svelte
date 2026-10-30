@@ -9,6 +9,7 @@
   import ImportGratingView from './components/views/ImportGratingView.svelte'
   import ImportModelView from './components/views/ImportModelView.svelte'
   import RemovalView from './components/views/RemovalView.svelte'
+  import CleanupView from './components/views/CleanupView.svelte'
   import NewProjectView from './components/views/NewProjectView.svelte'
   import GroupingView from './components/views/GroupingView.svelte'
   import JobStatusView from './components/views/JobStatusView.svelte'
@@ -709,6 +710,9 @@
     if (actionPanelView === 'removal') {
       return 'Confirm Removal'
     }
+    if (actionPanelView === 'cleanup') {
+      return 'Clean Up Project Files'
+    }
     if (actionPanelView === 'grouping') {
       const initNode = $initiatorNodeStore
       if (initNode?.type === 'group') {
@@ -817,6 +821,7 @@
     onupdateEmbeddings={handleUpdateEmbeddings}
     onupdateLabels={handleUpdateLabels}
     onrepairEdges={handleRepairEdges}
+    oncleanup={() => (actionPanelView = 'cleanup')}
     onreturnToOrigin={handleReturnToOrigin}
     onnavigateRoom={enterRoom}
     {currentProject}
@@ -875,6 +880,14 @@
           }}
           onerror={(error) => {
             console.error('Removal error:', error)
+            closeActionPanel()
+            panelMessage = error
+          }}
+        />
+      {:else if actionPanelView === 'cleanup'}
+        <CleanupView
+          onerror={(error) => {
+            console.error('Cleanup error:', error)
             closeActionPanel()
             panelMessage = error
           }}

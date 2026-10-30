@@ -2,6 +2,8 @@ import json
 import os
 import traceback
 import threading
+import uuid
+from dataclasses import replace
 from pathlib import Path
 import logging
 
@@ -11,6 +13,8 @@ import torch
 from pydantic import ValidationError
 
 from engine.engine_provider import EngineProvider
+from engine.cache_policy import CachePolicy, GIB, touch
+from engine.model_store import ModelStore, MissingModelFiles
 from engine.results import map_result_elements
 from utils.uid import path_from_uid
 from utils.migrations import run_global_migrations
@@ -69,6 +73,22 @@ os.environ["TORCH_EXTENSIONS_DIR"] = str(torch_ext_dir)
 # Initialize the engine provider with the data cache path.
 engine_provider = EngineProvider(data_root=str(data_cache_root))
 
+
+def _is_job_active(job_id: str) -> bool:
+    status = engine_provider.get_engine().job_statuses.get(job_id, {}).get("status")
+    return status in ("pending", "running")
+
+
+# Size-capped eviction for the asset cache. ENGINE_CACHE_MAX_GB=0 turns eviction off
+cache_policy = CachePolicy(
+    data_root=data_cache_root,
+    max_bytes=int(float(os.environ.get("ENGINE_CACHE_MAX_GB", "50")) * GIB),
+    min_age_seconds=float(os.environ.get("ENGINE_CACHE_MIN_AGE_HOURS", "24")) * 3600,
+    is_job_active=_is_job_active,
+)
+# Shared model files, outside the cache and its eviction
+model_store = ModelStore(data_cache_root)
+
 # --------------------
 #  Health Check
 # --------------------
@@ -102,6 +122,41 @@ async def get_shared_models():
     except Exception as e:
         traceback.print_exc()
         return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
+@app.route("/shared_models", methods=["POST"])
+async def add_shared_model():
+    """
+    Promotes a model into the shared registry. Files are named by UID; any the server lacks are
+    reported as 422 missing_uids for the client to upload, as with /execute.
+    """
+    entry = request.get_json() or {}
+    try:
+        # Promotion moves files out of the cache, so it must not interleave with a sweep or /execute
+        with cache_policy.lock:
+            model = await engine_provider.get_engine().add_shared_model(entry)
+        return jsonify({"shared_model": model, "success": True})
+    except MissingModelFiles as e:
+        return jsonify({"error": "Missing assets", "missing_uids": e.uids}), 422
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/shared_models/<model_id>", methods=["DELETE"])
+async def remove_shared_model(model_id):
+    """Removes a shared model. Its files return to the cache and age out like any other entry."""
+    try:
+        with cache_policy.lock:
+            await engine_provider.get_engine().remove_shared_model(model_id)
+        return jsonify({"success": True})
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 404
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
 
 
 # --------------------
@@ -155,60 +210,78 @@ async def execute():
 
         import zipfile
 
-        missing_uids = []
-        for uid in {uid for element in all_elements.values() for uid in element.get_uids()}:
-            cache_file = data_cache_root / path_from_uid(uid)
-            asset = required_assets.get(uid)
-            if not cache_file.exists():
-                missing_uids.append(uid)
-            elif cache_file.stat().st_size == 0:
-                print(f"[Engine Service] Warning: Zero-byte cached asset '{uid}'. Evicting from cache.")
-                try:
-                    cache_file.unlink()
-                except Exception as e:
-                    pass
-                missing_uids.append(uid)
-            elif asset and asset.size and asset.size > 0:
-                size_matches = (cache_file.stat().st_size == asset.size)
-                is_valid_archive = False
-                if not size_matches:
-                    try:
-                        is_valid_archive = zipfile.is_zipfile(cache_file)
-                    except Exception:
-                        is_valid_archive = False
+        # The job ID is fixed up front so the job's inputs can be leased before it is queued
+        if not job_id:
+            job_id = str(uuid.uuid4())
 
-                if not size_matches and not is_valid_archive:
-                    print(f"[Engine Service] Warning: Corrupt or incomplete cached asset '{uid}' (expected {asset.size} bytes, found {cache_file.stat().st_size} bytes). Evicting from cache.")
+        required_uids = {uid for element in all_elements.values() for uid in element.get_uids()}
+        with cache_policy.lock:
+            missing_uids = []
+            for uid in required_uids:
+                # Model store files were checked when promoted, and are never evicted here
+                if model_store.model_path(uid).exists():
+                    continue
+                cache_file = data_cache_root / path_from_uid(uid)
+                asset = required_assets.get(uid)
+                if not cache_file.exists():
+                    missing_uids.append(uid)
+                elif cache_file.stat().st_size == 0:
+                    print(f"[Engine Service] Warning: Zero-byte cached asset '{uid}'. Evicting from cache.")
                     try:
                         cache_file.unlink()
                     except Exception as e:
-                        print(f"Failed to remove corrupt cache file {cache_file}: {e}")
+                        pass
                     missing_uids.append(uid)
-        
-        if missing_uids:
-            print(f"[Engine Service] Requesting missing/corrupt assets from client: {missing_uids}")
-            return jsonify({"error": "Missing assets", "missing_uids": missing_uids}), 422
-        
-        def _anchor_elements(val):
-            if hasattr(val, 'anchor') and callable(val.anchor):
-                return val.anchor(str(data_cache_root), with_extension=False)
-            elif isinstance(val, list):
-                return [_anchor_elements(v) for v in val]
-            elif isinstance(val, dict):
-                return {k: _anchor_elements(v) for k, v in val.items()}
-            return val
+                elif asset and asset.size and asset.size > 0:
+                    size_matches = (cache_file.stat().st_size == asset.size)
+                    is_valid_archive = False
+                    if not size_matches:
+                        try:
+                            is_valid_archive = zipfile.is_zipfile(cache_file)
+                        except Exception:
+                            is_valid_archive = False
 
-        anchored_params = _anchor_elements(resolved_params)
+                    if not size_matches and not is_valid_archive:
+                        print(f"[Engine Service] Warning: Corrupt or incomplete cached asset '{uid}' (expected {asset.size} bytes, found {cache_file.stat().st_size} bytes). Evicting from cache.")
+                        try:
+                            cache_file.unlink()
+                        except Exception as e:
+                            print(f"Failed to remove corrupt cache file {cache_file}: {e}")
+                        missing_uids.append(uid)
+                    else:
+                        touch(cache_file)
+                else:
+                    touch(cache_file)
 
-        op_id_str = operation_id['id'] if isinstance(operation_id, dict) and 'id' in operation_id else operation_id
+            if missing_uids:
+                print(f"[Engine Service] Requesting missing/corrupt assets from client: {missing_uids}")
+                return jsonify({"error": "Missing assets", "missing_uids": missing_uids}), 422
 
-        # The engine's execute method now returns a job ID. Pass job_id if provided.
-        if job_id:
+            def _anchor_elements(val):
+                if hasattr(val, 'anchor') and callable(val.anchor):
+                    anchored = val.anchor(str(data_cache_root), with_extension=False)
+                    # Assets in the model store live under models/, not the cache
+                    updates = {
+                        name: replace(asset, path=str(model_store.model_path(asset.uid)))
+                        for name, asset in anchored._iter_assets()
+                        if model_store.model_path(asset.uid).exists()
+                    }
+                    return replace(anchored, **updates) if updates else anchored
+                elif isinstance(val, list):
+                    return [_anchor_elements(v) for v in val]
+                elif isinstance(val, dict):
+                    return {k: _anchor_elements(v) for k, v in val.items()}
+                return val
+
+            anchored_params = _anchor_elements(resolved_params)
+
+            op_id_str = operation_id['id'] if isinstance(operation_id, dict) and 'id' in operation_id else operation_id
+
+            # Held until the job is no longer pending or running. The lock stays held until the job
+            # is queued, so a sweep can't see the lease before the job exists and drop it
+            cache_policy.lease(job_id, required_uids)
             print(f"engine_service.py: calling engine.execute with job_id={job_id}")
             job_id = await engine.execute(op_id_str, job_id=job_id, **anchored_params)
-        else:
-            print(f"engine_service.py: calling engine.execute without job_id")
-            job_id = await engine.execute(op_id_str, **anchored_params)
         
         print(f"engine_service.py: engine.execute returned job_id={job_id}")
         # Return the job ID to the client
@@ -284,6 +357,7 @@ def download_asset(asset_id):
                 print(f"[Engine Service] Warning: [Download] Asset not found: {asset_id}")
                 return jsonify({"error": f"Asset not found for id {asset_id}"}), 404
         
+        touch(asset_path)
         file_size = os.path.getsize(asset_path)
         print(f"[Engine Service] [Download] Serving asset '{asset_id}' ({_format_bytes(file_size)}) to client...")
         return send_file(str(asset_path), as_attachment=True)
@@ -358,6 +432,30 @@ def upload():
 
     return jsonify({"error": "File upload failed"}), 500
 
+
+# --------------------
+#  Asset Cache
+# --------------------
+
+@app.route("/cache", methods=["GET"])
+def get_cache_status():
+    """Reports the cache size and what a sweep would evict right now, without evicting anything."""
+    try:
+        return jsonify({**cache_policy.sweep(dry_run=True), "success": True})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/cache/sweep", methods=["POST"])
+def sweep_cache():
+    """Runs an eviction sweep now instead of waiting for the background one."""
+    try:
+        return jsonify({**cache_policy.sweep(), "success": True})
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+
 # --------------------
 #  Main
 # --------------------
@@ -366,6 +464,9 @@ if __name__ == "__main__":
     # Started here rather than at import so test runs do not write to the service log
     start_log_capture(data_cache_root / "logs", "engine_service")
     print(f"Starting StemmA2A Engine Service on device: {device_accelerator}")
+    # With debug on, this block also runs in the reloader's watcher process; sweep only in the server
+    if os.environ.get("WERKZEUG_RUN_MAIN") == "true":
+        cache_policy.start_background_sweeps(float(os.environ.get("ENGINE_CACHE_SWEEP_MINUTES", "15")) * 60)
     app.run(
         host="0.0.0.0",
         port=5001,

@@ -73,7 +73,7 @@ The [Core concepts](docs/concepts.md) page has the full glossary.
 ## Quickstart
 
 1. **File ▾ → New Project...**: create a project.
-2. **+ Import Model**: import a model, either from local files or from `backend/shared_models.json`.
+2. **+ Import Model**: import a model, either from local files or from the engine's shared models.
 3. Right-click the model, choose **Generate**, then **Run**.
 4. Right-click a clip you like, choose **Scatter**, and listen to the children.
 5. **Score** the children you like, then **Recombine** them into the next generation.

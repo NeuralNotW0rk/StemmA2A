@@ -140,13 +140,18 @@ class TestAsyncLocalJobs(unittest.TestCase):
         model_job = self._poll_job(reg_resp.get_json()["job_id"])
         model_id = model_job["result"]["id"]
 
+        # Stubbed: the real engine would write to the shared model store under the user's data root
+        engine = self.test_provider.get_engine()
+        engine.add_shared_model = AsyncMock(return_value={"id": model_id})
+
         resp = self.client.post("/export_shared_model", json={"model_id": model_id})
         self.assertEqual(resp.status_code, 202)
         job_id = resp.get_json()["job_id"]
 
         job_data = self._poll_job(job_id)
         self.assertEqual(job_data["status"], "completed", f"Job failed with error: {job_data.get('error')}")
-        self.assertIn("Successfully exported", job_data["result"]["message"])
+        self.assertIn("is now a shared model", job_data["result"]["message"])
+        engine.add_shared_model.assert_awaited_once()
 
     def test_async_expand_path_and_export_audio(self):
         """Test asynchronous directory scanning (expand_path) and audio export."""

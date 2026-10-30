@@ -18,9 +18,10 @@ Click **+ Import Model** in the toolbar. The panel has two tabs:
   - **Stable Audio Tools** needs a Model Name, a Checkpoint File, a Config File, and optionally a Text
     Encoder Folder.
   - **StyleGAN2** needs a Model Name and a Checkpoint Path. Legacy `.pkl` checkpoints are supported.
-- **Shared Models**: pick an entry from `backend/shared_models.json`, or from the remote engine's
-  list if you use one, and click **Import**. No file browsing is needed. If the list is empty, the
-  panel explains how to add entries.
+- **Shared Models**: pick a model the active engine has shared, and click **Import**. No file
+  browsing is needed. To share a model, import it from local files once, then select it and click
+  **Share with Engine** in Element details. With a remote engine, its files are uploaded first if the
+  engine doesn't have them, which can take a while for large checkpoints.
 
 Importing runs as a job. Large checkpoints take a while because the model is hashed to give it a
 stable ID. When the job finishes, the model appears as a purple circle.
@@ -153,8 +154,8 @@ artifact's inputs, if those are in the project.
   are WAV, MP3 and OGG.
 - **A group:** right-click the group and choose **Export Group**, then pick a folder. The files are
   named from their automatic labels, for example `c1_f1.5.wav`.
-- **A model setup:** select a model and click **Export Shared Model Config** in Element details. This
-  writes an entry you can paste into `shared_models.json`.
+- **A model setup:** select a model and click **Share with Engine** in Element details. Every project
+  can then import it from the **Shared Models** tab.
 
 Exported WAV files, and the files in a project's `generate/` and `process/` folders, record how they
 were made. The record lives inside the file, where other software ignores it, and stays with the file

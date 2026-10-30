@@ -75,9 +75,8 @@ Copy `.env.example` to `.env` at the repo root. Every setting has a default. You
 | `CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET` | Credentials for a Cloudflare-tunneled remote engine. |
 | `RUN_LOCAL_BACKEND=false` | Stops Electron from starting the Python backend, for when you run it yourself. |
 
-To make models available to every project without importing them one by one, copy
-`backend/shared_models.json.example` to `backend/shared_models.json` and edit the paths. The
-[Import a model](user-guide/workflows.md#import-a-model) section explains how this file is used.
+To make a model available to every project, import it into one project, then select it and click
+**Share with Engine** in Element details. See [Import a model](user-guide/workflows.md#import-a-model).
 
 ---
 

@@ -211,9 +211,9 @@
           <div class="instructions-card">
             <h5>How to share models:</h5>
             <ol>
-              <li>Create or edit <code>shared_models.json</code> in the backend directory of your remote engine.</li>
-              <li>Add entries mapping model configurations (checkpoint and config files).</li>
-              <li>Ensure the files actually exist on the remote host's filesystem.</li>
+              <li>Import the model into a project from local files.</li>
+              <li>Select it and click <strong>Share with Engine</strong> in Element details.</li>
+              <li>Its files are uploaded if the engine doesn't have them yet.</li>
             </ol>
           </div>
           <button

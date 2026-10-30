@@ -305,6 +305,7 @@ def test_flask_endpoints():
         export_payload = {
             "model_id": model_info.id
         }
+        engine.add_shared_model = AsyncMock(return_value={"id": model_info.id})
         resp = client.post("/export_shared_model", json=export_payload)
         assert resp.status_code == 202, f"Expected 202, got {resp.status_code}"
         export_data = resp.get_json()
@@ -322,20 +323,15 @@ def test_flask_endpoints():
                 break
 
         assert status_data.get("status") == "completed", f"Job failed: {status_data.get('error')}"
-        assert "Successfully exported" in status_data["result"]["message"]
-        
-        # Verify dummy config file was created
-        dummy_file = Path(tmp_dir) / "shared_models_dummy.json"
-        assert dummy_file.exists(), "shared_models_dummy.json was not created!"
-        with open(dummy_file, "r") as f:
-            dummy_data = json.load(f)
-            assert len(dummy_data) == 1
-            entry = dummy_data[0]
-            assert entry["name"] == "Test StyleGAN2"
-            assert entry["adapter"] == "stylegan2"
-            assert entry["checkpoint_uid"] == model_info.checkpoint.uid
-            assert "checkpoint_size" in entry
-        print("Export shared model config verified successfully!")
+        assert "is now a shared model" in status_data["result"]["message"]
+
+        # The model was registered with the engine as a registry entry naming its files by UID
+        engine.add_shared_model.assert_awaited_once()
+        entry = engine.add_shared_model.await_args.args[0]
+        assert entry["name"] == "Test StyleGAN2"
+        assert entry["adapter"] == "stylegan2"
+        assert entry["checkpoint"]["uid"] == model_info.checkpoint.uid
+        print("Export shared model verified successfully!")
         
     finally:
         app_module.param_graph = old_graph

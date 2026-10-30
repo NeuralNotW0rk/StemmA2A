@@ -170,6 +170,18 @@ class Engine(ABC):
         pass
 
     @abstractmethod
+    async def add_shared_model(self, entry: dict, local_files: dict[str, str] | None = None) -> dict:
+        """
+        Adds a shared model registry entry (see model_store.py) and returns the model as clients see
+        it. local_files maps UIDs to files on this machine, for engines that need to upload them.
+        """
+        pass
+
+    @abstractmethod
+    async def remove_shared_model(self, model_id: str) -> None:
+        pass
+
+    @abstractmethod
     async def get_model_layers(self, model_element: GraphElement) -> list[dict]:
         pass
 

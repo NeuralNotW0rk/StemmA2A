@@ -25,6 +25,9 @@ services:
       HF_HOME: "/app/data/huggingface"
       TRITON_CACHE_DIR: "/app/data/triton"
       HF_HUB_OFFLINE: "1"
+      ENGINE_CACHE_MAX_GB: ${ENGINE_CACHE_MAX_GB:-50}
+      ENGINE_CACHE_MIN_AGE_HOURS: ${ENGINE_CACHE_MIN_AGE_HOURS:-24}
+      ENGINE_CACHE_SWEEP_MINUTES: ${ENGINE_CACHE_SWEEP_MINUTES:-15}
     networks:
       - app-net
 

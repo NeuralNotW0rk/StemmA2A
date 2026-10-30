@@ -50,8 +50,9 @@ An imported generator. Two adapters are supported: **Stable Audio Tools**, which
 **StyleGAN2**, which produces images.
 
 **Shared model**
-A model listed in `backend/shared_models.json`. On a remote engine it is listed on the server.
-Shared models can be imported into any project without browsing for files.
+A model registered with an engine, local or remote, so any project can import it without browsing
+for files. You share a model from a project with **Share with Engine**. The engine keeps its files
+in its own model store, apart from the cache it clears out.
 
 **Grating**
 A set of interventions on a model's layers, stored as a `.safetensors` file. A grating is applied at

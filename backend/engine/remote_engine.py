@@ -147,6 +147,48 @@ class RemoteEngine(Engine):
             print(f"Failed to fetch shared models from remote engine: {e}")
             return []
 
+    async def add_shared_model(self, entry: dict, local_files: dict[str, str] | None = None) -> dict:
+        """Registers a shared model on the engine service, uploading any files it doesn't have yet."""
+        # Paths on this machine mean nothing to the engine service; it identifies files by UID
+        payload = {
+            k: ({rk: rv for rk, rv in v.items() if rk != "path"} if k in ("checkpoint", "encoder", "config_file") else v)
+            for k, v in entry.items()
+        }
+        timeout = aiohttp.ClientTimeout(total=self.timeout)
+        try:
+            async with aiohttp.ClientSession(headers=self._get_auth_headers(), timeout=timeout) as session:
+                upload_rounds = 0
+                while True:
+                    async with session.post(f"{self.remote_url}/shared_models", json=payload) as response:
+                        if response.status == 422:
+                            missing_uids = (await response.json()).get("missing_uids", [])
+                            if not missing_uids or upload_rounds >= MAX_UPLOAD_ROUNDS:
+                                raise Exception(f"Engine service still lacks model files: {', '.join(missing_uids)}")
+                            upload_rounds += 1
+                            if not await self.upload_missing_assets(missing_uids, local_files or {}, session):
+                                raise Exception(
+                                    f"Could not upload model file(s) {', '.join(missing_uids)}; "
+                                    f"see the backend log for details."
+                                )
+                            continue
+                        if response.status >= 400:
+                            error = (await response.json()).get("error", response.reason)
+                            raise Exception(f"Engine service refused the shared model: {error}")
+                        return (await response.json())["shared_model"]
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            raise _request_error(e) from e
+
+    async def remove_shared_model(self, model_id: str) -> None:
+        timeout = aiohttp.ClientTimeout(total=self.timeout)
+        try:
+            async with aiohttp.ClientSession(headers=self._get_auth_headers(), timeout=timeout) as session:
+                async with session.delete(f"{self.remote_url}/shared_models/{model_id}") as response:
+                    if response.status >= 400:
+                        error = (await response.json()).get("error", response.reason)
+                        raise Exception(f"Engine service could not remove the shared model: {error}")
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            raise _request_error(e) from e
+
     def _get_auth_headers(self) -> dict:
         headers = {}
         if self.cf_client_id and self.cf_client_secret:

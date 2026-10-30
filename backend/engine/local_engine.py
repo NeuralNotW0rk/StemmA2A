@@ -16,6 +16,7 @@ import torchaudio
 from param_graph.elements.base_elements import GraphElement
 from .engine import Engine
 from .model_cache import ModelCache
+from .model_store import ModelStore, data_root_from_env
 from .results import OperationResult, serialize_result
 from utils.uid import path_from_uid
 from utils.audio import save_audio
@@ -66,149 +67,77 @@ class LocalEngine(Engine):
             print(f"Error initializing CLIPEncoder: {e}")
 
         # --- Shared Models Setup ---
+        self.model_store = ModelStore(data_root_from_env())
         self.shared_models = []
+        # Registry entry behind each shared model, by model id
+        self._shared_entries: dict[str, dict] = {}
+        self._shared_models_lock = threading.Lock()
         self._load_shared_models()
 
     def _load_shared_models(self):
-        import json
-        import shutil
+        """(Re)builds the shared models from the registry, skipping entries whose files are missing."""
         import traceback
 
-        config_path_str = os.environ.get("SHARED_MODELS_CONFIG", "shared_models.json")
-        config_path = Path(config_path_str)
-        if not config_path.is_absolute():
-            # Resolve relative to the backend directory
-            config_path = Path(__file__).parent.parent / config_path_str
-
-        if not config_path.exists():
-            print(f"Shared models config not found at {config_path}. No shared models loaded.")
-            return
-
         try:
-            with open(config_path, "r") as f:
-                config_data = json.load(f)
+            entries = self.model_store.load_registry()
         except Exception as e:
-            print(f"Failed to read shared models config: {e}")
-            return
+            print(f"Failed to read shared models registry {self.model_store.registry_path}: {e}")
+            entries = []
 
-        is_container = os.environ.get("RUNNING_IN_CONTAINER") == "true"
-        if is_container:
-            data_path_str = os.environ.get("CONTAINER_DATA_PATH")
-            if not data_path_str:
-                data_path_str = "/data"
-        else:
-            data_path_str = os.environ.get("LOCAL_DATA_PATH")
-            if not data_path_str:
-                data_path_str = "~/.stemma2a_data"
-        data_cache_root = Path(data_path_str).expanduser()
-
-        for entry in config_data:
-            # Support copy-pasting a node directly from graph.json (which wraps attributes in a 'data' key)
-            if "data" in entry and isinstance(entry["data"], dict):
-                entry = entry["data"]
-
+        shared_models, shared_entries = [], {}
+        for entry in entries:
             name = entry.get("name")
-            adapter_name = entry.get("adapter")
-            model_type = entry.get("model_type")
-
-            # Extract checkpoint details
-            checkpoint_entry = entry.get("checkpoint")
-            checkpoint_size = None
-            if isinstance(checkpoint_entry, dict):
-                checkpoint_uid = checkpoint_entry.get("uid")
-                checkpoint_file_path = checkpoint_entry.get("path")
-                checkpoint_size = checkpoint_entry.get("size")
-            else:
-                checkpoint_uid = entry.get("checkpoint_uid")
-                checkpoint_file_path = entry.get("checkpoint_path")
-                checkpoint_size = entry.get("checkpoint_size")
-
-            # Extract config details
-            config_entry = entry.get("config")
-            if isinstance(config_entry, dict):
-                config = config_entry
-                config_file_path = None
-            else:
-                config = None
-                config_uid = entry.get("config_uid")
-                config_file_path = entry.get("config_path")
-                if config_uid:
-                    config_file_path = str(data_cache_root / path_from_uid(config_uid))
-
-            # Extract encoder details
-            encoder_entry = entry.get("encoder")
-            encoder_size = None
-            if isinstance(encoder_entry, dict):
-                encoder_uid = encoder_entry.get("uid")
-                encoder_file_path = encoder_entry.get("path")
-                encoder_size = encoder_entry.get("size")
-            else:
-                encoder_uid = entry.get("encoder_uid")
-                encoder_file_path = entry.get("encoder_path")
-                encoder_size = entry.get("encoder_size")
-
-            # Resolve paths using CAS UIDs if provided and they exist in the cache
-            if checkpoint_uid:
-                checkpoint_resolved = data_cache_root / path_from_uid(checkpoint_uid)
-                if checkpoint_resolved.exists():
-                    checkpoint_file_path = str(checkpoint_resolved)
-            if encoder_uid:
-                encoder_resolved = data_cache_root / path_from_uid(encoder_uid)
-                if encoder_resolved.exists():
-                    encoder_file_path = str(encoder_resolved)
-
-            # StyleGAN config is optional inside the adapter, but let's keep it optional in entry if specified
-            is_stylegan = adapter_name == "stylegan2"
-            has_inline_config = config is not None
-            
-            if not name or not adapter_name or not checkpoint_file_path or (not is_stylegan and not config_file_path and not has_inline_config):
-                print(f"Skipping invalid shared model entry: {entry}")
-                continue
-
-            if config_file_path and not os.path.exists(config_file_path):
-                print(f"Skipping shared model '{name}' because config path does not exist: {config_file_path}")
-                continue
-            if not os.path.exists(checkpoint_file_path):
-                print(f"Skipping shared model '{name}' because checkpoint path does not exist: {checkpoint_file_path}")
-                continue
-            if encoder_file_path and not os.path.exists(encoder_file_path):
-                print(f"Skipping shared model '{name}' because encoder path does not exist: {encoder_file_path}")
-                continue
-
             try:
-                adapter_class = self._get_adapter_class(adapter_name)
-                adapter = adapter_class()
-                model_element = adapter.register_model(
-                    name=name,
-                    config_path=config_file_path,
-                    checkpoint_path=checkpoint_file_path,
-                    encoder_path=encoder_file_path,
-                    model_type=model_type,
-                    config=config,
-                    checkpoint_uid=checkpoint_uid,
-                    checkpoint_size=checkpoint_size,
-                    encoder_uid=encoder_uid,
-                    encoder_size=encoder_size,
-                )
-
-
-
-                self.shared_models.append(model_element)
-                print(f"Successfully loaded shared model: {name} ({model_element.id})")
+                kwargs = self.model_store.register_kwargs(entry)
+                adapter = self._get_adapter_class(entry.get("adapter"))()
+                model_element = adapter.register_model(**kwargs)
             except Exception as e:
-                print(f"Failed to load shared model '{name}': {e}")
-                traceback.print_exc()
+                print(f"Skipping shared model '{name}': {e}")
+                if not isinstance(e, (FileNotFoundError, ValueError)):
+                    traceback.print_exc()
+                continue
+            shared_models.append(model_element)
+            shared_entries[model_element.id] = entry
+            print(f"Successfully loaded shared model: {name} ({model_element.id})")
+
+        # Swapped in whole so readers never see a half-built list
+        self.shared_models = shared_models
+        self._shared_entries = shared_entries
+
+    async def add_shared_model(self, entry: dict, local_files: dict[str, str] | None = None) -> dict:
+        """
+        Promotes the entry's files into the model store, records it in the registry and reloads.
+        Raises MissingModelFiles if a file is neither on this machine nor in the cache. local_files
+        is only used by remote engines, which upload from it.
+        """
+        with self._shared_models_lock:
+            normalized = self.model_store.promote(entry)
+            self._load_shared_models()
+        model = next((m for m in self.shared_models if self._shared_entries.get(m.id) == normalized), None)
+        if model is None:
+            raise ValueError(f"Shared model '{entry.get('name')}' was saved but failed to load; see the engine log")
+        return self._client_view(model)
+
+    async def remove_shared_model(self, model_id: str) -> None:
+        """Removes the model from the registry; its store files return to the evictable cache."""
+        with self._shared_models_lock:
+            entry = self._shared_entries.get(model_id)
+            if entry is None:
+                raise ValueError(f"No shared model with id '{model_id}'")
+            self.model_store.demote(entry)
+            self._load_shared_models()
+
+    @staticmethod
+    def _client_view(model: GraphElement) -> dict:
+        """The model as clients see it: asset paths on this machine are hidden."""
+        updates = {}
+        for field_name, asset in model._iter_assets():
+            if asset:
+                updates[field_name] = replace(asset, path="REMOTE")
+        return replace(model, **updates).to_dict()
 
     async def get_shared_models(self) -> list[dict]:
-        shared_models_dict = []
-        for model in self.shared_models:
-            updates = {}
-            for field_name, asset in model._iter_assets():
-                if asset:
-                    updates[field_name] = replace(asset, path="REMOTE")
-            client_model = replace(model, **updates)
-            shared_models_dict.append(client_model.to_dict())
-        return shared_models_dict
+        return [self._client_view(model) for model in self.shared_models]
 
     def _resolve_model_element(self, model_element: GraphElement) -> GraphElement:
         """If the model ID or checkpoint/encoder UIDs match a shared model, return the shared model with absolute paths."""

@@ -524,6 +524,22 @@ def run_global_migrations(data_cache_root: Path) -> None:
     
     print("Running global migrations...")
     migrate_sharded_cache(data_cache_root)
+    migrate_shared_models_registry(data_cache_root)
+
+
+def migrate_shared_models_registry(data_cache_root: Path) -> None:
+    """
+    Moves the shared models list from backend/shared_models.json (or SHARED_MODELS_CONFIG) into the
+    engine-owned registry at <data>/models/shared_models.json, and the model files it finds in the
+    cache into the model store. The old file is renamed to *.migrated.
+    """
+    from engine.model_store import migrate_legacy_registry
+
+    legacy_path = Path(os.environ.get("SHARED_MODELS_CONFIG", "shared_models.json"))
+    if not legacy_path.is_absolute():
+        legacy_path = Path(__file__).resolve().parent.parent / legacy_path
+    if migrate_legacy_registry(data_cache_root, legacy_path):
+        print(f"Migrated shared models from {legacy_path} to {data_cache_root / 'models' / 'shared_models.json'}")
 
 
 def run_project_migrations(project_path: Path) -> None:

@@ -77,12 +77,11 @@
         job_id?: string
       }
       if (response.job_id) {
-        addJob('Export Shared Model', { modelId: element.id }, 'running', response.job_id)
+        addJob('Share Model', { modelId: element.id }, 'running', response.job_id)
         const jobResult = (await pollJobStatus(response.job_id)) as {
           result?: { message?: string }
         }
-        exportMessage =
-          jobResult?.result?.message || 'Model successfully exported to shared catalog'
+        exportMessage = jobResult?.result?.message || 'Model shared with the engine'
       } else {
         exportMessage = response.message
       }
@@ -113,7 +112,7 @@
     {#if element.type === 'model'}
       <div class="footer-actions">
         <button class="export-btn" onclick={handleExport} disabled={isExporting} type="button">
-          {isExporting ? 'Exporting...' : 'Export Shared Model Config'}
+          {isExporting ? 'Sharing...' : 'Share with Engine'}
         </button>
         {#if exportMessage}
           <div class="message-banner" class:error={exportMessage.includes('failed')}>

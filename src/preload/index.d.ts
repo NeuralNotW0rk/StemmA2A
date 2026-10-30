@@ -1,10 +1,13 @@
 import { ElectronAPI } from '@electron-toolkit/preload'
 import type {
+  CleanupPreview,
   EngineConflict,
   EngineSettings,
   EngineState,
   ForkResult,
-  ProjectOrigin
+  ProjectOrigin,
+  QuarantineResult,
+  RestoreResult
 } from '../renderer/src/utils/types'
 
 interface API {
@@ -26,6 +29,10 @@ interface API {
   }) => Promise<{ project_name: string; project_path: string; origin?: ProjectOrigin | null }>
   createProject: (projectData: { project_path?: string; project_name?: string }) => Promise<any>
   forkProject: (elementIds: string[]) => Promise<ForkResult>
+  getCleanupPreview: () => Promise<CleanupPreview>
+  quarantineFiles: (paths: string[]) => Promise<QuarantineResult>
+  restoreTrash: (batchId: string) => Promise<RestoreResult>
+  purgeTrash: (batchId: string) => Promise<{ file_count: number; bytes: number }>
   createRoom: (elementIds: string[]) => Promise<{ room_id: string }>
   dissolveRoom: (roomId: string) => Promise<{ member_ids: string[] }>
   setViewRoom: (roomId: string | null) => Promise<{ room_id: string | null }>
