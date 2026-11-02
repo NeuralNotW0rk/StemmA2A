@@ -104,11 +104,13 @@ class LocalEngine(Engine):
         self.shared_models = shared_models
         self._shared_entries = shared_entries
 
-    async def add_shared_model(self, entry: dict, local_files: dict[str, str] | None = None) -> dict:
+    async def add_shared_model(
+        self, entry: dict, local_files: dict[str, str] | None = None, job_id: str | None = None
+    ) -> dict:
         """
         Promotes the entry's files into the model store, records it in the registry and reloads.
         Raises MissingModelFiles if a file is neither on this machine nor in the cache. local_files
-        is only used by remote engines, which upload from it.
+        and job_id are only used by remote engines, which upload from it.
         """
         with self._shared_models_lock:
             normalized = self.model_store.promote(entry)

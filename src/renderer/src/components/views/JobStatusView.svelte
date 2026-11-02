@@ -2,6 +2,8 @@
   import { flip } from 'svelte/animate'
   import { jobStore, type Job, type JobStatus } from '../../utils/job-management'
   import JobItem from '../JobItem.svelte'
+  import TransferItem from '../TransferItem.svelte'
+  import { transferStore } from '../../utils/transfers'
 
   const getStatusPriority = (status: JobStatus): number => {
     switch (status) {
@@ -35,6 +37,14 @@
 </script>
 
 <div class="job-status-view">
+  {#if $transferStore.length > 0}
+    <section class="transfers" aria-label="File transfers">
+      <h4>Transfers</h4>
+      {#each $transferStore as transfer (transfer.id)}
+        <TransferItem {transfer} />
+      {/each}
+    </section>
+  {/if}
   <div class="job-cards-container">
     {#each sortedJobs as job (job.id)}
       <div animate:flip={{ duration: 250 }}>
@@ -48,6 +58,19 @@
   .job-status-view {
     padding: 0.5rem;
     min-height: 5rem;
+  }
+  .transfers {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+  }
+  .transfers h4 {
+    margin: 0;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--color-text-2);
   }
   .job-cards-container {
     display: flex;

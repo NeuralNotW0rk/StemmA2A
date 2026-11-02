@@ -35,6 +35,7 @@
     clearDismissableJobs,
     cancelAllJobs
   } from './utils/job-management'
+  import { startTransferPolling } from './utils/transfers'
   import type {
     ActionPanelView,
     EngineSettings,
@@ -124,6 +125,9 @@
       }
     }
   })
+
+  // Upload and download progress for the Jobs panel, polled while jobs are running
+  $effect((): (() => void) => startTransferPolling())
 
   onMount(async (): Promise<void> => {
     const ready = await initialHealthCheck()

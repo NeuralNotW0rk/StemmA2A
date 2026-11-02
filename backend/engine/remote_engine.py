@@ -4,6 +4,7 @@ import os
 import json
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 from param_graph.elements.base_elements import GraphElement
@@ -18,10 +19,12 @@ from utils.uid import path_from_uid
 # enough of the upload bandwidth to finish quickly however many jobs are queued at once.
 UPLOAD_CHUNK_SIZE = 4 * 1024 * 1024
 MAX_CONCURRENT_UPLOADS = int(os.environ.get("REMOTE_ENGINE_MAX_UPLOADS", 2))
-# Attempts per asset; a failed asset is re-sent from its first chunk, which restarts it on the server
+# Attempts per asset; a failed file is re-sent from its first chunk, which restarts it on the server
 UPLOAD_ATTEMPTS = 3
 # Rounds of uploading missing assets before giving up on an /execute request
 MAX_UPLOAD_ROUNDS = 3
+# How long a finished transfer stays in get_transfers(), so the UI can show how it ended
+TRANSFER_HISTORY_SECONDS = 30
 
 
 def _request_error(e: Exception) -> Exception:
@@ -75,10 +78,64 @@ def _format_bytes(num_bytes: int | float) -> str:
 
 
 class _TransferTracker:
-    """Thread-safe state tracker for an in-flight upload or download transfer."""
-    def __init__(self) -> None:
+    """
+    Thread-safe state tracker for an in-flight upload or download transfer. It also carries the
+    progress reported to the UI (see RemoteEngine.get_transfers); each field has a single writer, the
+    task doing the transfer, so readers only ever see a slightly stale value.
+    """
+    def __init__(self, direction: str = "upload", uid: str = "", name: str = "") -> None:
         self.done_event = threading.Event()
         self.success: bool = False
+        self.id = uuid.uuid4().hex
+        self.direction = direction
+        self.uid = uid
+        self.name = name or uid
+        # queued (waiting for an upload slot), active, done or failed
+        self.state = "queued"
+        self.bytes_done = 0
+        self.total_bytes = 0
+        self.files_done = 0
+        self.total_files = 1
+        self.attempt = 1
+        self.bytes_per_second = 0.0
+        self.error: str | None = None
+        # Jobs waiting on this transfer, including ones that joined it in flight
+        self.job_ids: set[str] = set()
+        self.started_at = time.time()
+        self.finished_at: float | None = None
+
+    def add_bytes(self, count: int, seconds: float) -> None:
+        self.bytes_done += count
+        rate = count / max(seconds, 0.001)
+        # Smoothed, so one slow chunk doesn't swing the reported speed
+        self.bytes_per_second = rate if not self.bytes_per_second else 0.7 * self.bytes_per_second + 0.3 * rate
+
+    def settle(self, success: bool, error: str | None = None) -> None:
+        self.success = success
+        self.state = "done" if success else "failed"
+        self.error = None if success else (error or "Transfer failed; see the backend log")
+        self.finished_at = time.time()
+        self.done_event.set()
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "direction": self.direction,
+            "uid": self.uid,
+            "name": self.name,
+            "state": self.state,
+            "bytes_done": self.bytes_done,
+            "total_bytes": self.total_bytes,
+            "files_done": self.files_done,
+            "total_files": self.total_files,
+            "attempt": self.attempt,
+            "max_attempts": UPLOAD_ATTEMPTS if self.direction == "upload" else 1,
+            "bytes_per_second": round(self.bytes_per_second),
+            "error": self.error,
+            "job_ids": sorted(self.job_ids),
+            "started_at": self.started_at,
+            "finished_at": self.finished_at,
+        }
 
 
 class RemoteEngine(Engine):
@@ -92,8 +149,29 @@ class RemoteEngine(Engine):
         self._active_uploads: dict[str, _TransferTracker] = {}
         self._active_downloads: dict[str, _TransferTracker] = {}
         self._transfer_lock = threading.Lock()
+        # Every transfer reported to the UI, in flight or recently finished, by tracker id
+        self._transfers: dict[str, _TransferTracker] = {}
         # Upload slots shared by every thread and event loop (see MAX_CONCURRENT_UPLOADS)
         self._upload_slots = threading.BoundedSemaphore(MAX_CONCURRENT_UPLOADS)
+
+    def _start_transfer(self, direction: str, uid: str, name: str, job_id: str | None) -> _TransferTracker:
+        """A new tracker, listed by get_transfers(). Callers hold _transfer_lock."""
+        tracker = _TransferTracker(direction, uid, name)
+        if job_id:
+            tracker.job_ids.add(job_id)
+        self._transfers[tracker.id] = tracker
+        return tracker
+
+    def get_transfers(self) -> list[dict[str, Any]]:
+        """Transfers in flight, and ones that finished in the last TRANSFER_HISTORY_SECONDS, oldest first."""
+        now = time.time()
+        with self._transfer_lock:
+            for tracker_id in [
+                t.id for t in self._transfers.values()
+                if t.finished_at and now - t.finished_at > TRANSFER_HISTORY_SECONDS
+            ]:
+                del self._transfers[tracker_id]
+            return [t.to_dict() for t in sorted(self._transfers.values(), key=lambda t: t.started_at)]
 
     async def _wait_for_transfer(self, tracker: _TransferTracker, timeout: float | None = 600.0) -> bool:
         """
@@ -146,8 +224,13 @@ class RemoteEngine(Engine):
             print(f"Failed to fetch shared models from remote engine: {e}")
             return []
 
-    async def add_shared_model(self, entry: dict, local_files: dict[str, str] | None = None) -> dict:
-        """Registers a shared model on the engine service, uploading any files it doesn't have yet."""
+    async def add_shared_model(
+        self, entry: dict, local_files: dict[str, str] | None = None, job_id: str | None = None
+    ) -> dict:
+        """
+        Registers a shared model on the engine service, uploading any files it doesn't have yet. The
+        uploads are reported under job_id, if given.
+        """
         # Paths on this machine mean nothing to the engine service; it identifies files by UID
         payload = {
             k: ({rk: rv for rk, rv in v.items() if rk != "path"} if k in ("checkpoint", "encoder", "config_file") else v)
@@ -164,7 +247,7 @@ class RemoteEngine(Engine):
                             if not missing_uids or upload_rounds >= MAX_UPLOAD_ROUNDS:
                                 raise Exception(f"Engine service still lacks model files: {', '.join(missing_uids)}")
                             upload_rounds += 1
-                            if not await self.upload_missing_assets(missing_uids, local_files or {}, session):
+                            if not await self.upload_missing_assets(missing_uids, local_files or {}, session, job_id):
                                 raise Exception(
                                     f"Could not upload model file(s) {', '.join(missing_uids)}; "
                                     f"see the backend log for details."
@@ -240,7 +323,7 @@ class RemoteEngine(Engine):
                                 )
 
                             upload_rounds += 1
-                            if not await self.upload_missing_assets(missing_uids, local_assets, session):
+                            if not await self.upload_missing_assets(missing_uids, local_assets, session, job_id):
                                 raise Exception(
                                     f"Could not upload asset(s) required by the engine service "
                                     f"({', '.join(missing_uids)}); see the backend log for details."
@@ -277,11 +360,14 @@ class RemoteEngine(Engine):
     async def _download_single_asset(self, asset_id: str, local_path: Path, session: aiohttp.ClientSession) -> bool:
         """Downloads a single asset from the remote server with atomic staging and progress reporting."""
         local_staging_path = local_path.with_suffix(local_path.suffix + ".part")
+        # Registered by _fetch_result_element(); a direct call reports to a tracker nobody lists
+        tracker = self._active_downloads.get(asset_id) or _TransferTracker("download", asset_id)
         try:
             local_path.parent.mkdir(parents=True, exist_ok=True)
             async with session.get(f"{self.remote_url}/download_asset/{asset_id}") as file_response:
                 if file_response.status == 200:
                     total_size = int(file_response.headers.get("Content-Length", 0))
+                    tracker.total_bytes = total_size
                     dl_start = time.time()
                     print(f"[RemoteEngine Download] Downloading result asset '{asset_id}'" + (f" ({_format_bytes(total_size)})..." if total_size > 0 else "..."))
                     
@@ -289,9 +375,12 @@ class RemoteEngine(Engine):
                     chunk_size = 1024 * 1024  # 1 MB
                     
                     with open(local_staging_path, "wb") as f:
+                        chunk_start = time.time()
                         async for chunk in file_response.content.iter_chunked(chunk_size):
                             f.write(chunk)
                             downloaded_bytes += len(chunk)
+                            tracker.add_bytes(len(chunk), time.time() - chunk_start)
+                            chunk_start = time.time()
                             if total_size > 5 * 1024 * 1024:
                                 pct = (downloaded_bytes / total_size) * 100
                                 print(f"  -> Download progress: {_format_bytes(downloaded_bytes)} / {_format_bytes(total_size)} ({pct:.1f}%)")
@@ -308,9 +397,11 @@ class RemoteEngine(Engine):
                 else:
                     error_text = await file_response.text()
                     print(f"[RemoteEngine Download] Failed to download asset {asset_id}. Status: {file_response.status}. Body: {error_text}")
+                    tracker.error = f"Engine service replied {file_response.status}"
                     return False
         except Exception as e:
             print(f"[RemoteEngine Download] Error downloading asset '{asset_id}': {e}")
+            tracker.error = str(e)
             return False
         finally:
             if local_staging_path.exists():
@@ -319,10 +410,12 @@ class RemoteEngine(Engine):
                 except Exception:
                     pass
 
-    async def _fetch_result_element(self, element_dict: dict, session: aiohttp.ClientSession) -> dict:
+    async def _fetch_result_element(
+        self, element_dict: dict, session: aiohttp.ClientSession, job_id: str | None = None
+    ) -> dict:
         """
         Downloads a result element's asset (with transfer deduplication) and returns the element anchored
-        to the local download directory. Raises if the download fails.
+        to the local download directory. Raises if the download fails. job_id is the job it belongs to.
         """
         result_element = resolve_element(element_dict)
 
@@ -343,9 +436,13 @@ class RemoteEngine(Engine):
                 if result_element.id in self._active_downloads:
                     print(f"[RemoteEngine Download] Asset '{result_element.id}' is already being downloaded. Joining in-flight transfer...")
                     tracker = self._active_downloads[result_element.id]
+                    if job_id:
+                        tracker.job_ids.add(job_id)
                     is_initiator = False
                 else:
-                    tracker = _TransferTracker()
+                    name = getattr(result_element, "name", None) or result_element.id
+                    tracker = self._start_transfer("download", result_element.id, name, job_id)
+                    tracker.state = "active"
                     self._active_downloads[result_element.id] = tracker
                     is_initiator = True
 
@@ -355,8 +452,7 @@ class RemoteEngine(Engine):
                     success = await self._download_single_asset(result_element.id, local_path, session)
                 finally:
                     with self._transfer_lock:
-                        tracker.success = success
-                        tracker.done_event.set()
+                        tracker.settle(success, tracker.error)
                         if self._active_downloads.get(result_element.id) is tracker:
                             del self._active_downloads[result_element.id]
             else:
@@ -396,7 +492,7 @@ class RemoteEngine(Engine):
                             return status_info  # Return as-is if there's no valid element
 
                         try:
-                            fetched = [await self._fetch_result_element(element, session) for element in elements]
+                            fetched = [await self._fetch_result_element(element, session, job_id) for element in elements]
                         except Exception as e:
                             print(f"Error: {e}")
                             status_info["status"] = "failed"
@@ -415,10 +511,13 @@ class RemoteEngine(Engine):
         Uploads a single asset to the remote engine. A directory is sent file by file, never
         archived, and then finalized, which checks it against its UID on the engine side.
         """
+        # Registered by upload_missing_assets(); a direct call reports to a tracker nobody lists
+        tracker = self._active_uploads.get(asset_uid) or _TransferTracker("upload", asset_uid)
         try:
             source = Path(asset_path)
             if not source.exists():
                 print(f"[RemoteEngine Upload] File not found for upload: '{asset_path}'")
+                tracker.error = f"File not found: {asset_path}"
                 return False
             if source.is_dir():
                 # The same files get_path_size() counts, so the total matches the asset's recorded size
@@ -427,20 +526,28 @@ class RemoteEngine(Engine):
             else:
                 files = [(source, None)]
             sent: set[int] = set()
+            sizes = [p.stat().st_size for p, _ in files]
+            tracker.total_bytes = sum(sizes)
+            tracker.total_files = len(files)
 
             # Wait for an upload slot without blocking this event loop
             while not self._upload_slots.acquire(blocking=False):
                 await asyncio.sleep(0.05)
+            tracker.state = "active"
             try:
                 for attempt in range(1, UPLOAD_ATTEMPTS + 1):
+                    tracker.attempt = attempt
+                    # Progress restarts from the files already sent in full
+                    tracker.bytes_done = sum(sizes[i] for i in sent)
                     try:
                         # A retry resumes from the first file not yet sent in full
                         for index, (path, relpath) in enumerate(files):
                             if index not in sent:
-                                await self._send_asset_chunks(asset_uid, str(path), session, relpath)
+                                await self._send_asset_chunks(asset_uid, str(path), session, relpath, tracker)
                                 sent.add(index)
+                                tracker.files_done = len(sent)
                         if source.is_dir():
-                            await self._finalize_directory(asset_uid, sum(p.stat().st_size for p, _ in files), session)
+                            await self._finalize_directory(asset_uid, tracker.total_bytes, session)
                         return True
                     except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                         if attempt == UPLOAD_ATTEMPTS:
@@ -451,6 +558,7 @@ class RemoteEngine(Engine):
                 self._upload_slots.release()
         except Exception as e:
             print(f"[RemoteEngine Upload] Error uploading asset '{asset_uid}': {e}")
+            tracker.error = str(e)
             return False
 
     async def _finalize_directory(self, asset_uid: str, total_size: int, session: aiohttp.ClientSession) -> None:
@@ -470,10 +578,11 @@ class RemoteEngine(Engine):
         upload_path: str,
         session: aiohttp.ClientSession,
         relpath: str | None = None,
+        tracker: _TransferTracker | None = None,
     ) -> None:
         """
         Sends a file to the engine service chunk by chunk, starting from the first chunk. With
-        relpath, the file is that member of the directory asset asset_uid.
+        relpath, the file is that member of the directory asset asset_uid. Progress goes to tracker.
         """
         asset_start = time.time()
         uploaded_asset_bytes = 0
@@ -503,6 +612,8 @@ class RemoteEngine(Engine):
                     response.raise_for_status()
                 chunk_duration = max(time.time() - chunk_start, 0.001)
                 chunk_speed = (chunk_len / (1024 * 1024)) / chunk_duration
+                if tracker:
+                    tracker.add_bytes(chunk_len, chunk_duration)
 
                 pct = (uploaded_asset_bytes / file_size) * 100 if file_size > 0 else 100
                 print(f"  -> Chunk {i + 1}/{total_chunks} sent: {_format_bytes(uploaded_asset_bytes)} / {_format_bytes(file_size)} ({pct:.1f}%) @ {chunk_speed:.2f} MB/s")
@@ -511,8 +622,17 @@ class RemoteEngine(Engine):
         asset_speed = (file_size / (1024 * 1024)) / asset_elapsed
         print(f"[RemoteEngine Upload] Uploaded '{label}' in {asset_elapsed:.2f}s (avg {asset_speed:.2f} MB/s)")
 
-    async def upload_missing_assets(self, missing_uids: list[str], local_assets: dict[str, str], session: aiohttp.ClientSession) -> bool:
-        """Synchronizes missing assets to the remote engine, deduplicating parallel in-flight uploads across threads and event loops."""
+    async def upload_missing_assets(
+        self,
+        missing_uids: list[str],
+        local_assets: dict[str, str],
+        session: aiohttp.ClientSession,
+        job_id: str | None = None,
+    ) -> bool:
+        """
+        Synchronizes missing assets to the remote engine, deduplicating parallel in-flight uploads across
+        threads and event loops. job_id is the job waiting on them, as reported by get_transfers().
+        """
         initiator_tasks: list[tuple[str, _TransferTracker, str]] = []
         waiter_trackers: list[tuple[str, _TransferTracker]] = []
         
@@ -526,9 +646,11 @@ class RemoteEngine(Engine):
                 if asset_uid in self._active_uploads:
                     print(f"[RemoteEngine] Asset '{asset_uid}' is already being transferred by another task. Joining in-flight transfer...")
                     tracker = self._active_uploads[asset_uid]
+                    if job_id:
+                        tracker.job_ids.add(job_id)
                     waiter_trackers.append((asset_uid, tracker))
                 else:
-                    tracker = _TransferTracker()
+                    tracker = self._start_transfer("upload", asset_uid, Path(asset_path).name, job_id)
                     self._active_uploads[asset_uid] = tracker
                     initiator_tasks.append((asset_uid, tracker, asset_path))
 
@@ -539,11 +661,11 @@ class RemoteEngine(Engine):
                 return success
             except Exception as e:
                 print(f"[RemoteEngine] Error uploading asset '{asset_uid}': {e}")
+                tracker.error = str(e)
                 return False
             finally:
                 with self._transfer_lock:
-                    tracker.success = success
-                    tracker.done_event.set()
+                    tracker.settle(success, tracker.error)
                     if self._active_uploads.get(asset_uid) is tracker:
                         del self._active_uploads[asset_uid]
 

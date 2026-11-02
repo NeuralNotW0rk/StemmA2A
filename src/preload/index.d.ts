@@ -68,6 +68,7 @@ interface API {
   updateLabels: () => Promise<any>
   repairEdges: () => Promise<any>
   pollJobStatus: (jobId: string) => Promise<any>
+  getTransfers: () => Promise<unknown>
   updateEmbeddings: () => Promise<any>
   groupElements: (memberIds: string[]) => Promise<any>
   updateGroup: (groupId: string, memberIds: string[]) => Promise<any>

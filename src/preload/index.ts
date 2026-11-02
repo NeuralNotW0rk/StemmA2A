@@ -68,6 +68,7 @@ const api = {
   repairEdges: (): Promise<any> => ipcRenderer.invoke('repairEdges'),
   updateEmbeddings: (): Promise<any> => ipcRenderer.invoke('updateEmbeddings'),
   pollJobStatus: (jobId: string): Promise<any> => ipcRenderer.invoke('pollJobStatus', jobId),
+  getTransfers: (): Promise<unknown> => ipcRenderer.invoke('getTransfers'),
   groupElements: (memberIds: string[]): Promise<any> =>
     ipcRenderer.invoke('groupElements', memberIds),
   updateGroup: (groupId: string, memberIds: string[]): Promise<any> =>

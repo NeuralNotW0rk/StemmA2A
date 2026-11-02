@@ -850,6 +850,14 @@ app.whenReady().then(async (): Promise<void> => {
     postJson('/rooms/view', { room_id: roomId }, 'Changing room')
   )
 
+  ipcMain.handle('getTransfers', async () => {
+    const response = await fetchWithAuth(`${BACKEND_URL}/transfers`)
+    if (!response.ok) {
+      throw new Error(`Getting transfers failed. Status: ${response.status}`)
+    }
+    return await response.json()
+  })
+
   // With check set, the backend also probes the remote engine service for the connection indicator
   ipcMain.handle('getEngine', async (_event, check = false) => {
     const response = await fetchWithAuth(`${BACKEND_URL}/engine${check ? '?check=1' : ''}`)

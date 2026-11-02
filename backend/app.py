@@ -225,6 +225,14 @@ async def get_engine_state():
     return jsonify(state)
 
 
+@app.route("/transfers", methods=["GET"])
+def get_transfers():
+    """Uploads and downloads between this machine and the engine service, in flight or just finished."""
+    engine = engine_provider.get_engine() if engine_provider else None
+    transfers = engine.get_transfers() if hasattr(engine, "get_transfers") else []
+    return jsonify({"transfers": transfers})
+
+
 @app.route("/engine", methods=["POST"])
 def set_engine():
     """
@@ -881,7 +889,7 @@ async def _export_shared_model_task(job_id: str, model_id: str) -> None:
             # A remote engine may first need the model's files uploaded, which can take a while
             "description": f"Registering with {where}..."
         }
-        shared = await engine.add_shared_model(entry, local_files)
+        shared = await engine.add_shared_model(entry, local_files, job_id)
 
         local_jobs[job_id]["status"] = "completed"
         local_jobs[job_id]["progress"] = {

@@ -1,11 +1,19 @@
 <script lang="ts">
   import { cancelJob, removeJob, type Job } from '../utils/job-management'
   import { cyInstanceStore } from '../utils/stores'
+  import { transferStore, transferPercent } from '../utils/transfers'
   import { slide } from 'svelte/transition'
 
   let { job } = $props<{ job: Job }>()
 
   let showErrorDetails = $state(false)
+
+  // Uploads of the job's inputs and downloads of its results, while they are under way
+  const jobTransfers = $derived(
+    $transferStore.filter(
+      (t) => t.job_ids.includes(job.id) && (t.state === 'active' || t.state === 'queued')
+    )
+  )
 
   function handleFocus(job: Job): void {
     console.log('[JobItem] handleFocus triggered for job:', job.id, job.name)
@@ -131,6 +139,20 @@
       {/if}
     </div>
   </div>
+
+  {#each jobTransfers as transfer (transfer.id)}
+    {@const percent = transferPercent(transfer)}
+    <div class="job-transfer" transition:slide>
+      {transfer.state === 'queued'
+        ? 'Waiting to upload'
+        : transfer.direction === 'upload'
+          ? 'Uploading'
+          : 'Downloading'}
+      {transfer.name}{percent !== null && transfer.state === 'active'
+        ? `: ${Math.floor(percent)}%`
+        : ''}
+    </div>
+  {/each}
 
   {#if job.status === 'error' && showErrorDetails && job.error}
     <div class="error-details" transition:slide>
@@ -271,6 +293,16 @@
     align-items: center;
     justify-content: center;
     border-radius: 50%;
+  }
+
+  .job-transfer {
+    margin-top: 0.4rem;
+    font-size: 0.75rem;
+    color: var(--color-text-2);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-variant-numeric: tabular-nums;
   }
 
   .error-details {

@@ -172,10 +172,13 @@ class Engine(ABC):
         pass
 
     @abstractmethod
-    async def add_shared_model(self, entry: dict, local_files: dict[str, str] | None = None) -> dict:
+    async def add_shared_model(
+        self, entry: dict, local_files: dict[str, str] | None = None, job_id: str | None = None
+    ) -> dict:
         """
         Adds a shared model registry entry (see model_store.py) and returns the model as clients see
-        it. local_files maps UIDs to files on this machine, for engines that need to upload them.
+        it. local_files maps UIDs to files on this machine, for engines that need to upload them, and
+        job_id is the job any uploads are reported under.
         """
         pass
 

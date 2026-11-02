@@ -290,7 +290,7 @@ class TestDirectoryUpload(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         self.temp_dir.cleanup()
 
-    async def _upload(self, uid: str) -> bool:
+    async def _upload(self, uid: str, via_engine: list | None = None) -> bool:
         from aiohttp import web
         from aiohttp.test_utils import TestServer
         from engine import uploads
@@ -321,9 +321,13 @@ class TestDirectoryUpload(unittest.IsolatedAsyncioTestCase):
         web_app.router.add_post("/upload/finalize", finalize)
         async with TestServer(web_app) as server:
             engine = RemoteEngine(remote_url=str(server.make_url("")).rstrip("/"))
+            if via_engine is not None:
+                via_engine.append(engine)
             import aiohttp
             async with aiohttp.ClientSession() as session:
                 with patch("engine.remote_engine.asyncio.sleep", AsyncMock()):
+                    if via_engine is not None:
+                        return await engine.upload_missing_assets([uid], {uid: str(self.source)}, session, "job1")
                     return await engine._upload_single_asset(uid, str(self.source), session)
 
     async def test_directory_is_sent_unarchived_and_stored_as_a_directory(self):
@@ -344,6 +348,31 @@ class TestDirectoryUpload(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await self._upload(XXH3_64().from_directory(self.source)))
         # config.json is not sent again on the retry
         self.assertEqual(self.requests, ["config.json", "sub/weights.bin", "sub/weights.bin"])
+
+    async def test_transfers_report_progress_for_their_job(self):
+        from utils.uid import XXH3_64
+
+        uid = XXH3_64().from_directory(self.source)
+        engines = []
+        self.assertTrue(await self._upload(uid, via_engine=engines))
+        [transfer] = engines[0].get_transfers()
+        self.assertEqual(transfer["direction"], "upload")
+        self.assertEqual(transfer["name"], "encoder")
+        self.assertEqual(transfer["state"], "done")
+        self.assertEqual((transfer["bytes_done"], transfer["total_bytes"]), (18, 18))
+        self.assertEqual((transfer["files_done"], transfer["total_files"]), (2, 2))
+        self.assertEqual(transfer["job_ids"], ["job1"])
+
+        # Finished transfers drop off after a while
+        with patch("engine.remote_engine.time.time", return_value=transfer["finished_at"] + 3600):
+            self.assertEqual(engines[0].get_transfers(), [])
+
+    async def test_failed_transfer_reports_its_error(self):
+        engines = []
+        self.assertFalse(await self._upload("0000000000000000.xxh3_64", via_engine=engines))
+        [transfer] = engines[0].get_transfers()
+        self.assertEqual(transfer["state"], "failed")
+        self.assertIn("hash to", transfer["error"])
 
     async def test_contents_that_do_not_match_the_uid_are_not_retried(self):
         from engine import uploads
