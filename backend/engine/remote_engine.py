@@ -5,7 +5,6 @@ import json
 import threading
 import time
 from pathlib import Path
-import tempfile
 from typing import Any
 from param_graph.elements.base_elements import GraphElement
 
@@ -412,30 +411,22 @@ class RemoteEngine(Engine):
             raise _request_error(e) from e
 
     async def _upload_single_asset(self, asset_uid: str, asset_path: str, session: aiohttp.ClientSession) -> bool:
-        """Uploads a single asset file or directory archive to the remote engine."""
-        temp_zip_path = None
+        """
+        Uploads a single asset to the remote engine. A directory is sent file by file, never
+        archived, and then finalized, which checks it against its UID on the engine side.
+        """
         try:
-            if os.path.isdir(asset_path):
-                print(f"[RemoteEngine Upload] Archiving directory '{asset_path}' for upload...")
-                import shutil
-                # Create a temporary zip archive path
-                temp_fd, temp_zip_path = tempfile.mkstemp(suffix=".zip")
-                os.close(temp_fd)
-                # shutil.make_archive appends .zip, so strip it from the base name
-                base_name = temp_zip_path[:-4] if temp_zip_path.endswith(".zip") else temp_zip_path
-                shutil.make_archive(base_name, 'zip', asset_path)
-                if not temp_zip_path.endswith(".zip"):
-                    temp_zip_path += ".zip"
-                upload_path = temp_zip_path
-            else:
-                upload_path = asset_path
-
-            if not os.path.exists(upload_path):
-                print(f"[RemoteEngine Upload] File not found for upload: '{upload_path}'")
+            source = Path(asset_path)
+            if not source.exists():
+                print(f"[RemoteEngine Upload] File not found for upload: '{asset_path}'")
                 return False
-
-            file_size = os.path.getsize(upload_path)
-            total_chunks = max(1, (file_size + UPLOAD_CHUNK_SIZE - 1) // UPLOAD_CHUNK_SIZE)
+            if source.is_dir():
+                # The same files get_path_size() counts, so the total matches the asset's recorded size
+                members = sorted((p for p in source.glob("**/*") if p.is_file()), key=lambda p: p.relative_to(source).as_posix())
+                files = [(p, p.relative_to(source).as_posix()) for p in members]
+            else:
+                files = [(source, None)]
+            sent: set[int] = set()
 
             # Wait for an upload slot without blocking this event loop
             while not self._upload_slots.acquire(blocking=False):
@@ -443,7 +434,13 @@ class RemoteEngine(Engine):
             try:
                 for attempt in range(1, UPLOAD_ATTEMPTS + 1):
                     try:
-                        await self._send_asset_chunks(asset_uid, upload_path, file_size, total_chunks, session)
+                        # A retry resumes from the first file not yet sent in full
+                        for index, (path, relpath) in enumerate(files):
+                            if index not in sent:
+                                await self._send_asset_chunks(asset_uid, str(path), session, relpath)
+                                sent.add(index)
+                        if source.is_dir():
+                            await self._finalize_directory(asset_uid, sum(p.stat().st_size for p, _ in files), session)
                         return True
                     except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                         if attempt == UPLOAD_ATTEMPTS:
@@ -455,26 +452,36 @@ class RemoteEngine(Engine):
         except Exception as e:
             print(f"[RemoteEngine Upload] Error uploading asset '{asset_uid}': {e}")
             return False
-        finally:
-            if temp_zip_path and os.path.exists(temp_zip_path):
-                try:
-                    os.remove(temp_zip_path)
-                except Exception as e:
-                    print(f"Warning: failed to clean up temp zip file {temp_zip_path}: {e}")
+
+    async def _finalize_directory(self, asset_uid: str, total_size: int, session: aiohttp.ClientSession) -> None:
+        """Asks the engine service to check and complete a directory asset whose files were all sent."""
+        payload = {"uid": asset_uid, "total_size": total_size}
+        async with session.post(f"{self.remote_url}/upload/finalize", json=payload) as response:
+            if response.status == 409:
+                # The staged contents don't match the UID, so sending them again would not help
+                body = await response.json(content_type=None)
+                raise RuntimeError(body.get("error") or f"Directory '{asset_uid}' was rejected")
+            response.raise_for_status()
+        print(f"[RemoteEngine Upload] Directory '{asset_uid}' verified and stored ({_format_bytes(total_size)})")
 
     async def _send_asset_chunks(
         self,
         asset_uid: str,
         upload_path: str,
-        file_size: int,
-        total_chunks: int,
         session: aiohttp.ClientSession,
+        relpath: str | None = None,
     ) -> None:
-        """Sends a file to the engine service chunk by chunk, starting from the first chunk."""
+        """
+        Sends a file to the engine service chunk by chunk, starting from the first chunk. With
+        relpath, the file is that member of the directory asset asset_uid.
+        """
         asset_start = time.time()
         uploaded_asset_bytes = 0
+        file_size = os.path.getsize(upload_path)
+        total_chunks = max(1, (file_size + UPLOAD_CHUNK_SIZE - 1) // UPLOAD_CHUNK_SIZE)
+        label = f"{asset_uid}/{relpath}" if relpath else asset_uid
 
-        print(f"[RemoteEngine Upload] Uploading asset '{asset_uid}' ({_format_bytes(file_size)}, {total_chunks} chunk(s))...")
+        print(f"[RemoteEngine Upload] Uploading asset '{label}' ({_format_bytes(file_size)}, {total_chunks} chunk(s))...")
 
         with open(upload_path, 'rb') as f:
             for i in range(total_chunks):
@@ -484,6 +491,8 @@ class RemoteEngine(Engine):
 
                 data = aiohttp.FormData()
                 data.add_field('uid', asset_uid)
+                if relpath:
+                    data.add_field('relpath', relpath)
                 data.add_field('chunk_index', str(i))
                 data.add_field('total_chunks', str(total_chunks))
                 data.add_field('total_size', str(file_size))
@@ -500,7 +509,7 @@ class RemoteEngine(Engine):
 
         asset_elapsed = max(time.time() - asset_start, 0.001)
         asset_speed = (file_size / (1024 * 1024)) / asset_elapsed
-        print(f"[RemoteEngine Upload] Uploaded '{asset_uid}' in {asset_elapsed:.2f}s (avg {asset_speed:.2f} MB/s)")
+        print(f"[RemoteEngine Upload] Uploaded '{label}' in {asset_elapsed:.2f}s (avg {asset_speed:.2f} MB/s)")
 
     async def upload_missing_assets(self, missing_uids: list[str], local_assets: dict[str, str], session: aiohttp.ClientSession) -> bool:
         """Synchronizes missing assets to the remote engine, deduplicating parallel in-flight uploads across threads and event loops."""

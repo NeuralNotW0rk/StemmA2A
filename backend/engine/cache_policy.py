@@ -3,7 +3,9 @@ Size-capped eviction for the engine service's content-addressed cache (<data>/ca
 
 The policy only looks at each entry's size and when it was last used, never at what it holds:
 
-- Last use is the file's mtime, which is bumped on every cache hit (see touch()).
+- An entry is whatever sits at cache/xx/<uid>: a file, or a directory asset as a whole, whose size
+  is the total of its files. Its members are never entries of their own.
+- Last use is the entry's mtime, which is bumped on every cache hit (see touch()).
 - Once the cache grows past max_bytes, entries are evicted until it is back under
   LOW_WATER_RATIO * max_bytes. The entry with the highest idle_time / size_weight goes first, where
   the weight grows with log2 of the size, so large files outlast small ones by a bounded factor.
@@ -22,6 +24,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable
 
+from utils.filesystem import remove_path
+
 MIB = 1024 * 1024
 GIB = 1024 * MIB
 LOW_WATER_RATIO = 0.8
@@ -35,11 +39,27 @@ def size_weight(size: int) -> float:
 
 
 def touch(path: Path) -> None:
-    """Records a cache hit by bumping the file's mtime."""
+    """Records a cache hit by bumping the entry's mtime."""
     try:
         os.utime(path, None)
     except FileNotFoundError:
         pass
+
+
+def _size_and_mtime(path: Path) -> tuple[int, float]:
+    """A file's size and mtime, or a directory's total size and the newest mtime inside it."""
+    stat = path.stat()
+    if not path.is_dir():
+        return stat.st_size, stat.st_mtime
+    size, mtime = 0, stat.st_mtime
+    for member in path.glob("**/*"):
+        member_stat = member.stat()
+        mtime = max(mtime, member_stat.st_mtime)
+        if member.is_file():
+            size += member_stat.st_size
+    return size, mtime
+
+
 
 
 @dataclass
@@ -88,22 +108,23 @@ class CachePolicy:
         return leased
 
     def _scan(self, now: float) -> tuple[list[CacheEntry], list[Path]]:
-        """Returns the cache entries and the stale upload staging files."""
+        """Returns the cache entries and the stale upload staging files and directories."""
         entries, stale_parts = [], []
         if not self.cache_dir.is_dir():
             return entries, stale_parts
-        for dir_path, _, file_names in os.walk(self.cache_dir, followlinks=False):
-            for file_name in file_names:
-                path = Path(dir_path) / file_name
+        for shard in self.cache_dir.iterdir():
+            if not shard.is_dir():
+                continue
+            for path in shard.iterdir():
                 try:
-                    stat = path.stat()
+                    size, mtime = _size_and_mtime(path)
                 except FileNotFoundError:
                     continue
-                if file_name.endswith(".part"):
-                    if now - stat.st_mtime > STALE_PART_SECONDS:
+                if path.name.endswith(".part"):
+                    if now - mtime > STALE_PART_SECONDS:
                         stale_parts.append(path)
                     continue
-                entries.append(CacheEntry(path, stat.st_size, stat.st_mtime))
+                entries.append(CacheEntry(path, size, path.stat().st_mtime))
         return entries, stale_parts
 
     def sweep(self, dry_run: bool = False) -> dict:
@@ -124,7 +145,7 @@ class CachePolicy:
 
             if not dry_run:
                 for path in stale_parts:
-                    path.unlink(missing_ok=True)
+                    remove_path(path)
                 report["stale_parts_removed"] = len(stale_parts)
 
             if self.max_bytes <= 0 or total <= self.max_bytes:
@@ -144,11 +165,13 @@ class CachePolicy:
                     break
                 if not dry_run:
                     try:
-                        entry.path.unlink()
+                        remove_path(entry.path)
                     except FileNotFoundError:
                         pass
                     except PermissionError:
-                        # Open elsewhere (e.g. being served on Windows); try again next sweep
+                        # Open elsewhere (e.g. being served on Windows); try again next sweep. A
+                        # directory left partly removed fails its size check in /execute and is
+                        # uploaded again
                         continue
                 remaining -= entry.size
                 report["evicted"].append({"uid": entry.uid, "size": entry.size, "idle_hours": round((now - entry.last_used) / 3600, 1)})

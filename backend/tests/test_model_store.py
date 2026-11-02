@@ -6,13 +6,14 @@ import shutil
 import tempfile
 import unittest
 import unittest.mock
+import zipfile
 from pathlib import Path
 
 backend_dir = Path(__file__).resolve().parent.parent
 if str(backend_dir) not in sys.path:
     sys.path.insert(0, str(backend_dir))
 
-from engine.model_store import ModelStore, MissingModelFiles, migrate_legacy_registry
+from engine.model_store import ModelStore, MissingModelFiles, migrate_legacy_registry, unpack_directory_archives
 
 CKPT = "ckpt.xxh3_64"
 ENC = "enc.xxh3_64"
@@ -121,6 +122,84 @@ class TestModelStore(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             self.store.demote(first)
+
+    def test_ingest_copies_a_file_into_the_store(self):
+        source = self.root / "host" / "model.ckpt"
+        source.parent.mkdir()
+        source.write_bytes(b"1234567")
+
+        self.assertTrue(self.store.ingest(CKPT, source))
+        self.assertEqual(self.store.model_path(CKPT).read_bytes(), b"1234567")
+        # Copied, not moved or linked, and no staging file left behind
+        self.assertTrue(source.exists())
+        self.assertEqual(self.store.model_path(CKPT).stat().st_nlink, 1)
+        self.assertEqual([p.name for p in self.store.model_path(CKPT).parent.iterdir()], [CKPT])
+        # promote() then finds the file already in the store
+        self.store.promote(self._entry(checkpoint={"uid": CKPT, "size": 7}))
+        self.assertEqual(self.store.resolve(CKPT), self.store.model_path(CKPT))
+
+    def test_ingest_copies_a_directory(self):
+        source = self.root / "host" / "encoder"
+        source.mkdir(parents=True)
+        (source / "weights.bin").write_bytes(b"weights")
+
+        self.assertTrue(self.store.ingest(ENC, source))
+        self.assertEqual((self.store.model_path(ENC) / "weights.bin").read_bytes(), b"weights")
+        self.assertTrue((source / "weights.bin").exists())
+        self.assertEqual([p.name for p in self.store.model_path(ENC).parent.iterdir()], [ENC])
+
+    def test_directories_promote_and_demote(self):
+        self._cached(CKPT)
+        cached_encoder = self.store.cache_path(ENC)
+        (cached_encoder / "sub").mkdir(parents=True)
+        (cached_encoder / "sub" / "weights.bin").write_bytes(b"weights")
+        with self.assertRaises(ValueError):
+            self.store.promote(self._entry(checkpoint={"uid": CKPT}, encoder={"uid": ENC, "size": 99}))
+
+        entry = self.store.promote(self._entry(checkpoint={"uid": CKPT}, encoder={"uid": ENC, "size": 7}))
+        self.assertTrue((self.store.model_path(ENC) / "sub" / "weights.bin").exists())
+        self.store.demote(entry)
+        self.assertTrue((cached_encoder / "sub" / "weights.bin").exists())
+        self.assertFalse(self.store.model_path(ENC).exists())
+
+    def test_unpack_directory_archives(self):
+        encoder_zip = self.store.model_path(ENC)
+        encoder_zip.parent.mkdir(parents=True)
+        with zipfile.ZipFile(encoder_zip, "w") as archive:
+            archive.writestr("sub/weights.bin", b"weights")
+        stale_copy = encoder_zip.with_name(f"{ENC}_extracted")
+        stale_copy.mkdir()
+        cached_copy = self.store.cache_path("other.xxh3_64").with_name("other.xxh3_64_extracted")
+        cached_copy.mkdir(parents=True)
+        self._cached(CKPT)
+        self.store.promote(self._entry(checkpoint={"uid": CKPT}, encoder={"uid": ENC, "size": 7}))
+
+        self.assertEqual(unpack_directory_archives(self.root), 1)
+        self.assertEqual((encoder_zip / "sub" / "weights.bin").read_bytes(), b"weights")
+        self.assertFalse(stale_copy.exists())
+        self.assertFalse(cached_copy.exists())
+        # Nothing left to do on the next start
+        self.assertEqual(unpack_directory_archives(self.root), 0)
+
+    def test_unpack_resumes_after_the_archive_was_removed(self):
+        stored = self.store.model_path(ENC)
+        staging = stored.with_name(f"{ENC}.part")
+        (staging / "sub").mkdir(parents=True)
+        (staging / "sub" / "weights.bin").write_bytes(b"weights")
+        self.store.save_registry([self._entry(checkpoint={"uid": CKPT}, encoder={"uid": ENC})])
+
+        self.assertEqual(unpack_directory_archives(self.root), 1)
+        self.assertTrue((stored / "sub" / "weights.bin").exists())
+        self.assertFalse(staging.exists())
+
+    def test_ingest_skips_uids_already_present(self):
+        self._cached(CKPT, b"cached")
+        source = self.root / "model.ckpt"
+        source.write_bytes(b"host")
+        self.assertFalse(self.store.ingest(CKPT, source))
+        self.assertFalse(self.store.model_path(CKPT).exists())
+        with self.assertRaises(FileNotFoundError):
+            self.store.ingest(ENC, self.root / "missing.ckpt")
 
 
 class TestLocalEngineSharedModels(unittest.TestCase):

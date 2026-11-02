@@ -103,6 +103,50 @@ class TestCachePolicy(unittest.TestCase):
         self.assertFalse(stale.exists())
         self.assertTrue(fresh.exists())
 
+    def _directory_entry(self, uid: str, sizes: list[int], idle: float) -> Path:
+        path = self.root / path_from_uid(uid)
+        (path / "sub").mkdir(parents=True)
+        for index, size in enumerate(sizes):
+            member = path / "sub" / f"file{index}.bin"
+            with open(member, "wb") as f:
+                f.truncate(size)
+            os.utime(member, (self.now - idle, self.now - idle))
+        for directory in (path / "sub", path):
+            os.utime(directory, (self.now - idle, self.now - idle))
+        return path
+
+    def test_directory_is_one_entry_and_is_evicted_whole(self):
+        path = self._directory_entry("dir.xxh3_64", [MIB, MIB], idle=10 * DAY)
+        recent = self._entry("recent.xxh3_64", MIB, idle=HOUR)
+
+        dry = self._policy(max_bytes=2 * MIB).sweep(dry_run=True)
+        self.assertEqual(dry["entry_count"], 2)
+        self.assertEqual(dry["total_bytes"], 3 * MIB)
+
+        report = self._policy(max_bytes=2 * MIB).sweep()
+        self.assertEqual(self._evicted(report), ["dir.xxh3_64"])
+        self.assertEqual(report["evicted_bytes"], 2 * MIB)
+        self.assertFalse(path.exists())
+        self.assertTrue(recent.exists())
+
+    def test_leased_directory_is_kept(self):
+        path = self._directory_entry("dir.xxh3_64", [2 * MIB], idle=10 * DAY)
+        policy = self._policy(max_bytes=MIB)
+        self.active_jobs.add("job")
+        policy.lease("job", ["dir.xxh3_64"])
+        self.assertEqual(self._evicted(policy.sweep()), [])
+        self.assertTrue(path.exists())
+
+    def test_stale_upload_directories_are_removed(self):
+        stale = self._directory_entry("stale.xxh3_64.part", [10], idle=2 * DAY)
+        # Still receiving files, so its newest member is recent even though the directory is old
+        active = self._directory_entry("active.xxh3_64.part", [10], idle=2 * DAY)
+        os.utime(active / "sub" / "file0.bin", None)
+        report = self._policy(max_bytes=0).sweep()
+        self.assertEqual(report["stale_parts_removed"], 1)
+        self.assertFalse(stale.exists())
+        self.assertTrue(active.exists())
+
     def test_dry_run_deletes_nothing(self):
         path = self._entry("a.xxh3_64", 2 * MIB, idle=10 * DAY)
         report = self._policy(max_bytes=MIB).sweep(dry_run=True)

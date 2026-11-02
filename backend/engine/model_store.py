@@ -21,6 +21,7 @@ A file reference names a file in the store by "uid". It can give a "path" instea
 already exists on this machine and is used where it is; a "uid" next to a path saves recomputing it.
 That is the only place paths appear. Files enter the store by promotion, which moves them out of the
 cache, and leave it by demotion, which moves them back so they become ordinary evictable entries.
+A directory, such as an encoder, is stored as the directory itself under its UID.
 """
 import json
 import os
@@ -29,6 +30,7 @@ import uuid
 import zipfile
 from pathlib import Path
 
+from utils.filesystem import get_path_size, remove_path
 from utils.uid import path_from_uid
 
 MODELS_DIR = "models"
@@ -60,8 +62,8 @@ def _entry_key(entry: dict) -> tuple:
 
 
 def _sizes_match(path: Path, size: int | None) -> bool:
-    # Directories are uploaded zipped, so a zip's size won't match the directory's recorded size
-    return not size or path.stat().st_size == size or zipfile.is_zipfile(path)
+    # A directory is stored as the directory, so its recorded size is the total of its files
+    return not size or get_path_size(path) == size
 
 
 class ModelStore:
@@ -138,6 +140,29 @@ class ModelStore:
                 kwargs[f"{prefix}_size"] = ref.get("size")
         return kwargs
 
+    def ingest(self, uid: str, source: Path) -> bool:
+        """
+        Copies a file or directory on this machine into the store under uid, for promote() to pick
+        up. Returns False, copying nothing, if the store or the cache already has the UID.
+        """
+        source = Path(source)
+        if not source.exists():
+            raise FileNotFoundError(f"Nothing to ingest at {source}")
+        if self.resolve(uid):
+            return False
+        destination = self.model_path(uid)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        staging = destination.with_name(f"{destination.name}.part")
+        try:
+            if source.is_dir():
+                shutil.copytree(source, staging)
+            else:
+                shutil.copyfile(source, staging)
+            os.replace(staging, destination)
+        finally:
+            remove_path(staging)
+        return True
+
     # Promotion and demotion
 
     def promote(self, entry: dict) -> dict:
@@ -212,7 +237,7 @@ class ModelStore:
             cached = self.cache_path(uid)
             cached.parent.mkdir(parents=True, exist_ok=True)
             if cached.exists():
-                stored.unlink()
+                remove_path(stored)
             else:
                 os.replace(stored, cached)
                 # Back in the cache as if just used, so it ages out under the normal policy
@@ -269,3 +294,43 @@ def migrate_legacy_registry(data_root: Path, legacy_path: Path) -> bool:
     store.save_registry(entries)
     shutil.move(str(legacy_path), str(legacy_path.with_name(f"{legacy_path.name}.migrated")))
     return True
+
+
+def unpack_directory_archives(data_root: Path) -> int:
+    """
+    Converts data from when directory assets were kept zipped. Each shared model encoder stored as a
+    zip is unpacked into a directory under the same UID, and every <uid>_extracted copy that loading
+    used to leave beside an archive is deleted. Zips in the cache are left alone: they no longer
+    match their recorded size, so /execute evicts them and the client uploads the directory again.
+    Returns how many archives were unpacked.
+    """
+    store = ModelStore(data_root)
+    try:
+        entries = store.load_registry()
+    except Exception as e:
+        print(f"Could not read the shared models registry to unpack archives: {e}")
+        entries = []
+
+    unpacked = 0
+    for entry in entries:
+        ref = entry.get("encoder")
+        uid = ref.get("uid") if isinstance(ref, dict) else None
+        if not uid:
+            continue
+        stored = store.model_path(uid)
+        staging = stored.with_name(f"{stored.name}.part")
+        if stored.is_file() and zipfile.is_zipfile(stored):
+            remove_path(staging)
+            with zipfile.ZipFile(stored) as archive:
+                archive.extractall(staging)
+            stored.unlink()
+        # Also completes a run interrupted after the archive was deleted, when only staging is left
+        if staging.is_dir() and not stored.exists():
+            os.replace(staging, stored)
+            unpacked += 1
+
+    for root in (store.models_dir, store.data_root / "cache"):
+        for extracted in root.glob("*/*_extracted"):
+            if extracted.is_dir():
+                remove_path(extracted)
+    return unpacked

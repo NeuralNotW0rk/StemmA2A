@@ -273,5 +273,85 @@ class TestRemoteSharedModels(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(received[0]["checkpoint"], {"uid": "ckpt.xxh3_64", "size": 7})
 
 
+class TestDirectoryUpload(unittest.IsolatedAsyncioTestCase):
+    """A directory goes up file by file, unarchived, and is stored as the directory on the engine."""
+
+    async def asyncSetUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        root = Path(self.temp_dir.name)
+        self.source = root / "encoder"
+        (self.source / "sub").mkdir(parents=True)
+        (self.source / "config.json").write_bytes(b'{"a": 1}')
+        (self.source / "sub" / "weights.bin").write_bytes(b"0123456789")
+        self.engine_data = root / "engine"
+        self.requests: list[str] = []
+        self.fail_next_member: str | None = None
+
+    async def asyncTearDown(self):
+        self.temp_dir.cleanup()
+
+    async def _upload(self, uid: str) -> bool:
+        from aiohttp import web
+        from aiohttp.test_utils import TestServer
+        from engine import uploads
+
+        async def upload(request):
+            form = await request.post()
+            relpath = form.get("relpath")
+            self.requests.append(relpath)
+            if relpath and relpath == self.fail_next_member:
+                self.fail_next_member = None
+                return web.json_response({"error": "dropped"}, status=502)
+            uploads.write_chunk(
+                self.engine_data, form["uid"], form["file"].file.read(), int(form["chunk_index"]),
+                int(form["total_chunks"]), int(form["total_size"]), relpath,
+            )
+            return web.json_response({})
+
+        async def finalize(request):
+            body = await request.json()
+            try:
+                uploads.finalize_directory(self.engine_data, body["uid"], body["total_size"])
+            except uploads.UploadError as e:
+                return web.json_response({"error": str(e)}, status=409)
+            return web.json_response({})
+
+        web_app = web.Application()
+        web_app.router.add_post("/upload", upload)
+        web_app.router.add_post("/upload/finalize", finalize)
+        async with TestServer(web_app) as server:
+            engine = RemoteEngine(remote_url=str(server.make_url("")).rstrip("/"))
+            import aiohttp
+            async with aiohttp.ClientSession() as session:
+                with patch("engine.remote_engine.asyncio.sleep", AsyncMock()):
+                    return await engine._upload_single_asset(uid, str(self.source), session)
+
+    async def test_directory_is_sent_unarchived_and_stored_as_a_directory(self):
+        from engine import uploads
+        from utils.uid import XXH3_64
+
+        uid = XXH3_64().from_directory(self.source)
+        self.assertTrue(await self._upload(uid))
+        self.assertEqual(self.requests, ["config.json", "sub/weights.bin"])
+        stored = uploads.destination_path(self.engine_data, uid)
+        self.assertTrue(stored.is_dir())
+        self.assertEqual(XXH3_64().from_directory(stored), uid)
+
+    async def test_retry_resumes_from_the_failed_file(self):
+        from utils.uid import XXH3_64
+
+        self.fail_next_member = "sub/weights.bin"
+        self.assertTrue(await self._upload(XXH3_64().from_directory(self.source)))
+        # config.json is not sent again on the retry
+        self.assertEqual(self.requests, ["config.json", "sub/weights.bin", "sub/weights.bin"])
+
+    async def test_contents_that_do_not_match_the_uid_are_not_retried(self):
+        from engine import uploads
+
+        self.assertFalse(await self._upload("0000000000000000.xxh3_64"))
+        self.assertEqual(self.requests, ["config.json", "sub/weights.bin"])
+        self.assertFalse(uploads.destination_path(self.engine_data, "0000000000000000.xxh3_64").exists())
+
+
 if __name__ == "__main__":
     unittest.main()

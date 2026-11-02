@@ -525,6 +525,20 @@ def run_global_migrations(data_cache_root: Path) -> None:
     print("Running global migrations...")
     migrate_sharded_cache(data_cache_root)
     migrate_shared_models_registry(data_cache_root)
+    migrate_directory_archives(data_cache_root)
+
+
+def migrate_directory_archives(data_cache_root: Path) -> None:
+    """Unpacks shared model encoders stored as zips, now that directories are stored as directories."""
+    from engine.model_store import unpack_directory_archives
+
+    try:
+        unpacked = unpack_directory_archives(data_cache_root)
+    except Exception as e:
+        print(f"Failed to unpack directory archives in {data_cache_root}: {e}")
+        return
+    if unpacked:
+        print(f"Unpacked {unpacked} zipped shared model encoder(s) into directories")
 
 
 def migrate_shared_models_registry(data_cache_root: Path) -> None:

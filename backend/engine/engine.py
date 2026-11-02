@@ -16,12 +16,14 @@ from .model_adapters.stable_audio_adapter import StableAudioAdapter
 from .model_adapters.stylegan_adapter import StyleGANAdapter
 from .model_cache import ModelCache
 
+ADAPTER_REGISTRY = {
+    'stable_audio_tools': StableAudioAdapter,
+    'stylegan2': StyleGANAdapter
+}
+
 class Engine(ABC):
     def __init__(self, data_root: str = None):
-        self.adapter_registry = {
-            'stable_audio_tools': StableAudioAdapter,
-            'stylegan2': StyleGANAdapter
-        }
+        self.adapter_registry = dict(ADAPTER_REGISTRY)
 
         if data_root:
             self.data_root = Path(data_root)

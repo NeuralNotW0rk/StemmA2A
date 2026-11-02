@@ -144,23 +144,11 @@ class StableAudioAdapter(ModelAdapter):
             del self.model
             self.model = None
 
-        # Resolve encoder asset path (extract if zip archive)
+        # A directory encoder is stored as the directory itself, wherever it lives
         encoder_asset = getattr(info, "encoder", None)
         actual_encoder_path: Path | None = None
-        if encoder_asset and encoder_asset.path:
-            raw_path = encoder_asset.path
-            if os.path.exists(raw_path):
-                if os.path.isfile(raw_path):
-                    extracted_dir = Path(raw_path + "_extracted")
-                    if not extracted_dir.exists():
-                        import zipfile
-                        print(f"Extracting encoder archive {raw_path} to {extracted_dir}...")
-                        extracted_dir.mkdir(parents=True, exist_ok=True)
-                        with zipfile.ZipFile(raw_path, 'r') as zip_ref:
-                            zip_ref.extractall(extracted_dir)
-                    actual_encoder_path = extracted_dir
-                else:
-                    actual_encoder_path = Path(raw_path)
+        if encoder_asset and encoder_asset.path and os.path.exists(encoder_asset.path):
+            actual_encoder_path = Path(encoder_asset.path)
 
         if verify:
             # 1. Verify Checkpoint Asset

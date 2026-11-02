@@ -7,6 +7,14 @@ def check_dir(dir):
         os.makedirs(dir, exist_ok=True)
     return dir
 
+def remove_path(path: Path) -> None:
+    """Deletes a file or a directory tree, if there is one."""
+    import shutil
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    else:
+        path.unlink(missing_ok=True)
+
 def get_path_size(path: Path) -> int:
     """
     Returns the total size in bytes for a file or a directory (sum of all file sizes recursively).

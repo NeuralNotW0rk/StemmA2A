@@ -78,11 +78,15 @@ Access rejected the credentials.
    them to `/execute`.
 2. **Upload what's missing.** If the server lacks any assets, it replies
    `422 {"missing_uids": [...]}`. The client uploads those files in 4 MiB chunks through `/upload`,
-   with 2 uploads at a time and 3 attempts per file. Directories are zipped first. The client then
-   retries the request, for at most 3 rounds. The chunk size keeps each request under Cloudflare's
-   roughly 100 s limit.
-3. **Validate.** The server deletes cached files that are empty or the wrong size, so they get
-   uploaded again.
+   with 2 uploads at a time and 3 attempts per asset. The client then retries the request, for at
+   most 3 rounds. The chunk size keeps each request under Cloudflare's roughly 100 s limit.
+   - **Directories** (such as encoders) are never archived. Each file is sent with its path inside
+     the directory, and a retry resumes from the file that failed. `POST /upload/finalize` then
+     checks the staged directory's total size and `from_directory` UID, and stores it as a
+     directory at `cache/xx/<uid>`. A directory that doesn't match its UID is discarded and not
+     retried.
+3. **Validate.** The server deletes cached entries that are empty or the wrong size, so they get
+   uploaded again. A directory's size is the total of its files, the same size the client records.
 4. **Download results.** When a job finishes, the client downloads each result from
    `/download_asset/<uid>` into `backend/tmp/cache/`. The host then ingests the results into the
    project.
@@ -93,6 +97,13 @@ and matches them by checkpoint or encoder UID. **Share with Engine** sends a reg
 `POST /shared_models`. Files are named by UID only. If the server lacks any, it replies
 `422 {"missing_uids": [...]}` and the client uploads them through the same chunked `/upload` as for
 `/execute`. The server then moves them from the cache into the store.
+
+To register a model whose files are already on the server, copy them in instead of uploading them:
+run [scripts/ingest_model.py](../../backend/scripts/ingest_model.py) inside the container, with
+paths as the container sees them. It computes UIDs with the model's adapter, the same way a client
+does, copies the files into the store and adds the registry entry. Run it with `--dry-run` first and
+check that the UIDs match the model in your project. Restart the engine service for the model to
+appear in its shared models list.
 
 ---
 
@@ -116,8 +127,9 @@ when it was last used, never at what the file holds.
 - **Copying files in.** Last use comes from modified times, so files copied into `cache/` with
   their original times kept (for example `rsync -a`) look as old as those times. Copy without
   keeping times, or `touch` the files afterwards.
-- **Upload staging.** `.part` files older than a day are left over from failed uploads and are
-  deleted.
+- **Directories** count as one entry, sized by the total of their files, and are evicted whole.
+- **Upload staging.** `.part` files and directories with nothing written for a day are left over
+  from failed uploads and are deleted.
 
 The cap covers `cache/` only, not `huggingface/` or the other folders in the data root. A sweep runs
 at startup and then on an interval. These settings are read from the host's `.env` through

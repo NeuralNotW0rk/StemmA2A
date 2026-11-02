@@ -13,9 +13,11 @@ import torch
 from pydantic import ValidationError
 
 from engine.engine_provider import EngineProvider
+from engine import uploads
 from engine.cache_policy import CachePolicy, GIB, touch
 from engine.model_store import ModelStore, MissingModelFiles
 from engine.results import map_result_elements
+from utils.filesystem import get_path_size, remove_path
 from utils.uid import path_from_uid
 from utils.migrations import run_global_migrations
 from utils.log_capture import start_log_capture
@@ -208,8 +210,6 @@ async def execute():
                 for asset in element.get_assets():
                     required_assets[asset.uid] = asset
 
-        import zipfile
-
         # The job ID is fixed up front so the job's inputs can be leased before it is queued
         if not job_id:
             job_id = str(uuid.uuid4())
@@ -225,33 +225,22 @@ async def execute():
                 asset = required_assets.get(uid)
                 if not cache_file.exists():
                     missing_uids.append(uid)
-                elif cache_file.stat().st_size == 0:
-                    print(f"[Engine Service] Warning: Zero-byte cached asset '{uid}'. Evicting from cache.")
-                    try:
-                        cache_file.unlink()
-                    except Exception as e:
-                        pass
-                    missing_uids.append(uid)
-                elif asset and asset.size and asset.size > 0:
-                    size_matches = (cache_file.stat().st_size == asset.size)
-                    is_valid_archive = False
-                    if not size_matches:
-                        try:
-                            is_valid_archive = zipfile.is_zipfile(cache_file)
-                        except Exception:
-                            is_valid_archive = False
-
-                    if not size_matches and not is_valid_archive:
-                        print(f"[Engine Service] Warning: Corrupt or incomplete cached asset '{uid}' (expected {asset.size} bytes, found {cache_file.stat().st_size} bytes). Evicting from cache.")
-                        try:
-                            cache_file.unlink()
-                        except Exception as e:
-                            print(f"Failed to remove corrupt cache file {cache_file}: {e}")
-                        missing_uids.append(uid)
-                    else:
-                        touch(cache_file)
+                    continue
+                # A directory asset is stored as the directory, so its recorded size applies as-is
+                cached_size = get_path_size(cache_file)
+                if cached_size == 0 and cache_file.is_file():
+                    problem = "Zero-byte cached asset"
+                elif asset and asset.size and asset.size > 0 and cached_size != asset.size:
+                    problem = f"Corrupt or incomplete cached asset (expected {asset.size} bytes, found {cached_size} bytes)"
                 else:
                     touch(cache_file)
+                    continue
+                print(f"[Engine Service] Warning: {problem} '{uid}'. Evicting from cache.")
+                try:
+                    remove_path(cache_file)
+                except Exception as e:
+                    print(f"Failed to remove corrupt cache entry {cache_file}: {e}")
+                missing_uids.append(uid)
 
             if missing_uids:
                 print(f"[Engine Service] Requesting missing/corrupt assets from client: {missing_uids}")
@@ -357,6 +346,8 @@ def download_asset(asset_id):
                 print(f"[Engine Service] Warning: [Download] Asset not found: {asset_id}")
                 return jsonify({"error": f"Asset not found for id {asset_id}"}), 404
         
+        if asset_path.is_dir():
+            return jsonify({"error": f"Asset {asset_id} is a directory, which can't be downloaded as a file"}), 400
         touch(asset_path)
         file_size = os.path.getsize(asset_path)
         print(f"[Engine Service] [Download] Serving asset '{asset_id}' ({_format_bytes(file_size)}) to client...")
@@ -380,57 +371,58 @@ def _get_upload_lock(uid: str) -> threading.Lock:
 @app.route("/upload", methods=["POST"])
 def upload():
     """
-    Uploads a file to the engine's local data store using atomic staging.
+    Receives one chunk of a file asset, or of one file inside a directory asset when the form has a
+    "relpath". A directory asset is completed by /upload/finalize. See engine/uploads.py.
     """
     if 'file' not in request.files:
         return jsonify({"error": "No file part"}), 400
-    
+
     file = request.files['file']
     if file.filename == '':
         return jsonify({"error": "No selected file"}), 400
 
     uid = request.form.get("uid") or file.filename
+    relpath = request.form.get("relpath") or None
     chunk_index = int(request.form.get("chunk_index", 0))
     total_chunks = int(request.form.get("total_chunks", 1))
     total_size = int(request.form.get("total_size", 0))
+    label = f"{uid}/{relpath}" if relpath else uid
 
-    if file:
-        destination = data_cache_root / path_from_uid(uid)
-        staging_path = data_cache_root / f"{path_from_uid(uid)}.part"
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        
-        chunk_data = file.read()
-        chunk_len = len(chunk_data)
-        
-        lock = _get_upload_lock(uid)
-        with lock:
-            mode = 'wb' if chunk_index == 0 else 'ab'
-            with open(staging_path, mode) as f:
-                f.write(chunk_data)
-                
+    chunk_data = file.read()
+    try:
+        with _get_upload_lock(uid):
             if total_chunks > 1:
-                print(f"[Engine Service] [Upload] Received chunk {chunk_index + 1}/{total_chunks} for '{uid}' ({_format_bytes(chunk_len)})")
+                print(f"[Engine Service] [Upload] Received chunk {chunk_index + 1}/{total_chunks} for '{label}' ({_format_bytes(len(chunk_data))})")
+            complete = uploads.write_chunk(
+                data_cache_root, uid, chunk_data, chunk_index, total_chunks, total_size, relpath
+            )
+    except uploads.UploadError as e:
+        print(f"[Engine Service] [Upload Error] {e}")
+        return jsonify({"error": str(e)}), 400
 
-            if chunk_index == total_chunks - 1:
-                # Verify the fully reassembled file size matches the original
-                reconstructed_size = os.path.getsize(staging_path)
-                if total_size > 0 and reconstructed_size != total_size:
-                    if staging_path.exists():
-                        os.remove(staging_path)  # Clean up the corrupted file
-                    err_msg = f"Size mismatch for '{uid}'. Expected {_format_bytes(total_size)}, got {_format_bytes(reconstructed_size)}"
-                    print(f"[Engine Service] [Upload Error] {err_msg}")
-                    return jsonify({"error": err_msg}), 400
-                    
-                # Atomically promote staging file to final CAS destination
-                if destination.exists():
-                    os.remove(destination)
-                staging_path.replace(destination)
+    if complete:
+        where = "staged" if relpath else "saved to cache"
+        print(f"[Engine Service] [Upload] Completed '{label}' ({_format_bytes(total_size)}, {total_chunks} chunk(s)) {where}.")
+        return jsonify({"message": f"File {label} uploaded successfully"})
+    return jsonify({"message": f"Chunk {chunk_index} of {label} uploaded"})
 
-                print(f"[Engine Service] [Upload] Completed '{uid}' ({_format_bytes(reconstructed_size)}, {total_chunks} chunk(s)) saved to cache.")
-                return jsonify({"message": f"File {uid} uploaded successfully"})
-            return jsonify({"message": f"Chunk {chunk_index} of {uid} uploaded"})
 
-    return jsonify({"error": "File upload failed"}), 500
+@app.route("/upload/finalize", methods=["POST"])
+def finalize_upload():
+    """Completes a directory asset whose files were sent to /upload, after checking it against its UID."""
+    data = request.get_json() or {}
+    uid = data.get("uid")
+    if not uid:
+        return jsonify({"error": "uid is required"}), 400
+    total_size = int(data.get("total_size", 0))
+    try:
+        with _get_upload_lock(uid):
+            uploads.finalize_directory(data_cache_root, uid, total_size)
+    except uploads.UploadError as e:
+        print(f"[Engine Service] [Upload Error] {e}")
+        return jsonify({"error": str(e)}), 409
+    print(f"[Engine Service] [Upload] Completed directory '{uid}' ({_format_bytes(total_size)}) saved to cache.")
+    return jsonify({"message": f"Directory {uid} uploaded successfully"})
 
 
 # --------------------
