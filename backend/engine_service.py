@@ -15,6 +15,7 @@ from pydantic import ValidationError
 from engine.engine_provider import EngineProvider
 from engine import uploads
 from engine.cache_policy import CachePolicy, GIB, touch
+from engine.inbox import Inbox
 from engine.model_store import ModelStore, MissingModelFiles
 from engine.results import map_result_elements
 from utils.filesystem import get_path_size, remove_path
@@ -90,6 +91,8 @@ cache_policy = CachePolicy(
 )
 # Shared model files, outside the cache and its eviction
 model_store = ModelStore(data_cache_root)
+# Drop folder for copying assets into the cache by hand (see engine/inbox.py)
+inbox = Inbox(data_cache_root, cache_policy.lock, model_store.model_path)
 
 # --------------------
 #  Health Check
@@ -368,6 +371,11 @@ def _get_upload_lock(uid: str) -> threading.Lock:
         return _upload_locks[uid]
 
 
+def _already_present(uid: str) -> bool:
+    """Whether the cache or the model store already holds uid, so an upload of it is redundant."""
+    return uploads.destination_path(data_cache_root, uid).exists() or model_store.model_path(uid).exists()
+
+
 @app.route("/upload", methods=["POST"])
 def upload():
     """
@@ -391,6 +399,10 @@ def upload():
     chunk_data = file.read()
     try:
         with _get_upload_lock(uid):
+            if _already_present(uid):
+                # Arrived another way meanwhile, e.g. through the inbox; the client can stop sending
+                remove_path(uploads.staging_path(data_cache_root, uid))
+                return jsonify({"message": f"{uid} is already on the engine", "already_present": True})
             if total_chunks > 1:
                 print(f"[Engine Service] [Upload] Received chunk {chunk_index + 1}/{total_chunks} for '{label}' ({_format_bytes(len(chunk_data))})")
             complete = uploads.write_chunk(
@@ -417,6 +429,9 @@ def finalize_upload():
     total_size = int(data.get("total_size", 0))
     try:
         with _get_upload_lock(uid):
+            if _already_present(uid):
+                remove_path(uploads.staging_path(data_cache_root, uid))
+                return jsonify({"message": f"{uid} is already on the engine", "already_present": True})
             uploads.finalize_directory(data_cache_root, uid, total_size)
     except uploads.UploadError as e:
         print(f"[Engine Service] [Upload Error] {e}")
@@ -459,6 +474,7 @@ if __name__ == "__main__":
     # With debug on, this block also runs in the reloader's watcher process; sweep only in the server
     if os.environ.get("WERKZEUG_RUN_MAIN") == "true":
         cache_policy.start_background_sweeps(float(os.environ.get("ENGINE_CACHE_SWEEP_MINUTES", "15")) * 60)
+        inbox.start_background_scans(float(os.environ.get("ENGINE_INBOX_SCAN_SECONDS", "10")))
     app.run(
         host="0.0.0.0",
         port=5001,

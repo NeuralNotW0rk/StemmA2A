@@ -543,7 +543,9 @@ class RemoteEngine(Engine):
                         # A retry resumes from the first file not yet sent in full
                         for index, (path, relpath) in enumerate(files):
                             if index not in sent:
-                                await self._send_asset_chunks(asset_uid, str(path), session, relpath, tracker)
+                                if await self._send_asset_chunks(asset_uid, str(path), session, relpath, tracker):
+                                    print(f"[RemoteEngine Upload] '{asset_uid}' is already on the engine; stopped uploading it")
+                                    return True
                                 sent.add(index)
                                 tracker.files_done = len(sent)
                         if source.is_dir():
@@ -579,10 +581,12 @@ class RemoteEngine(Engine):
         session: aiohttp.ClientSession,
         relpath: str | None = None,
         tracker: _TransferTracker | None = None,
-    ) -> None:
+    ) -> bool:
         """
         Sends a file to the engine service chunk by chunk, starting from the first chunk. With
         relpath, the file is that member of the directory asset asset_uid. Progress goes to tracker.
+        Returns True, having stopped early, if the engine already has asset_uid (for example because
+        it was copied into its inbox meanwhile).
         """
         asset_start = time.time()
         uploaded_asset_bytes = 0
@@ -610,6 +614,12 @@ class RemoteEngine(Engine):
                 chunk_start = time.time()
                 async with session.post(f"{self.remote_url}/upload", data=data) as response:
                     response.raise_for_status()
+                    try:
+                        body = await response.json(content_type=None)
+                    except ValueError:
+                        body = None
+                if isinstance(body, dict) and body.get("already_present"):
+                    return True
                 chunk_duration = max(time.time() - chunk_start, 0.001)
                 chunk_speed = (chunk_len / (1024 * 1024)) / chunk_duration
                 if tracker:
@@ -621,6 +631,7 @@ class RemoteEngine(Engine):
         asset_elapsed = max(time.time() - asset_start, 0.001)
         asset_speed = (file_size / (1024 * 1024)) / asset_elapsed
         print(f"[RemoteEngine Upload] Uploaded '{label}' in {asset_elapsed:.2f}s (avg {asset_speed:.2f} MB/s)")
+        return False
 
     async def upload_missing_assets(
         self,

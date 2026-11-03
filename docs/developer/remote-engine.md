@@ -98,12 +98,34 @@ and matches them by checkpoint or encoder UID. **Share with Engine** sends a reg
 `422 {"missing_uids": [...]}` and the client uploads them through the same chunked `/upload` as for
 `/execute`. The server then moves them from the cache into the store.
 
-To register a model whose files are already on the server, copy them in instead of uploading them:
-run [scripts/ingest_model.py](../../backend/scripts/ingest_model.py) inside the container, with
-paths as the container sees them. It computes UIDs with the model's adapter, the same way a client
-does, copies the files into the store and adds the registry entry. Run it with `--dry-run` first and
-check that the UIDs match the model in your project. Restart the engine service for the model to
-appear in its shared models list.
+### Copying files onto the server instead of uploading them
+
+When a file is already on the server, or copying it there is faster than uploading, there are two
+ways to hand it to the engine service.
+
+**Inbox.** Copy the file or directory into `<data>/inbox/` (on the host, `${LOCAL_DATA_PATH}/inbox/`)
+and name it exactly by its UID, such as `f28c7dd48e02c8a6.xxh3_64`. The client's upload log and the
+engine's "Requesting missing/corrupt assets" line both show the UIDs, and hovering over a transfer
+in the app shows its UID too. The engine scans the inbox every 10 seconds. An entry that is unchanged
+between two scans is moved into `cache/xx/<uid>` and marked as just used. See
+[inbox.py](../../backend/engine/inbox.py).
+- **Copying.** Copy under `<uid>.part` and rename it when the copy finishes. The inbox ignores
+  `.part` names, and some copy tools set the final file size before they've written everything.
+- **Checks.** A directory must hash to its name, or it stays in the inbox and the engine logs why. A
+  file's UID comes from its model adapter, so the inbox can't check it. A wrong or incomplete file
+  fails the size check in `/execute` and is uploaded instead.
+- **Uploads already running.** An upload of the same UID stops at its next chunk, because `/upload`
+  replies `already_present` once the engine has it.
+
+The inbox only fills the cache, so the files can still be evicted. To keep a model permanently, share
+it afterwards with **Share with Engine**; its files are then moved from the cache into the store.
+
+**Ingest script.** [scripts/ingest_model.py](../../backend/scripts/ingest_model.py) computes the
+UIDs itself with the model's adapter, copies the files into the store and adds the registry entry, so
+no renaming is needed. It needs the backend's Python environment. Run it in the container with paths
+as the container sees them, or on the host with `LOCAL_DATA_PATH` set to the host data folder. Run it
+with `--dry-run` first and check that the UIDs match the model in your project. Restart the engine
+service for the model to appear in its shared models list.
 
 ---
 
@@ -140,6 +162,7 @@ at startup and then on an interval. These settings are read from the host's `.en
 | `ENGINE_CACHE_MAX_GB` | `50` | Cap in GiB. `0` turns eviction off. |
 | `ENGINE_CACHE_MIN_AGE_HOURS` | `24` | Files used more recently than this are never evicted. |
 | `ENGINE_CACHE_SWEEP_MINUTES` | `15` | Interval between background sweeps. |
+| `ENGINE_INBOX_SCAN_SECONDS` | `10` | Interval between scans of the inbox. |
 
 > A job result that the client hasn't downloaded within the minimum age can be evicted. Results
 > normally download within seconds, because the client polls running jobs.

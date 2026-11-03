@@ -286,6 +286,8 @@ class TestDirectoryUpload(unittest.IsolatedAsyncioTestCase):
         self.engine_data = root / "engine"
         self.requests: list[str] = []
         self.fail_next_member: str | None = None
+        # Members after which the engine reports the asset as already present
+        self.present_after: int | None = None
 
     async def asyncTearDown(self):
         self.temp_dir.cleanup()
@@ -298,6 +300,8 @@ class TestDirectoryUpload(unittest.IsolatedAsyncioTestCase):
         async def upload(request):
             form = await request.post()
             relpath = form.get("relpath")
+            if self.present_after is not None and len(self.requests) >= self.present_after:
+                return web.json_response({"already_present": True})
             self.requests.append(relpath)
             if relpath and relpath == self.fail_next_member:
                 self.fail_next_member = None
@@ -373,6 +377,17 @@ class TestDirectoryUpload(unittest.IsolatedAsyncioTestCase):
         [transfer] = engines[0].get_transfers()
         self.assertEqual(transfer["state"], "failed")
         self.assertIn("hash to", transfer["error"])
+
+    async def test_upload_stops_when_the_engine_already_has_the_asset(self):
+        from utils.uid import XXH3_64
+
+        self.present_after = 1
+        engines = []
+        self.assertTrue(await self._upload(XXH3_64().from_directory(self.source), via_engine=engines))
+        # The second file was never sent, and nothing was finalized
+        self.assertEqual(self.requests, ["config.json"])
+        [transfer] = engines[0].get_transfers()
+        self.assertEqual(transfer["state"], "done")
 
     async def test_contents_that_do_not_match_the_uid_are_not_retried(self):
         from engine import uploads

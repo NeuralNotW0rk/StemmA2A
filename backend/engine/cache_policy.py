@@ -46,7 +46,7 @@ def touch(path: Path) -> None:
         pass
 
 
-def _size_and_mtime(path: Path) -> tuple[int, float]:
+def size_and_mtime(path: Path) -> tuple[int, float]:
     """A file's size and mtime, or a directory's total size and the newest mtime inside it."""
     stat = path.stat()
     if not path.is_dir():
@@ -117,7 +117,7 @@ class CachePolicy:
                 continue
             for path in shard.iterdir():
                 try:
-                    size, mtime = _size_and_mtime(path)
+                    size, mtime = size_and_mtime(path)
                 except FileNotFoundError:
                     continue
                 if path.name.endswith(".part"):
