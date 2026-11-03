@@ -5,6 +5,24 @@ from pathlib import Path
 ENABLE_MIGRATIONS = os.environ.get("ENABLE_MIGRATIONS", "true").lower() == "true"
 
 
+def readdress(value, renamed: dict[str, str]):
+    """
+    Returns value (parsed graph.json, or any part of it) with each old ID in renamed replaced by its
+    new one wherever it appears whole: as a value, a key, or either end of an edge ID like a->b.
+    """
+    if isinstance(value, str):
+        if value in renamed:
+            return renamed[value]
+        if "->" in value:
+            return "->".join(renamed.get(part, part) for part in value.split("->"))
+        return value
+    if isinstance(value, list):
+        return [readdress(v, renamed) for v in value]
+    if isinstance(value, dict):
+        return {readdress(k, renamed): readdress(v, renamed) for k, v in value.items()}
+    return value
+
+
 def migrate_sharded_cache(root_dir: Path) -> None:
     """
     Migrates any old-style 2-character sharded cache folders
@@ -354,21 +372,7 @@ def migrate_genome_encoding(project_path: Path) -> None:
             old_files.append(genome_path)
 
     if readdressed:
-        def swap(value):
-            """Replaces old uids wherever they appear whole, including either end of an edge ID like a->b."""
-            if isinstance(value, str):
-                if value in readdressed:
-                    return readdressed[value]
-                if "->" in value:
-                    return "->".join(readdressed.get(part, part) for part in value.split("->"))
-                return value
-            if isinstance(value, list):
-                return [swap(v) for v in value]
-            if isinstance(value, dict):
-                return {swap(k): swap(v) for k, v in value.items()}
-            return value
-
-        data = swap(data)
+        data = readdress(data, readdressed)
         for node in data.get("graph", {}).get("elements", {}).get("nodes", []):
             file_info = node.get("data", {}).get("file")
             if isinstance(file_info, dict) and file_info.get("uid") in new_paths:
