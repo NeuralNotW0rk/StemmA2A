@@ -102,7 +102,13 @@ class _TransferTracker:
         # Jobs waiting on this transfer, including ones that joined it in flight
         self.job_ids: set[str] = set()
         self.started_at = time.time()
+        # When it left the queue, so the UI can tell a slow transfer from one that waited for a slot
+        self.active_at: float | None = None
         self.finished_at: float | None = None
+
+    def activate(self) -> None:
+        self.state = "active"
+        self.active_at = time.time()
 
     def add_bytes(self, count: int, seconds: float) -> None:
         self.bytes_done += count
@@ -134,6 +140,7 @@ class _TransferTracker:
             "error": self.error,
             "job_ids": sorted(self.job_ids),
             "started_at": self.started_at,
+            "active_at": self.active_at,
             "finished_at": self.finished_at,
         }
 
@@ -442,7 +449,7 @@ class RemoteEngine(Engine):
                 else:
                     name = getattr(result_element, "name", None) or result_element.id
                     tracker = self._start_transfer("download", result_element.id, name, job_id)
-                    tracker.state = "active"
+                    tracker.activate()
                     self._active_downloads[result_element.id] = tracker
                     is_initiator = True
 
@@ -533,7 +540,7 @@ class RemoteEngine(Engine):
             # Wait for an upload slot without blocking this event loop
             while not self._upload_slots.acquire(blocking=False):
                 await asyncio.sleep(0.05)
-            tracker.state = "active"
+            tracker.activate()
             try:
                 for attempt in range(1, UPLOAD_ATTEMPTS + 1):
                     tracker.attempt = attempt

@@ -19,7 +19,24 @@ export interface Transfer {
   error: string | null
   job_ids: string[]
   started_at: number
+  active_at: number | null
   finished_at: number | null
+}
+
+// Below both of these a transfer is too quick to be worth listing; it only clutters the Jobs panel
+const SLOW_TRANSFER_SECONDS = 2
+const LARGE_TRANSFER_BYTES = 100 * 1024 * 1024
+
+/**
+ * Whether a transfer is worth listing: a failed one, a large one, or one that has spent a while
+ * moving data. Time spent queued for an upload slot doesn't count, or every file of a batch would
+ * qualify by waiting its turn. The host stamps the times on this machine, so they compare to Date.now().
+ */
+export function isNotableTransfer(transfer: Transfer): boolean {
+  if (transfer.state === 'failed' || transfer.total_bytes >= LARGE_TRANSFER_BYTES) return true
+  if (transfer.active_at === null) return false
+  const end = transfer.finished_at ?? Date.now() / 1000
+  return end - transfer.active_at >= SLOW_TRANSFER_SECONDS
 }
 
 export const transferStore: Writable<Transfer[]> = writable([])
@@ -81,6 +98,29 @@ export function transferPercent(transfer: Transfer): number | null {
   if (transfer.state === 'done') return 100
   if (!transfer.total_bytes) return null
   return Math.min(100, (transfer.bytes_done / transfer.total_bytes) * 100)
+}
+
+/**
+ * One line for the transfers a job is waiting on, e.g. "Uploading model.ckpt: 42%" or, for a batch,
+ * "Uploading 8 files" (the count falls as they finish).
+ */
+export function jobTransferSummary(transfers: Transfer[]): string | null {
+  if (transfers.length === 0) return null
+  const allQueued = transfers.every((t) => t.state === 'queued')
+  const directions = new Set(transfers.map((t) => t.direction))
+  const verb = allQueued
+    ? 'Waiting to upload'
+    : directions.size > 1
+      ? 'Transferring'
+      : directions.has('upload')
+        ? 'Uploading'
+        : 'Downloading'
+
+  if (transfers.length > 1) return `${verb} ${transfers.length} files`
+
+  const [transfer] = transfers
+  const percent = transferPercent(transfer)
+  return `${verb} ${transfer.name}${percent !== null && transfer.state === 'active' ? `: ${Math.floor(percent)}%` : ''}`
 }
 
 /** One-line status, e.g. "1.20 / 3.40 GB · 5.1 MB/s". */

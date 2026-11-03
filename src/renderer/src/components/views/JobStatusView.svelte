@@ -3,7 +3,7 @@
   import { jobStore, type Job, type JobStatus } from '../../utils/job-management'
   import JobItem from '../JobItem.svelte'
   import TransferItem from '../TransferItem.svelte'
-  import { transferStore } from '../../utils/transfers'
+  import { transferStore, isNotableTransfer } from '../../utils/transfers'
 
   const getStatusPriority = (status: JobStatus): number => {
     switch (status) {
@@ -34,17 +34,12 @@
       return b.updatedAt - a.updatedAt
     })
   )
+
+  // Re-evaluated on every transfer poll, so a transfer appears once it has been running a while
+  const notableTransfers = $derived($transferStore.filter(isNotableTransfer))
 </script>
 
 <div class="job-status-view">
-  {#if $transferStore.length > 0}
-    <section class="transfers" aria-label="File transfers">
-      <h4>Transfers</h4>
-      {#each $transferStore as transfer (transfer.id)}
-        <TransferItem {transfer} />
-      {/each}
-    </section>
-  {/if}
   <div class="job-cards-container">
     {#each sortedJobs as job (job.id)}
       <div animate:flip={{ duration: 250 }}>
@@ -52,6 +47,14 @@
       </div>
     {/each}
   </div>
+  {#if notableTransfers.length > 0}
+    <section class="transfers" aria-label="File transfers">
+      <h4>Transfers</h4>
+      {#each notableTransfers as transfer (transfer.id)}
+        <TransferItem {transfer} />
+      {/each}
+    </section>
+  {/if}
 </div>
 
 <style>
@@ -63,7 +66,7 @@
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
-    margin-bottom: 0.75rem;
+    margin-top: 0.75rem;
   }
   .transfers h4 {
     margin: 0;

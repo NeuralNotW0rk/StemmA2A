@@ -6,6 +6,7 @@ import shutil
 import threading
 import uuid
 import asyncio
+import contextvars
 import gc
 import torch
 from pathlib import Path
@@ -25,6 +26,9 @@ from evolution.genome import LoRAGenome, express_to_grating
 from diffracture import Actant
 from diffracture.topology.grating import Grating as DiffractureGrating
 from diffracture.analysis.clustering import FeatureClusteringPipeline
+
+# The job the worker is running, so operations can report which stage it is at
+_current_job_id = contextvars.ContextVar("current_job_id", default=None)
 
 class LocalEngine(Engine):
     def __init__(self, data_root: str = None):
@@ -178,15 +182,32 @@ class LocalEngine(Engine):
         adapter = adapter_class()
         return adapter.register_model(**kwargs)
 
+    def _report_stage(self, description: str):
+        """Shows what the worker's current job is doing, so a long stage (e.g. loading a large model) doesn't look frozen."""
+        job_id = _current_job_id.get()
+        if job_id is None:
+            return
+        with self.job_status_lock:
+            status = self.job_statuses.get(job_id)
+            if status and status.get("status") == "running":
+                # No value/total: the stage's length is unknown, so the UI shows an indeterminate bar
+                status["progress"] = {"description": description}
+
+    def _get_adapter(self, model_element: GraphElement):
+        """Resolves the model element and returns it with its cached adapter, loading the weights on a cache miss."""
+        model_element = self._resolve_model_element(model_element)
+        if model_element.id not in self.model_cache.cache:
+            self._report_stage("Loading weights...")
+        adapter = self.model_cache.get(model_element, self._get_adapter_class(model_element.adapter))
+        return model_element, adapter
+
     async def _generate_logic(self, **kwargs) -> GraphElement:
         """
         The actual generation logic. Gets a cached model adapter and uses it to generate an output.
         Saves the output to a persistent location within the data_root.
         """
-        model_element = kwargs["model_element"]
-        model_element = self._resolve_model_element(model_element)
-        adapter_class = self._get_adapter_class(model_element.adapter)
-        adapter = self.model_cache.get(model_element, adapter_class)
+        model_element, adapter = self._get_adapter(kwargs["model_element"])
+        self._report_stage("Generating...")
 
         # Engine-level Grating/Genome intervention orchestration
         grating_elements = kwargs.get("grating_elements", [])
@@ -323,10 +344,8 @@ class LocalEngine(Engine):
         (DDIM inversion to a latent, or StyleGAN pivotal tuning to a pivot latent and its grating).
         Saves the results to a persistent location.
         """
-        model_element = kwargs["model_element"]
-        model_element = self._resolve_model_element(model_element)
-        adapter_class = self._get_adapter_class(model_element.adapter)
-        adapter = self.model_cache.get(model_element, adapter_class)
+        _, adapter = self._get_adapter(kwargs["model_element"])
+        self._report_stage("Inverting...")
 
         result = adapter.invert(**kwargs)
 
@@ -380,8 +399,10 @@ class LocalEngine(Engine):
                     raise Exception(f"Operation '{operation_id}' is not a valid or public operation.")
                 
                 func = getattr(self, operation_id)
-                
-                # Run the async operation function in the current thread's event loop
+
+                # Run the async operation function in the current thread's event loop. The loop's
+                # tasks copy this thread's context, so the operation sees which job it belongs to
+                _current_job_id.set(job_id)
                 result = asyncio.run(func(**op_kwargs))
 
                 # A job cancelled while running stays cancelled and its result is discarded. Its output file is

@@ -28,6 +28,7 @@ class _BlockingEngine(LocalEngine):
         self.worker_thread.start()
 
     async def _block_logic(self, **kwargs):
+        self._report_stage("Loading weights...")
         self.started.set()
         self.release.wait(timeout=5)
         if self.fail:
@@ -53,6 +54,18 @@ class TestLocalEngineCancel(unittest.TestCase):
         self._run("job")
         self._finish()
         self.assertEqual(self._status("job"), {"status": "completed", "result": "result"})
+
+    def test_running_job_reports_its_stage(self):
+        self._run("job")
+        self.assertTrue(self.engine.started.wait(timeout=5))
+        self.assertEqual(
+            self._status("job"), {"status": "running", "progress": {"description": "Loading weights..."}}
+        )
+        self._finish()
+
+    def test_stage_reported_outside_a_job_is_ignored(self):
+        self.engine._report_stage("Loading weights...")
+        self.assertEqual(self.engine.job_statuses, {})
 
     def test_cancelled_while_running_stays_cancelled(self):
         self._run("job")

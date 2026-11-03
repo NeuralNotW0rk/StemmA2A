@@ -1,17 +1,20 @@
 <script lang="ts">
   import { cancelJob, removeJob, type Job } from '../utils/job-management'
   import { cyInstanceStore } from '../utils/stores'
-  import { transferStore, transferPercent } from '../utils/transfers'
+  import { transferStore, jobTransferSummary } from '../utils/transfers'
   import { slide } from 'svelte/transition'
 
   let { job } = $props<{ job: Job }>()
 
   let showErrorDetails = $state(false)
 
-  // Uploads of the job's inputs and downloads of its results, while they are under way
-  const jobTransfers = $derived(
-    $transferStore.filter(
-      (t) => t.job_ids.includes(job.id) && (t.state === 'active' || t.state === 'queued')
+  // Uploads of the job's inputs and downloads of its results while they are under way, as one line
+  // however many there are (a scatter uploads every genome); the Transfers list has the details
+  const transferSummary = $derived(
+    jobTransferSummary(
+      $transferStore.filter(
+        (t) => t.job_ids.includes(job.id) && (t.state === 'active' || t.state === 'queued')
+      )
     )
   )
 
@@ -73,8 +76,10 @@
     <span class="job-name" title={job.name}>{job.name}</span>
 
     {#if (job.status === 'running' || job.status === 'pending') && job.progress}
-      <div class="progress-container" title={job.progress.description || ''}>
-        <progress value={job.progress.value} max={job.progress.total}></progress>
+      <div class="progress-container">
+        <!-- Without a known value the bar is indeterminate -->
+        <progress value={job.progress.value ?? undefined} max={job.progress.total ?? 100}
+        ></progress>
       </div>
     {/if}
 
@@ -140,19 +145,13 @@
     </div>
   </div>
 
-  {#each jobTransfers as transfer (transfer.id)}
-    {@const percent = transferPercent(transfer)}
-    <div class="job-transfer" transition:slide>
-      {transfer.state === 'queued'
-        ? 'Waiting to upload'
-        : transfer.direction === 'upload'
-          ? 'Uploading'
-          : 'Downloading'}
-      {transfer.name}{percent !== null && transfer.state === 'active'
-        ? `: ${Math.floor(percent)}%`
-        : ''}
-    </div>
-  {/each}
+  {#if (job.status === 'running' || job.status === 'pending') && job.progress?.description}
+    <div class="job-detail">{job.progress.description}</div>
+  {/if}
+
+  {#if transferSummary}
+    <div class="job-transfer" transition:slide>{transferSummary}</div>
+  {/if}
 
   {#if job.status === 'error' && showErrorDetails && job.error}
     <div class="error-details" transition:slide>
@@ -295,6 +294,7 @@
     border-radius: 50%;
   }
 
+  .job-detail,
   .job-transfer {
     margin-top: 0.4rem;
     font-size: 0.75rem;

@@ -8,8 +8,9 @@ export type JobStatus = 'pending' | 'running' | 'success' | 'error' | 'cancelled
 export type JobResult = Record<string, any> & { viewed?: boolean }
 
 export interface JobProgress {
-  value: number
-  total: number
+  // Absent while a stage's length is unknown (e.g. loading a model's weights)
+  value?: number
+  total?: number
   description?: string
 }
 
