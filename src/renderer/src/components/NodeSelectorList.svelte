@@ -18,7 +18,7 @@
     defaultStrength = 1.0,
     onAdd,
     itemExtra
-  } = $props<{
+  }: {
     title?: string
     addButtonText?: string
     filter?: NodeFilter
@@ -30,7 +30,7 @@
     defaultStrength?: number
     onAdd?: () => void
     itemExtra?: Snippet<[NodeListItem, number]>
-  }>()
+  } = $props()
 
   let nextId = $state(0)
   let isSelecting = false

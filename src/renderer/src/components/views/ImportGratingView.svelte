@@ -5,11 +5,11 @@
   import type { NodeData } from '../../utils/forms'
   import type { PanelMessage } from '../../utils/types'
 
-  let { onclose, onrefresh, onError } = $props<{
+  let { onclose, onrefresh, onError }: {
     onclose: () => void
     onrefresh: () => void
     onError: (error: PanelMessage) => void
-  }>()
+  } = $props()
 
   let name = $state('')
   let checkpointPath = $state('')

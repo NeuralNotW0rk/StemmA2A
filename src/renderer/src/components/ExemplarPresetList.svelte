@@ -8,14 +8,14 @@
     selectedKeys = $bindable([]),
     disabled = false,
     onAddNew
-  } = $props<{
+  }: {
     presets: ExemplarPreset[]
     // Individuals the selected presets will be generated for
     targetIds: string[]
     selectedKeys: string[]
     disabled?: boolean
     onAddNew: () => void
-  }>()
+  } = $props()
 
   function missingCount(preset: ExemplarPreset): number {
     return targetIds.filter((id: string) => !preset.covered_ids.includes(id)).length

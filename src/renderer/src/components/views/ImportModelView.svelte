@@ -33,11 +33,11 @@
     }
   ]
 
-  let { onclose, onrefresh, onError } = $props<{
+  let { onclose, onrefresh, onError }: {
     onclose: () => void
     onrefresh: () => void
     onError: (error: PanelMessage) => void
-  }>()
+  } = $props()
 
   let selectedAdapter = $state(adapters[0].id)
   let formFields = $state<FormConfig>([])

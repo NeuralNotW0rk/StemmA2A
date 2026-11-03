@@ -10,12 +10,12 @@
     shape?: number[]
   }
 
-  let { modelElement, onclose, onrefresh, onError } = $props<{
+  let { modelElement, onclose, onrefresh, onError }: {
     modelElement: NodeData | null
     onclose: () => void
     onrefresh: () => void
     onError: (error: PanelMessage) => void
-  }>()
+  } = $props()
 
   let selectedModel = $state<NodeData | null>(null)
 

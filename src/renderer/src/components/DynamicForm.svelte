@@ -12,13 +12,13 @@
     isFormValid = $bindable(),
     contextData = null,
     allowSequences = true
-  } = $props<{
+  }: {
     config: FormConfig
     formData: Record<string, unknown>
     isFormValid: boolean
     contextData?: Record<string, unknown> | null
     allowSequences?: boolean
-  }>()
+  } = $props()
 
   const batchFields = new SvelteSet<string>()
 

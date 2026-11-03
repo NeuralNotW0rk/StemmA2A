@@ -28,10 +28,10 @@
     ExemplarPreset
   } from '../../utils/types'
 
-  let { onClose, onError } = $props<{
+  let { onClose, onError }: {
     onClose: () => void
     onError: (error: PanelMessage) => void
-  }>()
+  } = $props()
 
   // A model op shared across adapters (e.g. invert) is implemented per adapter for different artifact
   // types: only the adapters handling the initiating artifact are offered. Null when unrestricted

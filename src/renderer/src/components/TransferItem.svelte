@@ -1,7 +1,7 @@
 <script lang="ts">
   import { transferDetail, transferPercent, type Transfer } from '../utils/transfers'
 
-  let { transfer } = $props<{ transfer: Transfer }>()
+  let { transfer }: { transfer: Transfer } = $props()
 
   const percent = $derived(transferPercent(transfer))
 </script>

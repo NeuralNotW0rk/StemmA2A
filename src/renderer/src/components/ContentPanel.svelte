@@ -8,13 +8,13 @@
     position = 'left',
     children,
     header_actions = undefined
-  } = $props<{
+  }: {
     title: string
     onclose?: () => void
     position?: 'left' | 'right'
     children: Snippet
     header_actions?: Snippet
-  }>()
+  } = $props()
 </script>
 
 <aside class="content-panel" class:left={position === 'left'} class:right={position === 'right'}>

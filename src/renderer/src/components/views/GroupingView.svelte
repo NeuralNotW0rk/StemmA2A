@@ -10,12 +10,12 @@
     onclose,
     onrefresh,
     onerror
-  } = $props<{
+  }: {
     initiatorNode?: GraphElement | null
     onclose: () => void
     onrefresh: () => void
     onerror: (error: PanelMessage) => void
-  }>()
+  } = $props()
 
   $effect(() => {
     if (!initiatorNode?.type) {

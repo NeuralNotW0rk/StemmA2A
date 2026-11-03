@@ -3,11 +3,11 @@
   import { selectedForRemoval } from '../../utils/stores'
   import type { PanelMessage } from '../../utils/types'
 
-  let { onclose, onrefresh, onerror } = $props<{
+  let { onclose, onrefresh, onerror }: {
     onclose: () => void
     onrefresh: () => void
     onerror: (error: PanelMessage) => void
-  }>()
+  } = $props()
 
   let isRemoving = $state(false)
 

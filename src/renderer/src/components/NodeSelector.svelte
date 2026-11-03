@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte'
   import type { NodeData, GroupData } from '../utils/forms'
+  import type { NodeFilter } from '../utils/types'
   import { selectionStore, cyInstanceStore } from '../utils/stores'
   import type { NodeSingular } from 'cytoscape'
   import NodeSelector from './NodeSelector.svelte'
@@ -15,9 +16,9 @@
     isNested = false,
     onNodeSelect,
     onBatchToggle
-  } = $props<{
+  }: {
     label?: string
-    filter: Record<string, string | number | boolean>
+    filter: NodeFilter
     node: NodeData | string | null
     id: string
     allowBatchToggle?: boolean
@@ -25,7 +26,7 @@
     isNested?: boolean
     onNodeSelect?: (node: NodeData) => void
     onBatchToggle?: (active: boolean) => void
-  }>()
+  } = $props()
 
   onMount(() => {
     if (autoActivateSelection) {

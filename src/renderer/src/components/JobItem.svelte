@@ -4,7 +4,7 @@
   import { transferStore, jobTransferSummary } from '../utils/transfers'
   import { slide } from 'svelte/transition'
 
-  let { job } = $props<{ job: Job }>()
+  let { job }: { job: Job } = $props()
 
   let showErrorDetails = $state(false)
 

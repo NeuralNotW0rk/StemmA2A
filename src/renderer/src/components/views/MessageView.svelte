@@ -6,11 +6,11 @@
     title,
     message,
     kind = 'error'
-  } = $props<{
+  }: {
     title: string
     message: string
     kind?: PanelMessage['kind']
-  }>()
+  } = $props()
 </script>
 
 <div class="message-view {kind}">
