@@ -209,6 +209,53 @@ class TestAsyncLocalJobs(unittest.TestCase):
         self.assertTrue((export_out_dir / "test1.wav").exists())
         self.assertTrue((export_out_dir / "test2.wav").exists())
 
+    def test_refresh_removes_missing_entries(self):
+        """Re-expanding a path drops nodes whose files, or nested folders, no longer exist."""
+        audio_dir = Path(self.tmp_dir) / "refresh_wavs"
+        nested_dir = audio_dir / "nested"
+        nested_dir.mkdir(parents=True, exist_ok=True)
+
+        sample_rate = 16000
+        t = np.linspace(0, 0.2, int(sample_rate * 0.2), endpoint=False)
+        kept = audio_dir / "kept.wav"
+        gone = audio_dir / "gone.wav"
+        sf.write(str(kept), (0.5 * np.sin(2 * np.pi * 440 * t)).astype(np.float32), sample_rate)
+        sf.write(str(gone), (0.5 * np.sin(2 * np.pi * 880 * t)).astype(np.float32), sample_rate)
+        sf.write(str(nested_dir / "deep.wav"), (0.5 * np.sin(2 * np.pi * 330 * t)).astype(np.float32), sample_rate)
+
+        path_node_id = "refresh_path"
+        self.test_graph.add_element(LocalPath(id=path_node_id, name="refresh_wavs", path=str(audio_dir)))
+        self.test_graph.save()
+
+        def expand(node_id: str) -> dict:
+            resp = self.client.post("/expand_path", json={"path_node_id": node_id})
+            self.assertEqual(resp.status_code, 202)
+            job = self._poll_job(resp.get_json()["job_id"])
+            self.assertEqual(job["status"], "completed", f"Job failed with error: {job.get('error')}")
+            return job["result"]
+
+        expand(path_node_id)
+        nested_path_id = next(
+            n for n, d in self.test_graph.G.nodes(data=True)
+            if d.get("type") == "local_path" and d.get("name") == "nested"
+        )
+        expand(nested_path_id)
+        self.assertEqual(
+            sum(1 for _, d in self.test_graph.G.nodes(data=True) if d.get("type") == "audio"), 3
+        )
+
+        gone.unlink()
+        shutil.rmtree(nested_dir)
+        result = expand(path_node_id)
+
+        audio_names = {
+            d["name"] for _, d in self.test_graph.G.nodes(data=True) if d.get("type") == "audio"
+        }
+        self.assertEqual(audio_names, {"kept.wav"})
+        self.assertFalse(self.test_graph.G.has_node(nested_path_id))
+        self.assertFalse(self.test_graph.G.has_node(f"{nested_path_id}.dir"))
+        self.assertIn(nested_path_id, result["removed_ids"])
+
     def test_async_rescan_source(self):
         """Test asynchronous source rescanning."""
         audio_dir = Path(self.tmp_dir) / "rescan_wavs"

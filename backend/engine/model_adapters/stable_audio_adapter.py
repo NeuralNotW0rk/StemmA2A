@@ -22,6 +22,7 @@ from param_graph.elements.artifacts.latent_element import Latent
 from param_graph.elements.models.stable_audio_element import StableAudioModel
 from utils.uid import UIDMismatchError
 from utils.filesystem import get_path_size
+from utils.hf_hub import load_cached_first
 
 # Workaround for the file extension-based safetensors loading in stable audio tools
 def load_ckpt_state_dict(ckpt_path):
@@ -205,7 +206,8 @@ class StableAudioAdapter(ModelAdapter):
                     cond_inner_config.pop("repo_id", None)
                     cond_inner_config.pop("subfolder", None)
 
-        self.model = create_model_from_config(config)
+        # Conditioners (e.g. T5) fetch tokenizers/weights from the Hub by name on first use
+        self.model = load_cached_first(lambda **_: create_model_from_config(config), "Stable Audio conditioners")
         self.model.load_state_dict(state_dict)
         self.model_info = info
 

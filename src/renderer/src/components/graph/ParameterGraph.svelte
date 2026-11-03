@@ -1038,6 +1038,19 @@
       ...nodeCommands(ele)
     ]
 
+    // Re-expanding the source path picks up entries added since the last scan
+    const directoryNodeCommands = (ele: cytoscape.NodeSingular): Command[] => {
+      const sourcePath = ele.incomers('node[type="local_path"]').first()
+      if (sourcePath.empty()) return nodeCommands(ele)
+      return [
+        {
+          content: 'Refresh',
+          select: () => onexpandPath?.(sourcePath.id())
+        },
+        ...nodeCommands(ele)
+      ]
+    }
+
     const groupNodeCommands = (ele: cytoscape.NodeSingular): Command[] => [
       ...getPinnedOperations(ele),
       {
@@ -1105,6 +1118,8 @@
             return externalNodeCommands(ele)
           case 'local_path':
             return pathNodeCommands(ele)
+          case 'directory':
+            return directoryNodeCommands(ele)
           case 'group':
             return groupNodeCommands(ele)
           case 'individual':

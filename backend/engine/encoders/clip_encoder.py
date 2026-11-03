@@ -2,6 +2,7 @@ import threading
 import torch
 from PIL import Image as PILImage
 from transformers import CLIPModel, CLIPProcessor
+from utils.hf_hub import load_cached_first
 from .base_encoder import Encoder
 
 
@@ -30,18 +31,14 @@ class CLIPEncoder(Encoder):
                 if self._model is None:
                     model_id = "openai/clip-vit-base-patch32"
                     print(f"Loading CLIP model ({model_id})...")
-                    try:
-                        # Fast path: attempt to load from local cache to bypass network overhead
-                        self._processor = CLIPProcessor.from_pretrained(model_id, local_files_only=True)
-                        self._model = CLIPModel.from_pretrained(model_id, local_files_only=True).to(self.device)
-                        print("CLIP model loaded directly from local cache.")
-                    except Exception:
-                        # Fallback: go online to download and cache if not fully present
-                        print("CLIP model not fully cached. Downloading from Hugging Face Hub...")
-                        self._processor = CLIPProcessor.from_pretrained(model_id)
-                        self._model = CLIPModel.from_pretrained(model_id).to(self.device)
-                        print("CLIP model downloaded and loaded.")
-                        
+                    def load(**kwargs):
+                        processor = CLIPProcessor.from_pretrained(model_id, **kwargs)
+                        model = CLIPModel.from_pretrained(model_id, **kwargs).to(self.device)
+                        return processor, model
+
+                    self._processor, self._model = load_cached_first(load, f"CLIP model ({model_id})")
+                    print("CLIP model loaded.")
+
                     self._model.eval()
 
     @property

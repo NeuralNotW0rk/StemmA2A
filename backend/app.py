@@ -1736,6 +1736,37 @@ async def rescan_source():
         return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
 
 
+def _remove_with_expansions(node_id: str) -> set[str]:
+    """Removes a node and its children, following 'expands' edges into nested directories. Caller holds graph_lock."""
+    removed = set()
+    frontier = [node_id]
+    while frontier:
+        current = frontier.pop()
+        if current in removed or not param_graph.G.has_node(current):
+            continue
+        subtree = _collect_descendants(current)
+        for n in subtree:
+            for _, v, edge_data in param_graph.G.out_edges(n, data=True):
+                if edge_data.get("relation") == "expands" and v not in subtree:
+                    frontier.append(v)
+        removed |= subtree
+        param_graph.remove_element(current)
+    return removed
+
+
+def _collect_descendants(node_id: str) -> set[str]:
+    """Mirrors ParamGraph.remove_element's parent cascade so callers know which ids went away."""
+    found = {node_id}
+    changed = True
+    while changed:
+        changed = False
+        for n, d in param_graph.G.nodes(data=True):
+            if n not in found and d.get("parent") in found:
+                found.add(n)
+                changed = True
+    return found
+
+
 async def _expand_path_task(job_id: str, path_node_id: str) -> None:
     try:
         local_jobs[job_id]["status"] = "running"
@@ -1774,14 +1805,28 @@ async def _expand_path_task(job_id: str, path_node_id: str) -> None:
                 new_dir_created = True
 
         existing_paths = set()
+        missing_ids = []
         with graph_lock:
             for node_id, data in param_graph.G.nodes(data=True):
                 if data.get("parent") == existing_dir_id:
                     el = param_graph.get_element(node_id)
                     if hasattr(el, "path"):
-                        existing_paths.add(el.path)
+                        child_path = el.path
                     elif hasattr(el, "file") and hasattr(el.file, "path"):
-                        existing_paths.add(el.file.path)
+                        child_path = el.file.path
+                    else:
+                        continue
+                    # Content-addressed ids mean a returning file rejoins its lineage, so drop stale nodes
+                    if Path(child_path).exists():
+                        existing_paths.add(child_path)
+                    else:
+                        missing_ids.append(node_id)
+
+            removed_ids = set()
+            for node_id in missing_ids:
+                removed_ids |= _remove_with_expansions(node_id)
+            if removed_ids:
+                param_graph.save()
 
         audio_exts = {'.wav', '.mp3', '.flac', '.ogg', '.m4a', '.aiff'}
         image_exts = {'.png', '.jpg', '.jpeg', '.webp', '.bmp', '.gif'}
@@ -1849,7 +1894,8 @@ async def _expand_path_task(job_id: str, path_node_id: str) -> None:
             "directory_id": existing_dir_id,
             "node_id": existing_dir_id,
             "id": existing_dir_id,
-            "elements": [el.to_dict() for el in new_elements]
+            "elements": [el.to_dict() for el in new_elements],
+            "removed_ids": sorted(removed_ids)
         }
         if new_dir_created and new_dir:
             result_payload["new_directory"] = new_dir.to_dict()
@@ -1860,7 +1906,7 @@ async def _expand_path_task(job_id: str, path_node_id: str) -> None:
         local_jobs[job_id]["progress"] = {
             "value": 100,
             "total": 100,
-            "description": f"Expanded {len(new_elements)} items."
+            "description": f"Expanded {len(new_elements)} items, removed {len(removed_ids)} missing."
         }
         local_jobs[job_id]["result"] = result_payload
 

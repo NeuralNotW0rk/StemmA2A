@@ -45,8 +45,9 @@ cd StemmA2A && docker compose up -d
 - **`tunnel`** runs `cloudflared` with `CF_TUNNEL_TOKEN`.
 
 > Compose doesn't publish any ports, so the engine can only be reached through the tunnel.
-> Because `HF_HUB_OFFLINE=1`, the CLAP, CLIP and T5 weights must already be in
-> `<data>/huggingface`.
+> `HF_HUB_OFFLINE=1` makes cached loads skip the Hugging Face update checks. When the CLAP, CLIP or
+> T5 files aren't in `<data>/huggingface` yet, the engine turns Hub access back on just long
+> enough to download them. The first load on a new host therefore needs internet access.
 
 ---
 
