@@ -531,12 +531,8 @@ class StableAudioAdapter(ModelAdapter):
             args["adapt_duration_to_conditioning"] = False
             args["mask_padding_attention"] = False
             args["use_effective_length_for_schedule"] = False
-
-            # Retrieve inversion_unconditional flag from metadata (default to True for RF native)
-            inversion_unconditional = True
-            if inversion_meta is not None:
-                inversion_unconditional = inversion_meta.get("inversion_unconditional", True)
-            args["cfg_dropout_prob"] = 1.0 if inversion_unconditional else 0.0
+            # How the latent was inverted (conditioned or not) only shaped the inversion. Generation is
+            # always conditioned on this prompt: CFG dropout here would zero it (and the timing) at cfg 1.
 
         # Handle traditional initial audio if provided
         init_audio_element = kwargs.get("init_audio_element")
@@ -874,26 +870,12 @@ class StableAudioAdapter(ModelAdapter):
                     for k, v in inversion_conditioning_inputs.items()
                 }
                 
-                if inversion_unconditional:
-                    cfg_dropout_prob = 1.0
-                else:
-                    cfg_dropout_prob = 0.0
-                    for x in inversion_conditioning:
-                        if "prompt" in x:
-                            x["prompt"] = ""
-                    inversion_conditioning_tensors = model.conditioner(inversion_conditioning, self.device)
-                    
-                    if needs_inpaint_mask:
-                        inversion_conditioning_tensors['inpaint_mask'] = [mask]
-                    if needs_inpaint_input:
-                        inversion_conditioning_tensors['inpaint_masked_input'] = [inpaint_input]
+                # Unconditional zeroes the prompt and timing embeddings (the null conditioning CFG
+                # contrasts against), which differs from conditioning on an empty prompt. Conditional
+                # inversion uses the prompt as given, so leaving it empty gives empty-prompt conditioning.
+                # (Upstream's generate_diffusion_cond always blanks the prompt here instead.)
+                cfg_dropout_prob = 1.0 if inversion_unconditional else 0.0
 
-                    inversion_conditioning_inputs = model.get_conditioning_inputs(inversion_conditioning_tensors)
-                    inversion_conditioning_inputs = {
-                        k: v.type(model_dtype) if v is not None and hasattr(v, "type") else v
-                        for k, v in inversion_conditioning_inputs.items()
-                    }
-                
                 torch.manual_seed(kwargs.get("seed", 0))
                 inversion_noise = torch.randn_like(init_latents)
                 
@@ -920,7 +902,9 @@ class StableAudioAdapter(ModelAdapter):
         else:
             sigma_min = kwargs.get("sigma_min", 0.3)
             sigma_max = kwargs.get("sigma_max", 500.0)
-            
+            # The ODE inversion below always runs the denoiser on the prompt's conditioning
+            inversion_unconditional = False
+
             # Capture the fully pre-conditioned denoiser from stable-audio-tools
             captured_denoiser = []
             captured_extra_args = []
@@ -1039,7 +1023,7 @@ class StableAudioAdapter(ModelAdapter):
             "inversion_strength": inversion_strength,
             "sigma_min": sigma_min,
             "sigma_max": sigma_max,
-            "inversion_unconditional": kwargs.get("inversion_unconditional", True),
+            "inversion_unconditional": inversion_unconditional,
             "inversion_gamma": kwargs.get("inversion_gamma", 0.3),
             "inversion_cfg_scale": kwargs.get("inversion_cfg_scale", 1.0),
             **latent_stats,

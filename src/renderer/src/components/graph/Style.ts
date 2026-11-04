@@ -268,11 +268,13 @@ const defaultStyle: CssStyleDeclaration[] = [
     style: {
       label: (node: NodeSingular) => {
         const context = node.data('context')
+        const meta = context && context['inversion_metadata']
+        // Only native RF inversion can run unconditionally; older k-diffusion latents recorded the
+        // flag's default although they were conditioned on their (possibly empty) prompt
         const isUnconditional =
-          context &&
-          (context['inversion_unconditional'] === true ||
-            (context['inversion_metadata'] &&
-              context['inversion_metadata']['inversion_unconditional'] === true))
+          meta !== undefined && meta !== null
+            ? meta['algorithm'] !== 'euler_ode_inversion' && meta['inversion_unconditional'] === true
+            : context && context['inversion_unconditional'] === true
         const promptTxt =
           (context && context['prompt']) || (isUnconditional ? '[unconditional]' : '[empty]')
         const strength = context && context['inversion_strength']

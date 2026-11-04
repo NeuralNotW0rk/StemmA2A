@@ -264,6 +264,7 @@ class TestStableAudioLatentGeneration(unittest.TestCase):
             return x
 
         def fake_generate_diffusion_cond(model_arg: object, **kwargs: object) -> torch.Tensor:
+            recorded["generate_kwargs"] = kwargs
             # Mirrors 0.0.20: sigma_min/sigma_max travel to sample_diffusion as sampler kwargs
             return sat_gen.sample_diffusion(
                 model=model_arg, noise=torch.randn_like(latent), cond_inputs={},
@@ -306,6 +307,15 @@ class TestStableAudioLatentGeneration(unittest.TestCase):
         })
         self.assertEqual(recorded["sigma_max"], 0.8)
         self.assertEqual(recorded["init_noise_level"], 0.8)
+
+    def test_unconditional_latent_keeps_the_generation_prompt(self) -> None:
+        # CFG dropout at cfg 1 would zero the prompt, so an unconditional inversion must not carry over
+        recorded = self._generate_from_latent("rectified_flow", {
+            "algorithm": "native_rf_inversion", "inversion_steps": 50, "stop_step_index": 50,
+            "inversion_strength": 1.0, "sigma_min": 0.0, "sigma_max": 1.0,
+            "inversion_unconditional": True,
+        })
+        self.assertNotIn("cfg_dropout_prob", recorded["generate_kwargs"])
 
     def test_partial_inversion_resumes_from_its_stop_sigma(self) -> None:
         import torch
