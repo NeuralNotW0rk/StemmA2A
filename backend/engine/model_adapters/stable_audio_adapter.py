@@ -3,7 +3,9 @@ import struct
 import copy
 import os
 import xxhash
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Iterator
 
 import torch
 import torchaudio
@@ -39,6 +41,98 @@ def load_ckpt_state_dict(ckpt_path):
         state_dict = torch.load(ckpt_path, map_location="cpu", weights_only=True)["state_dict"]
     
     return state_dict
+
+
+@contextmanager
+def _skip_weight_init() -> Iterator[None]:
+    """
+    Turns torch.nn.init's in-place initialisers into no-ops while a model is built.
+
+    The checkpoint overwrites every persistent weight straight after, so randomly initialising
+    a multi-billion-parameter model first is wasted CPU time, and leaving the storage untouched
+    means the OS never commits it. This is the trick transformers' from_pretrained uses (and it
+    nests with it, so conditioners loaded with from_pretrained still get their own weights).
+    Non-persistent buffers (windows, FSQ levels) are computed directly rather than through
+    torch.nn.init, so they are unaffected.
+    """
+    originals = {
+        name: fn for name, fn in vars(torch.nn.init).items()
+        if callable(fn) and name.endswith("_") and not name.startswith("_")
+    }
+
+    def no_init(tensor: torch.Tensor, *args: object, **kwargs: object) -> torch.Tensor:
+        return tensor
+
+    for name in originals:
+        setattr(torch.nn.init, name, no_init)
+    try:
+        yield
+    finally:
+        for name, fn in originals.items():
+            setattr(torch.nn.init, name, fn)
+
+
+def _adopt_state_dict(model: torch.nn.Module, state_dict: dict[str, torch.Tensor]) -> None:
+    """
+    Loads state_dict into model by taking over its tensors rather than copying them, so the
+    weights are held in memory once instead of twice. Tensors are cast to the dtype the model
+    was built with first, keeping the model's precision what a copying load would give.
+    """
+    expected = model.state_dict()
+    for key, tensor in state_dict.items():
+        target = expected.get(key)
+        if target is not None and tensor.dtype != target.dtype:
+            state_dict[key] = tensor.to(target.dtype)
+    model.load_state_dict(state_dict, assign=True)
+
+
+# k-diffusion samplers that accept an explicit sigma schedule, by stable-audio-tools sampler_type
+_K_SIGMA_SAMPLERS = {
+    "k-heun": "sample_heun",
+    "k-lms": "sample_lms",
+    "k-dpmpp-2s-ancestral": "sample_dpmpp_2s_ancestral",
+    "k-dpm-2": "sample_dpm_2",
+    "dpmpp-2m": "sample_dpmpp_2m",
+    "dpmpp-2m-sde": "sample_dpmpp_2m_sde",
+    "dpmpp-3m-sde": "sample_dpmpp_3m_sde",
+}
+
+
+def _inverted_latent_sigmas(
+    steps: int, stop_step: int, sigma_min: float, sigma_max: float, device: torch.device | str
+) -> torch.Tensor:
+    """
+    The descending sigma schedule that retraces a k-diffusion ODE inversion back to clean data.
+
+    Inversion walks the ascending Karras grid get_sigmas_karras(steps + 1)[:-1].flip(0) from index 0
+    (sigma_min) up to index stop_step. Index k of that ascending grid is index steps - k of the
+    descending one, so generation starts at descending[steps - stop_step] and runs down to sigma_min,
+    then takes the final step to 0.
+    """
+    if not 0 <= stop_step <= steps:
+        raise ValueError(f"Inversion stop_step_index {stop_step} is outside 0..{steps}.")
+    descending = get_sigmas_karras(steps + 1, sigma_min, sigma_max, device=device)
+    return descending[steps - stop_step:]
+
+
+def _restore_inverted_latent_scale(
+    latent: torch.Tensor, inversion_meta: dict, start_sigma: float
+) -> torch.Tensor:
+    """
+    Undoes the unit-variance normalisation invert() applies to k-diffusion latents, so the latent
+    sits at the noise level its schedule starts from.
+
+    Latents inverted before the stats were recorded can only be restored at full strength: there the
+    latent is dominated by sigma_max noise, so scaling by sigma_max is what sample_k always did.
+    """
+    if "latent_std" in inversion_meta and "latent_mean" in inversion_meta:
+        return latent * inversion_meta["latent_std"] + inversion_meta["latent_mean"]
+    if inversion_meta["stop_step_index"] == inversion_meta["inversion_steps"]:
+        return latent * start_sigma
+    raise ValueError(
+        "This latent was inverted at partial strength before its normalisation stats were recorded, "
+        "so its noise scale can't be restored. Re-invert the source audio."
+    )
 
 
 def _compute_stable_audio_uid(file_path: str, uid_generator) -> str:
@@ -189,9 +283,6 @@ class StableAudioAdapter(ModelAdapter):
             if expected_id != info.id:
                 raise UIDMismatchError("Combined Model UID mismatch")
 
-        # Load the state dict
-        state_dict = load_ckpt_state_dict(info.checkpoint.path)
-
         # Load the new model
         # Override conditioner paths if local encoder path is supplied and exists
         config = copy.deepcopy(info.config)
@@ -207,8 +298,11 @@ class StableAudioAdapter(ModelAdapter):
                     cond_inner_config.pop("subfolder", None)
 
         # Conditioners (e.g. T5) fetch tokenizers/weights from the Hub by name on first use
-        self.model = load_cached_first(lambda **_: create_model_from_config(config), "Stable Audio conditioners")
-        self.model.load_state_dict(state_dict)
+        with _skip_weight_init():
+            model = load_cached_first(lambda **_: create_model_from_config(config), "Stable Audio conditioners")
+        # Read after building, so a conditioner download doesn't hold the weights in memory meanwhile
+        _adopt_state_dict(model, load_ckpt_state_dict(info.checkpoint.path))
+        self.model = model
         self.model_info = info
 
     def cleanup(self):
@@ -279,7 +373,7 @@ class StableAudioAdapter(ModelAdapter):
         model_config = self.model_info.config.get("model", {})
         diffusion_config = model_config.get("diffusion", {})
         diffusion_objective = diffusion_config.get("diffusion_objective", "v")
-        is_rf_denoiser = diffusion_objective == "rf_denoiser"
+        is_rf_objective = diffusion_objective in ["rectified_flow", "rf_denoiser"]
 
         sampler_category = kwargs.get("sampler_category")
         if not sampler_category:
@@ -468,79 +562,60 @@ class StableAudioAdapter(ModelAdapter):
             original_sample_diffusion = sat_samp.sample_diffusion
             original_build_schedule = sat_samp.build_schedule
                 
-            # ALWAYS patch sample_k to conditionally inject latent noise if present
-            def patched_sample_k(*inner_args, **inner_kwargs):
-                inner_args = list(inner_args)
-                inner_kwargs = dict(inner_kwargs)
-                
-                if init_latent_tensor is not None and inversion_meta is not None:
-                    # 1. FORCE the initial noise argument to be a direct clone of your inverted latent
-                    # In sample_k, noise is the second positional argument (index 1)
-                    custom_coords = init_latent_tensor.clone()
-                    
-                    # Ensure batch sizes match up smoothly
-                    target_shape = inner_args[1].shape if len(inner_args) > 1 else inner_kwargs.get("noise").shape
-                    if custom_coords.shape[0] == 1 and target_shape[0] > 1:
-                        custom_coords = custom_coords.repeat(target_shape[0], 1, 1)
-                    
-                    # Overwrite the random seed noise immediately at the entrance of the wrapper
-                    if len(inner_args) > 1:
-                        inner_args[1] = custom_coords
-                    else:
-                        inner_kwargs["noise"] = custom_coords
+            # Patch sample_k (v models) to sample from the inverted latent along the inversion's own
+            # Karras schedule. sample_k builds its own polyexponential schedule and scales the noise by
+            # its first sigma, so for an inverted latent the k-diffusion sampler is called directly.
+            # Mirrors sample_k's signature in stable-audio-tools 0.0.20 (sample_diffusion passes these by
+            # keyword); the inversion's own schedule is captured separately so the names don't collide.
+            inversion_schedule = (steps, sigma_min, sigma_max)
 
-                    # 2. Extract and patch the sampler_fn to use our sliced sigmas timeline
-                    sampler_fn = None
-                    sampler_arg_index = None
-                    
-                    if "sampler_fn" in inner_kwargs:
-                        sampler_fn = inner_kwargs["sampler_fn"]
-                    else:
-                        if len(inner_args) > 4:
-                            sampler_fn = inner_args[4]
-                            sampler_arg_index = 4
-                    
-                    if sampler_fn is None:
-                        for idx, arg in enumerate(inner_args):
-                            if callable(arg) and not hasattr(arg, "forward") and arg.__name__ != "patched_sample_k":
-                                sampler_fn = arg
-                                sampler_arg_index = idx
-                                break
+            def patched_sample_k(
+                model_fn, noise, init_data=None, steps=100, sampler_type="dpmpp-2m-sde",
+                sigma_min=0.01, sigma_max=100, rho=1.0, device="cuda", callback=None,
+                cond_fn=None, **extra_args
+            ):
+                if is_rf_objective or init_latent_tensor is None or inversion_meta is None:
+                    return original_sample_k(
+                        model_fn, noise, init_data=init_data, steps=steps, sampler_type=sampler_type,
+                        sigma_min=sigma_min, sigma_max=sigma_max, rho=rho, device=device,
+                        callback=callback, cond_fn=cond_fn, **extra_args
+                    )
 
-                    if sampler_fn is not None:
-                        # Re-create the exact global timeline grid
-                        global_sigmas = get_sigmas_karras(steps + 1, sigma_min, sigma_max, device=self.device)
-                        stop_index = inversion_meta["stop_step_index"]
-                        
-                        # Flip schedule to run downstream from max noise to clean audio floor
-                        downstream_sigmas = global_sigmas[:-1].flip(0)
-                        
-                        # Symmetrical boundary-safe timeline slice
-                        start_index = steps - stop_index
-                        generation_sigmas = downstream_sigmas[start_index:]
-                        
-                        # Append mandatory terminal 0.0 value
-                        generation_sigmas = torch.cat([generation_sigmas, global_sigmas[-1:]])
+                inv_steps, inv_sigma_min, inv_sigma_max = inversion_schedule
 
-                        # Build the clean proxy interceptor using the unified tensor coordinates
-                        def custom_sampler_wrapper(model_wrap, x, sigmas_arg, *s_args, **s_kwargs):
-                            # Pass through x, which has now been safely overridden with your custom_coords 
-                            # at step 1, ensuring its internal variance profiles line up with generation_sigmas
-                            return sampler_fn(model_wrap, x, generation_sigmas, *s_args, **s_kwargs)
+                sampler_name = _K_SIGMA_SAMPLERS.get(sampler_type)
+                if sampler_name is None:
+                    raise ValueError(
+                        f"Sampler '{sampler_type}' can't follow an inverted latent's schedule. "
+                        f"Use one of: {', '.join(_K_SIGMA_SAMPLERS)}."
+                    )
 
-                        if "sampler_fn" in inner_kwargs or sampler_arg_index is None:
-                            inner_kwargs["sampler_fn"] = custom_sampler_wrapper
-                        else:
-                            inner_args[sampler_arg_index] = custom_sampler_wrapper
+                generation_sigmas = _inverted_latent_sigmas(
+                    inv_steps, inversion_meta["stop_step_index"], inv_sigma_min, inv_sigma_max, noise.device
+                )
+                x = _restore_inverted_latent_scale(
+                    init_latent_tensor.to(noise.device), inversion_meta, generation_sigmas[0].item()
+                )
+                if x.shape[0] == 1 and noise.shape[0] > 1:
+                    x = x.repeat(noise.shape[0], 1, 1)
+                x = x.to(noise.dtype)
 
-                return original_sample_k(*inner_args, **inner_kwargs)
+                denoiser = sat_samp.K.external.VDenoiser(model_fn)
+                if cond_fn is not None:
+                    denoiser = sat_samp.make_cond_model_fn(denoiser, cond_fn)
+                sampler = getattr(sat_samp.K.sampling, sampler_name)
+                print(f"DEBUG: Sampling inverted latent from sigma {generation_sigmas[0].item():.4f} "
+                      f"over {len(generation_sigmas) - 1} steps")
+                return sampler(denoiser, x, generation_sigmas, disable=False, callback=callback, extra_args=extra_args)
 
-            # ALWAYS patch sample_diffusion to conditionally inject latent noise if present (for RF models)
+            # Patch sample_diffusion to inject the inverted latent and RF noise level (RF models only).
+            # stable-audio-tools routes every objective through sample_diffusion, so without the
+            # objective check this would also clamp a v-model's sigma_max (e.g. 500) to the RF range.
             def patched_sample_diffusion(*inner_args, **inner_kwargs):
                 inner_args = list(inner_args)
                 inner_kwargs = dict(inner_kwargs)
-                
-                if init_latent_tensor is not None and inversion_meta is not None:
+
+                if is_rf_objective and init_latent_tensor is not None and inversion_meta is not None:
                     print("DEBUG: patched_sample_diffusion triggered! Injecting latent noise...")
                     # Overwrite noise with the inverted latent
                     custom_noise = init_latent_tensor.clone()
@@ -565,9 +640,10 @@ class StableAudioAdapter(ModelAdapter):
                     
                 return original_sample_diffusion(*inner_args, **inner_kwargs)
 
-            # ALWAYS patch build_schedule to return the exact flipped schedule used during inversion (for RF models)
+            # Patch build_schedule to return the exact flipped schedule used during inversion (RF models only;
+            # v-ddim also calls build_schedule, and an RF logSNR schedule is wrong for it)
             def patched_build_schedule(*inner_args, **inner_kwargs):
-                if init_latent_tensor is not None and inversion_meta is not None:
+                if is_rf_objective and init_latent_tensor is not None and inversion_meta is not None:
                     print("DEBUG: patched_build_schedule triggered!")
                     
                     # Extract steps (can be positional at index 0, or keyword 'steps')
@@ -739,6 +815,9 @@ class StableAudioAdapter(ModelAdapter):
             init_latents = model.pretransform.encode(source_audio_tensor)
             if isinstance(init_latents, tuple):
                 init_latents = init_latents[0]
+
+        # Normalisation stats for k-diffusion latents; the RF path stores its latent unnormalised
+        latent_stats: dict[str, float] = {}
 
         is_rf = (self.model_info.config.get("model", {}).get("diffusion", {}).get("diffusion_objective") in ["rectified_flow", "rf_denoiser"])
         sampler_category = kwargs.get("sampler_category", "rectified_flow" if is_rf else "k_diffusion")
@@ -921,13 +1000,15 @@ class StableAudioAdapter(ModelAdapter):
                     # 5. Take the actual step forward into noise space
                     current_latents = current_latents + v_corrected * d_sigma
 
-            # Explicit unit-variance scaling to normalize data before handing to generation samplers
+            # Unit-variance normalisation; the stats are recorded so generation can restore the latent
+            # to its noise level (essential below full strength, where data still dominates the variance)
+            latent_mean = current_latents.mean().item()
             latent_std = current_latents.std().item()
-            if latent_std > 0:
-                latent_tensor = (current_latents - current_latents.mean().item()) / latent_std
-            else:
-                latent_tensor = current_latents
-                
+            if not latent_std > 0:
+                raise ValueError(f"Inverted latent has degenerate standard deviation {latent_std}.")
+            latent_tensor = (current_latents - latent_mean) / latent_std
+            latent_stats = {"latent_mean": latent_mean, "latent_std": latent_std}
+
             algorithm = "euler_ode_inversion"
             sampler = "euler"
 
@@ -961,6 +1042,7 @@ class StableAudioAdapter(ModelAdapter):
             "inversion_unconditional": kwargs.get("inversion_unconditional", True),
             "inversion_gamma": kwargs.get("inversion_gamma", 0.3),
             "inversion_cfg_scale": kwargs.get("inversion_cfg_scale", 1.0),
+            **latent_stats,
         }
 
         artifact = Latent(
