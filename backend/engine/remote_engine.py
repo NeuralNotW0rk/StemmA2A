@@ -13,6 +13,7 @@ from .engine import Engine
 from .results import is_multi_result
 from param_graph.registry import resolve_element
 from utils.uid import path_from_uid
+from utils.errors import EngineUnreachableError
 
 # The engine service sits behind a proxy (Cloudflare) that drops any single request still running after
 # about 100 s. Assets are therefore sent in small chunks, a few assets at a time, so each request gets
@@ -27,12 +28,19 @@ MAX_UPLOAD_ROUNDS = 3
 TRANSFER_HISTORY_SECONDS = 30
 
 
+# Statuses a proxy (Cloudflare) answers with when the engine service behind it is down or unreachable
+UNREACHABLE_STATUSES = {502, 503, 521, 522, 523, 530}
+
+
 def _request_error(e: Exception) -> Exception:
     """Describes a failed engine service request, telling an unreachable server apart from a failed request."""
-    if isinstance(e, aiohttp.ClientResponseError):
+    if isinstance(e, aiohttp.ClientResponseError) and e.status not in UNREACHABLE_STATUSES:
         hint = " (timed out in transit through the proxy)" if e.status == 524 else ""
         return Exception(f"Engine service request to {e.request_info.url} failed: {e.status} {e.message}{hint}")
-    return Exception("Cannot reach engine service. Please verify that the remote server is running.")
+    return EngineUnreachableError(
+        "Cannot reach the remote engine service. Check that it is running and that this machine is online, "
+        "or switch to the local engine from the Engine menu."
+    )
 
 
 async def check_engine_service(remote_url: str, timeout: float = 5.0) -> dict[str, Any]:
@@ -99,6 +107,8 @@ class _TransferTracker:
         self.attempt = 1
         self.bytes_per_second = 0.0
         self.error: str | None = None
+        # Set when the transfer failed because the engine service couldn't be reached, so it can be retried
+        self.unreachable: EngineUnreachableError | None = None
         # Jobs waiting on this transfer, including ones that joined it in flight
         self.job_ids: set[str] = set()
         self.started_at = time.time()
@@ -405,10 +415,16 @@ class RemoteEngine(Engine):
                     error_text = await file_response.text()
                     print(f"[RemoteEngine Download] Failed to download asset {asset_id}. Status: {file_response.status}. Body: {error_text}")
                     tracker.error = f"Engine service replied {file_response.status}"
+                    if file_response.status in UNREACHABLE_STATUSES:
+                        tracker.unreachable = _request_error(aiohttp.ClientConnectionError())
                     return False
         except Exception as e:
             print(f"[RemoteEngine Download] Error downloading asset '{asset_id}': {e}")
             tracker.error = str(e)
+            if isinstance(e, (aiohttp.ClientError, asyncio.TimeoutError)):
+                error = _request_error(e)
+                if isinstance(error, EngineUnreachableError):
+                    tracker.unreachable = error
             return False
         finally:
             if local_staging_path.exists():
@@ -466,6 +482,9 @@ class RemoteEngine(Engine):
                 success = await self._wait_for_transfer(tracker, timeout=float(self.timeout))
 
             if not success:
+                # The result stays on the engine service, so a lost connection is worth retrying later
+                if tracker.unreachable:
+                    raise tracker.unreachable
                 raise Exception(f"Failed to download asset {result_element.id}.")
 
         # Anchor the element's path to the root of our stable temp directory.
@@ -500,6 +519,8 @@ class RemoteEngine(Engine):
 
                         try:
                             fetched = [await self._fetch_result_element(element, session, job_id) for element in elements]
+                        except EngineUnreachableError:
+                            raise
                         except Exception as e:
                             print(f"Error: {e}")
                             status_info["status"] = "failed"

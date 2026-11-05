@@ -12,6 +12,7 @@
   import layoutConfig from './Layout'
   import NodePropertyPopper from './NodePropertyPopper.svelte'
   import { cyInstanceStore, selectionStore } from '../../utils/stores'
+  import { engineUnavailableReason, runsOnEngine } from '../../utils/engine-connection'
   import { GROUPING_CONFIG } from '../../utils/app-config'
   import { projectRoomView } from '../../utils/rooms'
 
@@ -1993,9 +1994,15 @@
           <ul class="operations-list">
             {#each filteredOperations as op, index (op.name)}
               {@const display = getOpDisplayProps(op, displayType, outputType)}
-              <li class="operation-item" class:active={index === selectedIndex}>
+              {@const unavailable = runsOnEngine(op) && !!$engineUnavailableReason}
+              <li
+                class="operation-item"
+                class:active={index === selectedIndex}
+                class:unavailable
+              >
                 <button
                   type="button"
+                  title={unavailable ? ($engineUnavailableReason ?? undefined) : undefined}
                   onclick={() => selectOp(op)}
                   onmouseenter={() => (selectedIndex = index)}
                 >
@@ -2161,6 +2168,11 @@
 
   .operation-item.active button {
     background: var(--color-primary-t-30, rgba(235, 94, 40, 0.2));
+  }
+
+  /* Needs the remote engine, which can't be reached; it still opens, to explain why it can't run */
+  .operation-item.unavailable button {
+    opacity: 0.45;
   }
 
   .op-title-row {

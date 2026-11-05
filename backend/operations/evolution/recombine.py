@@ -38,6 +38,7 @@ from evolution.lora_genome import (
     get_lora_crossover_strategy,
 )
 from utils.uid import XXH3_64
+from utils.errors import job_traceback
 
 from ..base import Operation
 from ..registry import register
@@ -491,7 +492,7 @@ def recombine_evolution_task(
             local_jobs[parent_job_id]["status"] = "failed"
             local_jobs[parent_job_id]["progress"] = None
             local_jobs[parent_job_id]["error"] = str(e)
-            local_jobs[parent_job_id]["traceback"] = traceback.format_exc()
+            local_jobs[parent_job_id]["traceback"] = job_traceback(e)
 
 
 run_recombine_task = recombine_evolution_task

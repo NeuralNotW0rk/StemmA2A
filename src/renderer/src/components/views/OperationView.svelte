@@ -16,6 +16,7 @@
     cyInstanceStore
   } from '../../utils/stores'
   import { startExecution } from '../../utils/execution'
+  import { engineUnavailableReason, runsOnEngine } from '../../utils/engine-connection'
   import { parseSequence, numericSequenceError } from '../../utils/sequence'
   import DynamicForm from '../DynamicForm.svelte'
   import NodeSelectorList from '../NodeSelectorList.svelte'
@@ -209,6 +210,11 @@
 
   // Generating exemplars for individuals first offers to repeat the generations of exemplars
   // across their lineages; "Add New Exemplar" falls through to the standard generate form
+  // Why this operation can't run right now, when it needs a remote engine that can't be reached
+  let engineBlockedReason: string | null = $derived(
+    runsOnEngine($selectedOperation) ? $engineUnavailableReason : null
+  )
+
   let isExemplarGeneration = $derived.by(() => {
     const node = $initiatorNodeStore
     if ($selectedOperation?.name !== 'generate' || isReplicated || !node) return false
@@ -1217,6 +1223,9 @@
 
 <div class="view-container">
   <div class="view-content">
+    {#if engineBlockedReason}
+      <p class="error-message" role="status">{engineBlockedReason}</p>
+    {/if}
     {#if isExemplarGeneration && exemplarView === 'presets'}
       <p class="op-description">
         Repeat the generations of exemplars from this lineage on the selected
@@ -1307,7 +1316,7 @@
       <button
         class="primary"
         onclick={runExemplarPresets}
-        disabled={presetsLoading || presetJobCount === 0}
+        disabled={presetsLoading || presetJobCount === 0 || !!engineBlockedReason}
       >
         {presetJobCount === 1 ? 'Generate 1 Exemplar' : `Generate ${presetJobCount} Exemplars`}
       </button>
@@ -1319,6 +1328,7 @@
           !$selectedOperation ||
           (fieldsConfig?.length > 0 && !isFormValid) ||
           !gratingStrengthsValid ||
+          !!engineBlockedReason ||
           isRunning}
       >
         {#if isRunning}

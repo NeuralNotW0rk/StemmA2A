@@ -23,6 +23,7 @@ from param_graph.elements.collections.group_element import Group
 from param_graph.elements.base_elements import Asset
 from evolution.lora_genome import LoRAGenome, get_lora_mutation_strategy
 from utils.uid import XXH3_64
+from utils.errors import job_traceback
 
 from ..base import Operation
 from ..registry import register
@@ -386,7 +387,7 @@ def scatter_evolution_task(
             local_jobs[parent_job_id]["status"] = "failed"
             local_jobs[parent_job_id]["progress"] = None
             local_jobs[parent_job_id]["error"] = str(e)
-            local_jobs[parent_job_id]["traceback"] = traceback.format_exc()
+            local_jobs[parent_job_id]["traceback"] = job_traceback(e)
 
 
 run_scatter_task = scatter_evolution_task

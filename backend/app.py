@@ -63,6 +63,7 @@ from utils.audio import load_audio, save_audio_to_buffer, save_audio
 from utils.provenance import embed_provenance, read_provenance, restore_context, ORIGIN_KEY
 from utils.form import create_dynamic_model
 from utils.uid import XXH3_64, path_from_uid
+from utils.errors import EngineUnreachableError, job_traceback
 from utils.migrations import run_global_migrations, run_project_migrations
 from utils.log_capture import start_log_capture
 from utils.semantic_interrogation import SemanticInterrogator
@@ -166,6 +167,12 @@ engine_provider: EngineProvider = None
 # Context storage for background jobs
 active_jobs = {}
 local_jobs = task_manager.jobs
+
+# How long a remote job keeps being polled while the engine service can't be reached. A spotty connection
+# shouldn't fail a job that is still running fine on the engine.
+REMOTE_JOB_GRACE_SECONDS = float(os.environ.get("REMOTE_JOB_GRACE_SECONDS", 600))
+# Per remote job: the last progress it reported, and when the engine service stopped answering (None while it answers)
+_remote_poll_state: dict[str, dict] = {}
 
 graph_lock = threading.Lock()
 # The room the frontend is viewing; new top-level elements are placed there (see param_graph.rooms)
@@ -812,7 +819,7 @@ async def _import_model_task(job_id: str, data: dict) -> None:
         local_jobs[job_id]["status"] = "failed"
         local_jobs[job_id]["progress"] = None
         local_jobs[job_id]["error"] = str(e)
-        local_jobs[job_id]["traceback"] = traceback.format_exc()
+        local_jobs[job_id]["traceback"] = job_traceback(e)
 
 
 @app.route("/register_model", methods=["POST"])
@@ -848,7 +855,7 @@ async def import_model():
     except Exception as e:
         print(f"Failed to initiate model import: {e}")
         traceback.print_exc()
-        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+        return jsonify({"error": str(e), "traceback": job_traceback(e)}), 500
 
 
 async def _export_shared_model_task(job_id: str, model_id: str) -> None:
@@ -909,7 +916,7 @@ async def _export_shared_model_task(job_id: str, model_id: str) -> None:
         local_jobs[job_id]["status"] = "failed"
         local_jobs[job_id]["progress"] = None
         local_jobs[job_id]["error"] = str(e)
-        local_jobs[job_id]["traceback"] = traceback.format_exc()
+        local_jobs[job_id]["traceback"] = job_traceback(e)
 
 
 @app.route("/export_shared_model", methods=["POST"])
@@ -949,7 +956,7 @@ async def export_shared_model():
     except Exception as e:
         print(f"Failed to start shared model export: {e}")
         traceback.print_exc()
-        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+        return jsonify({"error": str(e), "traceback": job_traceback(e)}), 500
 
 
 @app.route("/register_grating", methods=["POST"])
@@ -1070,7 +1077,7 @@ async def create_grating():
     except Exception as e:
         print(f"Failed to start grating creation: {e}")
         traceback.print_exc()
-        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+        return jsonify({"error": str(e), "traceback": job_traceback(e)}), 500
 
 
 @app.route("/wrap_individual", methods=["POST"])
@@ -1095,7 +1102,7 @@ async def wrap_individual():
     except Exception as e:
         print(f"Failed to wrap individual: {e}")
         traceback.print_exc()
-        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+        return jsonify({"error": str(e), "traceback": job_traceback(e)}), 500
 
 
 @app.route("/scatter_evolution", methods=["POST"])
@@ -1122,7 +1129,7 @@ async def scatter_evolution():
     except Exception as e:
         print(f"Failed to start scatter: {e}")
         traceback.print_exc()
-        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+        return jsonify({"error": str(e), "traceback": job_traceback(e)}), 500
 
 
 @app.route("/recombine_evolution", methods=["POST"])
@@ -1151,7 +1158,7 @@ async def recombine_evolution():
     except Exception as e:
         print(f"Failed to start recombination: {e}")
         traceback.print_exc()
-        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+        return jsonify({"error": str(e), "traceback": job_traceback(e)}), 500
 
 
 @app.route("/express_individual", methods=["POST"])
@@ -1180,7 +1187,7 @@ async def express_individual():
     except Exception as e:
         print(f"Failed to express individual: {e}")
         traceback.print_exc()
-        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+        return jsonify({"error": str(e), "traceback": job_traceback(e)}), 500
 
 @app.route("/exemplar_presets", methods=["POST"])
 async def get_exemplar_presets():
@@ -1215,7 +1222,7 @@ async def get_exemplar_presets():
     except Exception as e:
         print(f"Failed to collect exemplar presets: {e}")
         traceback.print_exc()
-        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+        return jsonify({"error": str(e), "traceback": job_traceback(e)}), 500
 
 @app.route("/adapter_config/<adapter_name>", methods=["GET"])
 async def get_adapter_config(adapter_name):
@@ -1334,9 +1341,35 @@ async def get_job_status(job_id):
 
     try:
         engine = engine_provider.get_engine()
-        
-        status_info = await engine.get_job_status(job_id)
+
+        poll_state = _remote_poll_state.setdefault(job_id, {"progress": None, "unreachable_since": None})
+        try:
+            status_info = await engine.get_job_status(job_id)
+        except EngineUnreachableError as e:
+            now = time.time()
+            since = poll_state["unreachable_since"] = poll_state["unreachable_since"] or now
+            if now - since > REMOTE_JOB_GRACE_SECONDS:
+                _remote_poll_state.pop(job_id, None)
+                active_jobs.pop(job_id, None)
+                return jsonify({
+                    "status": "failed",
+                    "error": f"Lost contact with the remote engine for over {REMOTE_JOB_GRACE_SECONDS / 60:g} minutes. {e}",
+                    "traceback": None,
+                }), 500
+            # The job may still be running on the engine, so it is reported as running until the grace period ends
+            progress = dict(poll_state["progress"] or {"value": 0, "total": 100})
+            progress["description"] = (
+                f"Connection to the remote engine lost {int(now - since)} s ago; retrying..."
+            )
+            return jsonify({"status": "running", "progress": progress, "reconnecting": True}), 200
+
+        poll_state["unreachable_since"] = None
+        if status_info.get("progress"):
+            poll_state["progress"] = status_info["progress"]
         status = status_info.get("status")
+
+        if status not in ("pending", "running"):
+            _remote_poll_state.pop(job_id, None)
 
         if status in ["completed", "failed", "not_found"]:
             job_context = active_jobs.pop(job_id, None)
@@ -1502,7 +1535,7 @@ async def get_job_status(job_id):
     except Exception as e:
         print(f"Failed to get job status: {e}")
         traceback.print_exc()
-        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+        return jsonify({"error": str(e), "traceback": job_traceback(e)}), 500
 
 
 @app.route("/jobs/<job_id>/cancel", methods=["POST"])
@@ -1517,6 +1550,7 @@ async def cancel_job(job_id):
         engine = engine_provider.get_engine()
         await engine.cancel_job(job_id)
         active_jobs.pop(job_id, None)
+        _remote_poll_state.pop(job_id, None)
             
         return jsonify({
             "message": f"Cancellation requested for job {job_id}.",
@@ -1615,7 +1649,7 @@ async def execute_operation():
             
     except Exception as e:
         traceback.print_exc()
-        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+        return jsonify({"error": str(e), "traceback": job_traceback(e)}), 500
 
 
 # --------------------
@@ -1693,7 +1727,7 @@ async def _rescan_source_task(job_id: str, source_name: str) -> None:
         local_jobs[job_id]["status"] = "failed"
         local_jobs[job_id]["progress"] = None
         local_jobs[job_id]["error"] = str(e)
-        local_jobs[job_id]["traceback"] = traceback.format_exc()
+        local_jobs[job_id]["traceback"] = job_traceback(e)
 
 
 @app.route("/rescan_source", methods=["POST"])
@@ -1733,7 +1767,7 @@ async def rescan_source():
     except Exception as e:
         print(f"Failed to start source rescan: {e}")
         traceback.print_exc()
-        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+        return jsonify({"error": str(e), "traceback": job_traceback(e)}), 500
 
 
 def _remove_with_expansions(node_id: str) -> set[str]:
@@ -1916,7 +1950,7 @@ async def _expand_path_task(job_id: str, path_node_id: str) -> None:
         local_jobs[job_id]["status"] = "failed"
         local_jobs[job_id]["progress"] = None
         local_jobs[job_id]["error"] = str(e)
-        local_jobs[job_id]["traceback"] = traceback.format_exc()
+        local_jobs[job_id]["traceback"] = job_traceback(e)
 
 
 @app.route("/expand_path", methods=["POST"])
@@ -1956,7 +1990,7 @@ async def expand_path():
     except Exception as e:
         print(f"Failed to start directory expansion: {e}")
         traceback.print_exc()
-        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+        return jsonify({"error": str(e), "traceback": job_traceback(e)}), 500
 
 def resolve_audio_path(audio_id):
     """Gets the audio path, falling back to the project cache if the original file was deleted."""
@@ -2518,7 +2552,7 @@ def _execute_embedding_pass(force_recalculate=False, job_ids=None):
                 local_jobs[j_id]["status"] = "failed"
                 local_jobs[j_id]["progress"] = None
                 local_jobs[j_id]["error"] = str(e)
-                local_jobs[j_id]["traceback"] = traceback.format_exc()
+                local_jobs[j_id]["traceback"] = job_traceback(e)
 
 
 def _run_embedding_worker_loop():
@@ -2975,7 +3009,7 @@ async def _export_audio_task(job_id: str, names: list[str], export_dir_str: str 
         local_jobs[job_id]["status"] = "failed"
         local_jobs[job_id]["progress"] = None
         local_jobs[job_id]["error"] = str(e)
-        local_jobs[job_id]["traceback"] = traceback.format_exc()
+        local_jobs[job_id]["traceback"] = job_traceback(e)
 
 
 @app.route("/export", methods=["POST"])
@@ -3017,7 +3051,7 @@ async def export_audio():
     except Exception as e:
         print(f"Failed to start export: {e}")
         traceback.print_exc()
-        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+        return jsonify({"error": str(e), "traceback": job_traceback(e)}), 500
 
 # --------------------
 #  Element Updates

@@ -5,6 +5,7 @@ import uuid
 import threading
 import contextvars
 import traceback
+from utils.errors import job_traceback
 import asyncio
 
 from param_graph.graph import ParameterGraph
@@ -97,7 +98,7 @@ async def create_grating_task(
             local_jobs[job_id]["status"] = "failed"
             local_jobs[job_id]["progress"] = None
             local_jobs[job_id]["error"] = str(e)
-            local_jobs[job_id]["traceback"] = traceback.format_exc()
+            local_jobs[job_id]["traceback"] = job_traceback(e)
 
 
 async def dispatch_create_grating_operation(

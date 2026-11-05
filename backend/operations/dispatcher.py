@@ -24,6 +24,7 @@ from utils.audio import save_audio
 from utils.provenance import embed_provenance
 from utils.form import create_dynamic_model
 from utils.uid import XXH3_64, path_from_uid
+from utils.errors import job_traceback
 
 from .registry import operation_registry
 from .task_manager import task_manager, TaskManager
@@ -278,7 +279,7 @@ async def dispatch_operation(
                 return {"error": "Invalid request", "details": str(e)}, 400
             except Exception as e:
                 traceback.print_exc()
-                return {"error": str(e), "traceback": traceback.format_exc()}, 500
+                return {"error": str(e), "traceback": job_traceback(e)}, 500
 
         # Queued Background Host Tasks
         elif op.execution == "queued":
@@ -586,4 +587,4 @@ async def dispatch_operation(
         return {"error": "Invalid request", "details": str(e)}, 400
     except Exception as e:
         traceback.print_exc()
-        return {"error": str(e), "traceback": traceback.format_exc()}, 500
+        return {"error": str(e), "traceback": job_traceback(e)}, 500

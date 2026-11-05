@@ -212,16 +212,18 @@ class TestRemoteTransferDeduplication(unittest.IsolatedAsyncioTestCase):
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             try:
-                with patch("aiohttp.ClientSession", return_value=mock_session):
-                    return loop.run_until_complete(self.engine.get_job_status(fake_job_id))
+                return loop.run_until_complete(self.engine.get_job_status(fake_job_id))
             finally:
                 loop.close()
 
         try:
             num_threads = 8
-            with ThreadPoolExecutor(max_workers=num_threads) as executor:
-                futures = [executor.submit(_thread_worker) for _ in range(num_threads)]
-                results = [f.result() for f in futures]
+            # Patched once for all threads: patch() isn't thread-safe, and concurrent enters and exits can
+            # leave aiohttp.ClientSession mocked for every later test
+            with patch("aiohttp.ClientSession", return_value=mock_session):
+                with ThreadPoolExecutor(max_workers=num_threads) as executor:
+                    futures = [executor.submit(_thread_worker) for _ in range(num_threads)]
+                    results = [f.result() for f in futures]
 
             self.assertEqual(len(results), num_threads)
             self.assertTrue(all(r.get("status") == "completed" for r in results))

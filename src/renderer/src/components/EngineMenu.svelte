@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { EngineConnection, EngineMode, EngineSettings, EngineState } from '../utils/types'
+  import { engineAvailability } from '../utils/engine-connection'
 
   // Each check goes through the backend to the engine service, often over a tunnel, so it is kept infrequent
   const CHECK_INTERVAL_MS = 20000
@@ -70,6 +71,16 @@
     checkConnection()
     const timer = window.setInterval(checkConnection, CHECK_INTERVAL_MS)
     return (): void => window.clearInterval(timer)
+  })
+
+  // Shares the latest check, so operations that need the engine can be disabled while it is unreachable
+  $effect((): void => {
+    const remoteUrl = engine?.mode === 'remote' ? (engine.remote_url ?? null) : null
+    engineAvailability.set({
+      remoteUrl,
+      reachable: remoteUrl ? (connection?.reachable ?? null) : null,
+      error: remoteUrl ? (connection?.error ?? null) : null
+    })
   })
 
   function openMenu(): void {

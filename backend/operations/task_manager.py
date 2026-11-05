@@ -7,6 +7,7 @@ import threading
 import contextvars
 import asyncio
 import traceback
+from utils.errors import job_traceback
 from concurrent.futures import ThreadPoolExecutor
 
 
@@ -161,7 +162,7 @@ class TaskManager:
             except Exception as ex:
                 print(f"[TaskManager] Error executing task for job '{jid}': {ex}")
                 traceback.print_exc()
-                self.fail_job(jid, error=str(ex), traceback_str=traceback.format_exc())
+                self.fail_job(jid, error=str(ex), traceback_str=job_traceback(ex))
 
         # Run in a copy of the caller's context so context variables (e.g. room placement) carry over
         self._executor.submit(contextvars.copy_context().run, _worker_wrapper)
