@@ -364,15 +364,20 @@ class RemoteEngine(Engine):
         auth_headers = self._get_auth_headers()
         timeout = aiohttp.ClientTimeout(total=self.timeout)
 
-        async with aiohttp.ClientSession(headers=auth_headers, timeout=timeout) as session:
-            async with session.post(f"{self.remote_url}/jobs/{job_id}/cancel") as response:
-                if response.status not in [200, 202]: # Accept OK or Accepted
-                    # Log the error but don't raise for now, as the frontend might not handle it gracefully.
-                    # The job will likely just stay in a 'cancelling' state.
-                    error_text = await response.text()
-                    print(f"Failed to cancel remote job {job_id}. Status: {response.status}. Body: {error_text}")
-                else:
-                    print(f"Successfully requested cancellation for remote job {job_id}.")
+        try:
+            async with aiohttp.ClientSession(headers=auth_headers, timeout=timeout) as session:
+                async with session.post(f"{self.remote_url}/jobs/{job_id}/cancel") as response:
+                    if response.status in UNREACHABLE_STATUSES:
+                        response.raise_for_status()
+                    if response.status not in [200, 202]: # Accept OK or Accepted
+                        # Log the error but don't raise for now, as the frontend might not handle it gracefully.
+                        # The job will likely just stay in a 'cancelling' state.
+                        error_text = await response.text()
+                        print(f"Failed to cancel remote job {job_id}. Status: {response.status}. Body: {error_text}")
+                    else:
+                        print(f"Successfully requested cancellation for remote job {job_id}.")
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            raise _request_error(e) from e
 
     async def _download_single_asset(self, asset_id: str, local_path: Path, session: aiohttp.ClientSession) -> bool:
         """Downloads a single asset from the remote server with atomic staging and progress reporting."""

@@ -171,8 +171,12 @@ local_jobs = task_manager.jobs
 # How long a remote job keeps being polled while the engine service can't be reached. A spotty connection
 # shouldn't fail a job that is still running fine on the engine.
 REMOTE_JOB_GRACE_SECONDS = float(os.environ.get("REMOTE_JOB_GRACE_SECONDS", 600))
-# Per remote job: the last progress it reported, and when the engine service stopped answering (None while it answers)
+# Per remote job: the last status and progress it reported, and when the engine service stopped answering
+# (None while it answers)
 _remote_poll_state: dict[str, dict] = {}
+# Remote jobs cancelled while their engine couldn't be reached. They are reported as cancelled from then on,
+# and anything they produce if the engine comes back is never fetched.
+_locally_cancelled_jobs: set[str] = set()
 
 graph_lock = threading.Lock()
 # The room the frontend is viewing; new top-level elements are placed there (see param_graph.rooms)
@@ -1339,10 +1343,15 @@ async def get_job_status(job_id):
             return jsonify(job_info), 200 if status == "completed" else 500
         return jsonify(job_info), 200
 
+    if job_id in _locally_cancelled_jobs:
+        return jsonify({"status": "cancelled"}), 200
+
     try:
         engine = engine_provider.get_engine()
 
-        poll_state = _remote_poll_state.setdefault(job_id, {"progress": None, "unreachable_since": None})
+        poll_state = _remote_poll_state.setdefault(
+            job_id, {"status": "pending", "progress": None, "unreachable_since": None}
+        )
         try:
             status_info = await engine.get_job_status(job_id)
         except EngineUnreachableError as e:
@@ -1356,17 +1365,20 @@ async def get_job_status(job_id):
                     "error": f"Lost contact with the remote engine for over {REMOTE_JOB_GRACE_SECONDS / 60:g} minutes. {e}",
                     "traceback": None,
                 }), 500
-            # The job may still be running on the engine, so it is reported as running until the grace period ends
+            # The job may still be queued or running on the engine, so it keeps its last known status until the
+            # grace period ends
             progress = dict(poll_state["progress"] or {"value": 0, "total": 100})
             progress["description"] = (
                 f"Connection to the remote engine lost {int(now - since)} s ago; retrying..."
             )
-            return jsonify({"status": "running", "progress": progress, "reconnecting": True}), 200
+            return jsonify({"status": poll_state["status"], "progress": progress, "reconnecting": True}), 200
 
         poll_state["unreachable_since"] = None
         if status_info.get("progress"):
             poll_state["progress"] = status_info["progress"]
         status = status_info.get("status")
+        if status in ("pending", "running"):
+            poll_state["status"] = status
 
         if status not in ("pending", "running"):
             _remote_poll_state.pop(job_id, None)
@@ -1548,14 +1560,20 @@ async def cancel_job(job_id):
 
     try:
         engine = engine_provider.get_engine()
-        await engine.cancel_job(job_id)
+        try:
+            await engine.cancel_job(job_id)
+            message = f"Cancellation requested for job {job_id}."
+        except EngineUnreachableError:
+            # The engine can't be told, so the job is dropped here: whatever it produces is never fetched
+            _locally_cancelled_jobs.add(job_id)
+            message = (
+                f"Job {job_id} was cancelled here, but the remote engine couldn't be reached to stop it. "
+                f"If the engine comes back it may finish the job, and its result will be discarded."
+            )
         active_jobs.pop(job_id, None)
         _remote_poll_state.pop(job_id, None)
-            
-        return jsonify({
-            "message": f"Cancellation requested for job {job_id}.",
-            "success": True
-        }), 202
+
+        return jsonify({"message": message, "success": True}), 202
     except Exception as e:
         print(f"Failed to cancel job: {e}")
         traceback.print_exc()

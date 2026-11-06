@@ -98,8 +98,9 @@ export async function cancelJob(jobId: string): Promise<void> {
       await window.api.cancelJob(jobId)
       job.status = 'cancelled'
       updateJob(job)
-    } catch (error) {
-      job.status = 'running' // Or 'error'
+    } catch (error: unknown) {
+      // The job carries on, so polling picks its real status up again
+      job.status = 'running'
       updateJob(job)
       console.error('Error cancelling job:', error)
     }
@@ -146,12 +147,43 @@ export function focusJobNode(job: Job): void {
   }
 }
 
+// Thrown by pollJobStatus when the job was cancelled, so callers can leave it as cancelled
+export class JobCancelledError extends Error {
+  constructor(jobId: string) {
+    super(`Job ${jobId} was cancelled.`)
+    this.name = 'JobCancelledError'
+  }
+}
+
+function jobStatusOf(jobId: string): JobStatus | undefined {
+  return get(jobStore).find((j: Job): boolean => j.id === jobId)?.status
+}
+
 export async function pollJobStatus(jobId: string, intervalMs = 1500): Promise<unknown> {
   while (true) {
+    if (jobStatusOf(jobId) === 'cancelled') throw new JobCancelledError(jobId)
+
     // Use the IPC bridge instead of a direct HTTP fetch
     const data = (await window.api.pollJobStatus(jobId)) as Record<string, unknown>
-    
-    if (data.status === 'completed') {
+
+    // A cancel was requested meanwhile: its outcome decides the job's status, not this poll
+    const localStatus = jobStatusOf(jobId)
+    if (localStatus === 'cancelled') throw new JobCancelledError(jobId)
+    if (localStatus === 'cancelling' && data.status !== 'completed') {
+      await new Promise((resolve: (value: void) => void): void => {
+        setTimeout((): void => resolve(), intervalMs)
+      })
+      continue
+    }
+
+    if (data.status === 'cancelled') {
+      jobStore.update((jobs: Job[]): Job[] =>
+        jobs.map((j: Job): Job =>
+          j.id === jobId ? { ...j, status: 'cancelled', updatedAt: Date.now() } : j
+        )
+      )
+      throw new JobCancelledError(jobId)
+    } else if (data.status === 'completed') {
       jobStore.update((jobs: Job[]): Job[] => {
         const index = jobs.findIndex((j: Job): boolean => j.id === jobId)
         if (index > -1) {

@@ -1,6 +1,6 @@
 import { writable } from 'svelte/store'
 import type { Writable } from 'svelte/store'
-import { addJob, updateJob, pollJobStatus } from './job-management'
+import { addJob, updateJob, pollJobStatus, JobCancelledError } from './job-management'
 
 export type ExecutionStatus = 'idle' | 'running' | 'success' | 'error'
 
@@ -83,6 +83,8 @@ export async function startExecution(
       }
     }
   } catch (e: unknown) {
+    // A cancelled job keeps its cancelled status
+    if (e instanceof JobCancelledError) return
     let message = e instanceof Error ? e.message : String(e)
     message = message.replace(/^Error invoking remote method '[^']+':\s*(Error:\s*)?/, '')
     const error = { title: 'Execution Failed', message }

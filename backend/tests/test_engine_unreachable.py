@@ -90,6 +90,7 @@ class JobStatusGracePeriodTest(unittest.TestCase):
         for name in ("engine_provider", "param_graph", "REMOTE_JOB_GRACE_SECONDS"):
             self.addCleanup(setattr, app_module, name, getattr(app_module, name))
         self.addCleanup(app_module._remote_poll_state.clear)
+        self.addCleanup(app_module._locally_cancelled_jobs.clear)
         self.addCleanup(app_module.active_jobs.clear)
         app_module.param_graph = MagicMock()
         self.engine = MagicMock()
@@ -118,6 +119,24 @@ class JobStatusGracePeriodTest(unittest.TestCase):
         code, body = self._poll({"status": "running", "progress": {"value": 4, "total": 10}})
         self.assertEqual(body["progress"]["value"], 4)
         self.assertIsNone(self.app_module._remote_poll_state["job_r"]["unreachable_since"])
+
+    def test_queued_job_stays_pending_while_disconnected(self):
+        self._poll({"status": "pending", "progress": None})
+        _, body = self._poll(EngineUnreachableError("offline"))
+        self.assertEqual(body["status"], "pending")
+
+    def test_cancel_while_disconnected_cancels_locally(self):
+        self._poll(EngineUnreachableError("offline"))
+        self.engine.cancel_job = AsyncMock(side_effect=EngineUnreachableError("offline"))
+
+        res = self.client.post("/jobs/job_r/cancel")
+        self.assertEqual(res.status_code, 202)
+        self.assertIn("couldn't be reached", res.get_json()["message"])
+        self.assertNotIn("job_r", self.app_module.active_jobs)
+
+        # Stays cancelled, even once the engine answers again with the job's progress
+        code, body = self._poll({"status": "running", "progress": {"value": 5, "total": 10}})
+        self.assertEqual((code, body["status"]), (200, "cancelled"))
 
     def test_job_fails_once_the_grace_period_runs_out(self):
         self.app_module.REMOTE_JOB_GRACE_SECONDS = 60
