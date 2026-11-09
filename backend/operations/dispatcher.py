@@ -17,7 +17,6 @@ from param_graph.elements.artifacts.latent_element import Latent
 from param_graph.elements.artifacts.individual_element import Individual
 from param_graph.elements.models.base_model_element import Model
 from param_graph.elements.collections.group_element import Group
-from param_graph.elements.base_elements import Asset
 from param_graph.utils import save_artifact_asset
 from param_graph.rooms import placement_room
 from utils.audio import save_audio
@@ -32,7 +31,7 @@ from .evolution.wrap_individual import wrap_precursor_as_individual
 from .evolution.expression import express_individuals
 from .evolution.scatter import dispatch_scatter_operation
 from .evolution.recombine import dispatch_recombine_operation
-from .evolution.resolution import resolve_exemplar_context
+from .evolution.resolution import reject_legacy_baseline, resolve_exemplar_context
 from .grating.create_grating import dispatch_create_grating_operation
 
 
@@ -468,18 +467,11 @@ async def dispatch_operation(
         if target_individual_nodes:
             node_engine_args["individual_elements"] = target_individual_nodes
             first_ind = target_individual_nodes[0]
+            for individual_node in target_individual_nodes:
+                reject_legacy_baseline(individual_node)
             base_grating_elem = None
             if first_ind.baseline_grating_id and param_graph.G.has_node(first_ind.baseline_grating_id):
                 base_grating_elem = param_graph.get_element(first_ind.baseline_grating_id)
-            elif first_ind.context.get("baseline_file_path"):
-                base_grating_elem = Grating(
-                    id=f"grating_{uuid.uuid4().hex[:8]}",
-                    name="Baseline Grating",
-                    context={},
-                    file=Asset(path=str(first_ind.context.get("baseline_file_path")), uid=f"grating_{uuid.uuid4().hex[:8]}", extension=".safetensors"),
-                    base_model_id=model_id,
-                    elements=first_ind.context.get("baseline_elements") or []
-                )
             if base_grating_elem:
                 node_engine_args["baseline_grating"] = base_grating_elem
 

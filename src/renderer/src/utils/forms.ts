@@ -37,9 +37,38 @@ export interface FormField {
     description?: string;
   }[];
   allowSequence?: boolean;
+  // Shown as its current value instead of an input, for values set by the app (e.g. from the model)
+  readonly?: boolean;
+  // Greyed out (but still shown) while these conditions hold, for settings another setting makes
+  // irrelevant. Like show_if, a list means any one of the condition sets.
+  disable_if?: Record<string, unknown> | Record<string, unknown>[];
+  // Resolved from disable_if by DynamicForm; not set in configs
+  disabled?: boolean;
 }
 
 export type FormConfig = FormField[];
+
+/**
+ * True when every condition in condSet holds for data. A condition is a value the key must equal,
+ * 'exists' (the key has a truthy value, such as an attached node) or 'absent' (it has none).
+ * Used for show_if, conditionalDefaults and conditionalProps alike.
+ */
+export function matchesConditions(
+  condSet: Record<string, unknown>,
+  data: Record<string, unknown>
+): boolean {
+  for (const key in condSet) {
+    const condition = condSet[key];
+    if (condition === 'exists') {
+      if (!data[key]) return false;
+    } else if (condition === 'absent') {
+      if (data[key]) return false;
+    } else if (data[key] !== condition) {
+      return false;
+    }
+  }
+  return true;
+}
 
 export interface ModelData {
   id: string
@@ -237,22 +266,7 @@ export function initializeFormData(
       if (!hasLatentContextValue && field.conditionalDefaults) {
         const data = { ...context, ...formData };
         for (const condDefault of field.conditionalDefaults) {
-          let conditionsMet = true;
-          for (const key in condDefault.show_if) {
-            const condition = condDefault.show_if[key];
-            if (condition === 'exists') {
-              if (!data[key]) {
-                conditionsMet = false;
-                break;
-              }
-            } else {
-              if (data[key] !== condition) {
-                conditionsMet = false;
-                break;
-              }
-            }
-          }
-          if (conditionsMet) {
+          if (matchesConditions(condDefault.show_if, data)) {
             val = condDefault.value;
             break;
           }

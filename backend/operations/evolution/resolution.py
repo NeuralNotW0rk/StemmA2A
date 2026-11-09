@@ -12,6 +12,20 @@ from param_graph.elements.artifacts.bundle_element import Bundle
 from param_graph.elements.collections.group_element import Group
 
 
+def reject_legacy_baseline(individual: Any) -> None:
+    """
+    Fails fast on an individual that still stores its baseline as a file path. The baseline-references
+    migration converts those into baseline grating nodes when a project is opened. A leftover
+    baseline_elements list without a file path names no baseline, so it is ignored.
+    """
+    context = getattr(individual, "context", None) or {}
+    if context.get("baseline_file_path"):
+        raise ValueError(
+            f"Individual '{individual.id}' stores its baseline in the legacy format. Reopen the project "
+            "with migrations enabled (ENABLE_MIGRATIONS=true) to convert it."
+        )
+
+
 def extract_individual_parent_ids(
     parent_input: Any,
     param_graph: Optional[Any] = None,

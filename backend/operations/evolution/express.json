@@ -10,6 +10,7 @@
       "name": "individuals",
       "type": "node-list",
       "label": "Individual(s)",
+      "description": "The individuals to express. Each genome is written out as its own grating, the individual's phenotype as a standalone file, placed inside the individual. Switched-off layers stay off and their stored weights are not kept. Generating doesn't need this; express to reuse or share an individual as a grating.",
       "filter": {
         "type": "individual"
       },

@@ -3,6 +3,7 @@
         {
             "name": "name",
             "label": "Model Name",
+            "description": "The name shown on the model's node. It's only a label: the model is identified by the checkpoint's contents.",
             "type": "text",
             "defaultValue": "StyleGAN2",
             "placeholder": "Enter custom model name..."
@@ -10,6 +11,7 @@
         {
             "name": "checkpoint_path",
             "label": "Checkpoint Path",
+            "description": "A StyleGAN2 generator checkpoint: a PyTorch .pt or .pth file, or a .pkl from NVIDIA's original TensorFlow release, which is converted when it loads.",
             "type": "file",
             "required": true,
             "filters": [
@@ -22,7 +24,19 @@
         {
             "name": "seed",
             "label": "Seed",
+            "description": "Picks the random starting vector, so each seed gives a different image and the same seed always gives the same one. When Randomize Noise is on it also sets the fine per-layer noise. The dice button picks a random seed.",
+            "conditionalProps": [
+                {
+                    "show_if": {"init_latent": "exists", "randomize_noise": false},
+                    "description": "Greyed out: with an initial latent the image comes from the latent, and with Randomize Noise off the model's fixed noise is used, so the seed has nothing left to change."
+                },
+                {
+                    "show_if": {"init_latent": "exists"},
+                    "description": "With an initial latent the image comes from the latent, so the seed only sets the per-layer noise that Randomize Noise draws."
+                }
+            ],
             "type": "integer",
+            "disable_if": {"init_latent": "exists", "randomize_noise": false},
             "defaultValue": 0,
             "placeholder": "Enter seed",
             "randomizable": true
@@ -30,19 +44,23 @@
         {
             "name": "truncation",
             "label": "Truncation Value",
+            "description": "Trades variety for typicality by pulling the starting point toward the model's average image. 1 uses the model's full range, lower values give safer, more conventional results and 0 gives the average image itself. 0.7 is a common balance. Hidden with an initial latent, which is rendered as stored.",
             "type": "float",
+            "show_if": {"init_latent": "absent"},
             "defaultValue": 0.7,
             "placeholder": "Between 0.0 and 1.0 (truncation trick)"
         },
         {
             "name": "randomize_noise",
             "label": "Randomize Noise",
+            "description": "StyleGAN adds noise at every layer for fine, random detail such as strands of hair or surface texture. Off uses the model's fixed noise, so the same input always renders identically; on draws fresh noise from Seed. Keep it off to reproduce an inverted image.",
             "type": "boolean",
             "defaultValue": false
         },
         {
             "name": "init_latent",
             "label": "Initial Latent",
+            "description": "A latent to render instead of one drawn from Seed, usually the pivot made by Invert. To reproduce the inverted image, also apply the grating made by the same inversion (named pti_ plus the image name) under Gratings, and keep Randomize Noise off.",
             "type": "node",
             "filter": { "type": "latent" },
             "defaultValue": null
@@ -52,6 +70,7 @@
         {
             "name": "source_image",
             "label": "Source Image",
+            "description": "The image to invert. It is center-cropped to a square and resized to the model's resolution. Inversion makes two linked nodes, a latent (the pivot) and a grating; generating from the latent with the grating applied reproduces the image.",
             "type": "node",
             "filter": { "type": "image" },
             "required": true
@@ -59,6 +78,7 @@
         {
             "name": "projection_steps",
             "label": "Projection Steps",
+            "description": "Steps spent searching for the pivot: the single latent whose rendering best matches the image. More steps find a closer match, at proportionally more time. This search stays within what the model can already produce; Tuning Steps then closes the remaining gap.",
             "type": "integer",
             "defaultValue": 500,
             "placeholder": "Steps optimizing the pivot latent"
@@ -66,6 +86,7 @@
         {
             "name": "tuning_steps",
             "label": "Tuning Steps",
+            "description": "Steps spent training the grating, a small LoRA on the generator's convolutions, so the pivot reproduces the image exactly. More steps capture finer detail but take longer, and too many can overfit, which makes edits from the pivot look less natural.",
             "type": "integer",
             "defaultValue": 350,
             "placeholder": "Steps tuning the LoRA around the pivot"
@@ -73,6 +94,7 @@
         {
             "name": "rank",
             "label": "LoRA Rank",
+            "description": "Capacity of the tuned grating at each layer. Higher ranks reproduce more detail, but the grating then changes the model more broadly around the pivot, so edits and nearby latents look less natural. 4 is a good balance.",
             "type": "integer",
             "defaultValue": 4,
             "placeholder": "Higher reconstructs more detail, stays less editable"
@@ -80,24 +102,28 @@
         {
             "name": "projection_lr",
             "label": "Projection Learning Rate",
+            "description": "Starting step size for the pivot search. It ramps up briefly, then eases down to zero by the end. Higher values explore more widely but can jump past a good match; lower values may not travel far from the average image. 0.1 follows the StyleGAN2-ADA projector.",
             "type": "float",
             "defaultValue": 0.1
         },
         {
             "name": "tuning_lr",
             "label": "Tuning Learning Rate",
+            "description": "Step size for training the grating. Higher values fit faster but can turn unstable and add artifacts; lower values are steadier but may need more Tuning Steps. 0.001 is the usual setting for pivotal tuning.",
             "type": "float",
             "defaultValue": 0.001
         },
         {
             "name": "use_lpips",
             "label": "Perceptual (LPIPS) Loss",
+            "description": "Judges the match with LPIPS, a perceptual measure based on a VGG network, as well as pixel differences. It gives sharper, more natural inversions than pixel differences alone. The pivot search uses LPIPS alone; training the grating uses both.",
             "type": "boolean",
             "defaultValue": true
         },
         {
             "name": "seed",
             "label": "Seed",
+            "description": "Sets the random exploration noise in the pivot search and the grating's starting weights, so the same seed and settings always give the same inversion.",
             "type": "integer",
             "defaultValue": 0,
             "randomizable": true

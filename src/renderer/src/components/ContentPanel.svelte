@@ -52,6 +52,8 @@
 
   .content-panel.left {
     left: 1rem;
+    /* Leave room for the tip view below */
+    bottom: calc(1rem + var(--tip-view-height) + 0.5rem);
     width: 320px;
   }
 

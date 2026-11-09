@@ -347,7 +347,6 @@
 
   const MULTI_INITIATOR_OPERATIONS = new Set([
     'recombine',
-    'scatter',
     'generate',
     'express'
   ])
@@ -2002,7 +2001,7 @@
               >
                 <button
                   type="button"
-                  title={unavailable ? ($engineUnavailableReason ?? undefined) : undefined}
+                  data-tip={unavailable ? ($engineUnavailableReason ?? undefined) : undefined}
                   onclick={() => selectOp(op)}
                   onmouseenter={() => (selectedIndex = index)}
                 >

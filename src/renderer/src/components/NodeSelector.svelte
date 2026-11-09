@@ -331,7 +331,8 @@
                 batchItems = [{ id: nextBatchItemId++, node: null, autoActivate: false }]
               }
             }}
-            title="Remove from batch"
+            data-tip="Remove from batch"
+            aria-label="Remove from batch"
           >
             ✕
           </button>
@@ -352,7 +353,8 @@
             type="button"
             class="action-btn"
             onclick={toggleBatchMode}
-            title="Disable batch mode"
+            data-tip="Disable batch mode"
+            aria-label="Disable batch mode"
           >
             −
           </button>
@@ -378,7 +380,8 @@
             type="button"
             class="clear-icon-btn"
             onclick={clearSelection}
-            title="Clear selection"
+            data-tip="Clear selection"
+            aria-label="Clear selection"
           >
             ✕
           </button>
@@ -390,7 +393,8 @@
           type="button"
           class="action-btn"
           onclick={toggleBatchMode}
-          title="Enable batch mode"
+          data-tip="Enable batch mode"
+          aria-label="Enable batch mode"
         >
           +
         </button>

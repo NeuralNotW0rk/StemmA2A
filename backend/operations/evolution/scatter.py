@@ -17,7 +17,6 @@ from neutral_selection.representation.lineage import Lineage
 from neutral_selection.variation.mutation import MutationStrategy, mutate
 
 from param_graph.elements.artifacts.individual_element import Individual
-from param_graph.elements.artifacts.grating_element import Grating
 from param_graph.elements.models.base_model_element import Model
 from param_graph.elements.collections.group_element import Group
 from param_graph.elements.base_elements import Asset
@@ -27,7 +26,7 @@ from utils.errors import job_traceback
 
 from ..base import Operation
 from ..registry import register
-from .resolution import extract_individual_parent_ids, resolve_exemplar_context
+from .resolution import extract_individual_parent_ids, reject_legacy_baseline, resolve_exemplar_context
 from .wrap_individual import wrap_precursor_as_individual
 
 
@@ -125,26 +124,14 @@ def scatter_evolution_task(
             first_parent = parent_nodes[0]
             model_id = first_parent.base_model_id
             baseline_grating_id = first_parent.baseline_grating_id
-            baseline_elements = first_parent.context.get("baseline_elements")
-            baseline_file_path = first_parent.context.get("baseline_file_path")
+            reject_legacy_baseline(first_parent)
 
             model_element = param_graph.get_element(model_id)
             if not model_element:
                 raise ValueError(f"Base model '{model_id}' not found in parameter graph.")
 
             # Load baseline Diffracture Grating if needed
-            base_grating = None
-            if baseline_grating_id:
-                base_grating = param_graph.get_element(baseline_grating_id)
-            elif baseline_file_path:
-                base_grating = Grating(
-                    id=f"grating_{uuid.uuid4().hex[:8]}",
-                    name="Baseline Grating",
-                    context={},
-                    file=Asset(path=str(baseline_file_path), uid=f"grating_{uuid.uuid4().hex[:8]}", extension=".safetensors"),
-                    base_model_id=model_id,
-                    elements=baseline_elements or []
-                )
+            base_grating = param_graph.get_element(baseline_grating_id) if baseline_grating_id else None
 
             max_gen = max(getattr(p, "generation", 0) for p in parent_nodes)
             next_generation = max_gen + 1
@@ -403,7 +390,7 @@ async def dispatch_scatter_operation(
     uid_generator: Optional[Any] = None,
 ) -> tuple[dict[str, Any], int]:
     """
-    Validates and spawns a background scatter operation for seed individual(s).
+    Validates and spawns a background scatter operation from a single parent individual.
     """
     if param_graph is None or engine_provider is None:
         return {"error": "No project loaded"}, 400
@@ -424,25 +411,6 @@ async def dispatch_scatter_operation(
         or params.get("target_node")
     )
     parent_ids = extract_individual_parent_ids(raw_parent_input, param_graph=param_graph, graph_lock=graph_lock)
-
-    parent_group_id = (
-        data.get("parent_group_id")
-        or params.get("parent_group_id")
-        or (initiator_id if initiator_type == "group" else None)
-    )
-
-    if not parent_ids and parent_group_id:
-        def _resolve_grp() -> list[str]:
-            grp = param_graph.get_element(parent_group_id)
-            if grp and hasattr(grp, "member_ids") and grp.member_ids:
-                return extract_individual_parent_ids(grp.member_ids, param_graph=param_graph)
-            return []
-
-        if graph_lock is not None:
-            with graph_lock:
-                parent_ids = _resolve_grp()
-        else:
-            parent_ids = _resolve_grp()
 
     if not parent_ids and initiator_id and initiator_type == "individual":
         parent_ids = extract_individual_parent_ids([initiator_id], param_graph=param_graph, graph_lock=graph_lock)
@@ -470,7 +438,10 @@ async def dispatch_scatter_operation(
                 return wrap_json, wrap_code
 
     if not parent_ids:
-        return {"error": "Either parent_ids, parents, or an Individual/Group initiator must contain valid individual nodes."}, 400
+        return {"error": "Scatter needs a parent individual, given as parents, parent_ids or an Individual initiator."}, 400
+    # Scatter mutates one parent; several parents (including a group, which unpacks to its members) are rejected
+    if len(parent_ids) > 1:
+        return {"error": f"Scatter takes exactly one parent individual, but {len(parent_ids)} were given. Use Recombine to breed from several."}, 400
 
     offspring_size = int(
         data.get("offspring_size")

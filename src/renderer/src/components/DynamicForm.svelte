@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { FormConfig, FormField, ModelData, AudioData } from '../utils/forms'
+  import { matchesConditions } from '../utils/forms'
   import type { NodeListItem } from '../utils/types'
   import NodeSelector from './NodeSelector.svelte'
   import NodeSelectorList from './NodeSelectorList.svelte'
@@ -116,22 +117,7 @@
             let conditionsMet = false
 
             for (const condDefault of field.conditionalDefaults) {
-              let itemConditionsMet = true
-              for (const key in condDefault.show_if) {
-                const condition = condDefault.show_if[key]
-                if (condition === 'exists') {
-                  if (!data[key]) {
-                    itemConditionsMet = false
-                    break
-                  }
-                } else {
-                  if (data[key] !== condition) {
-                    itemConditionsMet = false
-                    break
-                  }
-                }
-              }
-              if (itemConditionsMet) {
+              if (matchesConditions(condDefault.show_if, data)) {
                 matchedDefaultValue = condDefault.value
                 conditionsMet = true
                 break
@@ -210,23 +196,9 @@
       formData[fieldName] = path
     }
   }
-  function matchesConditions(
-    condSet: Record<string, unknown>,
-    data: Record<string, unknown>
-  ): boolean {
-    for (const key in condSet) {
-      const condition = condSet[key]
-      if (condition === 'exists') {
-        if (!data[key]) return false
-      } else if (data[key] !== condition) {
-        return false
-      }
-    }
-    return true
-  }
 
   const visibleFields = $derived.by(() => {
-    // Collect all condition target keys from config's show_if and conditionalProps
+    // Collect all condition target keys from config's show_if, disable_if and conditionalProps
     const targetKeys = new Set<string>(
       config.flatMap((field) => {
         const condSets = field.show_if
@@ -234,8 +206,15 @@
             ? field.show_if
             : [field.show_if]
           : []
+        const disableConds = field.disable_if
+          ? Array.isArray(field.disable_if)
+            ? field.disable_if
+            : [field.disable_if]
+          : []
         const propConds = (field.conditionalProps ?? []).map((p) => p.show_if)
-        return [...condSets, ...propConds].flatMap((condSet) => Object.keys(condSet))
+        return [...condSets, ...disableConds, ...propConds].flatMap((condSet) =>
+          Object.keys(condSet)
+        )
       })
     )
 
@@ -259,10 +238,17 @@
         return matchesConditions(field.show_if, data)
       })
       .map((field: FormField): FormField => {
+        const disableSets = field.disable_if
+          ? Array.isArray(field.disable_if)
+            ? field.disable_if
+            : [field.disable_if]
+          : []
+        const disabled = disableSets.some((condSet) => matchesConditions(condSet, data))
         const override = field.conditionalProps?.find((p) => matchesConditions(p.show_if, data))
-        if (!override) return field
+        if (!override) return { ...field, disabled }
         return {
           ...field,
+          disabled,
           label: override.label ?? field.label,
           placeholder: override.placeholder ?? field.placeholder,
           description: override.description ?? field.description
@@ -279,7 +265,14 @@
   {#each visibleFields as field (field.name)}
     {@const isBatch =
       allowSequences && field.allowSequence !== false && batchFields.has(field.name)}
-    <div class="form-field">
+    <!-- Descriptions show in the tip view while the field is hovered or focused -->
+    <!-- A disabled fieldset greys out every control in the field, including its action buttons -->
+    <fieldset
+      class="form-field"
+      disabled={field.disabled}
+      data-tip={field.description}
+      data-tip-title={field.label}
+    >
       {#if field.type === 'textarea'}
         <label for={field.name}>{field.label}</label>
         <textarea bind:value={formData[field.name]} id={field.name} placeholder={field.placeholder}
@@ -315,7 +308,8 @@
                 type="button"
                 class="action-btn"
                 onclick={(): void => randomizeField(field.name, field.type)}
-                title="Randomize value"
+                data-tip="Randomize value"
+                aria-label="Randomize value"
               >
                 <svg
                   xmlns="http://www.w3.org/2000/svg"
@@ -348,7 +342,8 @@
                 type="button"
                 class="action-btn"
                 onclick={(): void => toggleBatchMode(field.name)}
-                title="Toggle sequence mode"
+                data-tip="Toggle sequence mode"
+                aria-label="Toggle sequence mode"
               >
                 {isBatch ? '−' : '+'}
               </button>
@@ -380,7 +375,8 @@
                 type="button"
                 class="action-btn"
                 onclick={(): void => randomizeField(field.name, field.type)}
-                title="Randomize value"
+                data-tip="Randomize value"
+                aria-label="Randomize value"
               >
                 <svg
                   xmlns="http://www.w3.org/2000/svg"
@@ -413,7 +409,8 @@
                 type="button"
                 class="action-btn"
                 onclick={(): void => toggleBatchMode(field.name)}
-                title="Toggle sequence mode"
+                data-tip="Toggle sequence mode"
+                aria-label="Toggle sequence mode"
               >
                 {isBatch ? '−' : '+'}
               </button>
@@ -441,6 +438,10 @@
           <input type="text" bind:value={formData[field.name]} placeholder={field.placeholder} />
           <button onclick={() => selectFieldDirectory(field.name)}>Browse</button>
         </div>
+      {:else if field.type === 'select' && field.readonly}
+        {@const current = field.options?.find((option) => option.value === formData[field.name])}
+        <span class="field-label">{field.label}</span>
+        <div class="readonly-value">{current ? current.label : String(formData[field.name] ?? '')}</div>
       {:else if field.type === 'select'}
         <label for={field.name}>{field.label}</label>
         <div class="input-row">
@@ -464,7 +465,8 @@
                 type="button"
                 class="action-btn"
                 onclick={(): void => randomizeField(field.name, field.type)}
-                title="Randomize value"
+                data-tip="Randomize value"
+                aria-label="Randomize value"
               >
                 <svg
                   xmlns="http://www.w3.org/2000/svg"
@@ -497,7 +499,8 @@
                 type="button"
                 class="action-btn"
                 onclick={(): void => toggleBatchMode(field.name)}
-                title="Toggle sequence mode"
+                data-tip="Toggle sequence mode"
+                aria-label="Toggle sequence mode"
               >
                 {isBatch ? '−' : '+'}
               </button>
@@ -553,7 +556,8 @@
                 type="button"
                 class="action-btn"
                 onclick={(): void => randomizeField(field.name, field.type)}
-                title="Randomize value"
+                data-tip="Randomize value"
+                aria-label="Randomize value"
               >
                 <svg
                   xmlns="http://www.w3.org/2000/svg"
@@ -586,7 +590,8 @@
                 type="button"
                 class="action-btn"
                 onclick={(): void => toggleBatchMode(field.name)}
-                title="Toggle sequence mode"
+                data-tip="Toggle sequence mode"
+                aria-label="Toggle sequence mode"
               >
                 {isBatch ? '−' : '+'}
               </button>
@@ -594,16 +599,21 @@
           </div>
         </div>
       {/if}
-      {#if field.description}
-        <p class="field-description">{field.description}</p>
-      {/if}
-    </div>
+    </fieldset>
   {/each}
 </form>
 
 <style>
   .form-field {
-    margin-bottom: 1rem;
+    /* A fieldset only so a whole field can be disabled; drop its default box */
+    min-width: 0;
+    margin: 0 0 1rem;
+    padding: 0;
+    border: 0;
+  }
+
+  .form-field:disabled {
+    opacity: 0.45;
   }
 
   .form-field:last-child {
@@ -642,17 +652,18 @@
     box-sizing: border-box;
   }
 
-  label {
+  label,
+  .field-label {
     display: block;
     font-weight: 500;
     margin-bottom: 0.5rem;
   }
 
-  .field-description {
-    margin: 0.375rem 0 0;
-    font-size: 0.8rem;
-    line-height: 1.4;
-    opacity: 0.7;
+  .readonly-value {
+    padding: 0.5rem 0.75rem;
+    border: 1px dashed var(--color-border-glass-1);
+    border-radius: 0.375rem;
+    color: var(--color-text-overlay-secondary);
   }
 
   .input-row > input[type='text'],

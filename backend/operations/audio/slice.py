@@ -66,5 +66,9 @@ class SliceOperation(SyncOperation):
                     }
                 )
                 results.append((artifact, chunk))
-                
+            # A slice that reaches the end covers the rest of the clip; later starts would only
+            # repeat its tail as shorter fragments when slices overlap
+            if i + chunk_samples >= total_samples:
+                break
+
         return results

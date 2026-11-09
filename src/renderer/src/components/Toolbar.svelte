@@ -205,7 +205,8 @@
               </button>
               <button
                 class="remove-recent"
-                title="Remove from recent"
+                data-tip="Remove from recent"
+                aria-label="Remove from recent"
                 onclick={(e) => handleRemoveRecent(project, e)}
               >
                 &times;
@@ -222,7 +223,7 @@
       <button
         class="toolbar-button"
         onclick={() => onreturnToOrigin?.()}
-        title={`Return to ${projectOrigin.project_name}, the project this was forked from`}
+        data-tip={`Return to ${projectOrigin.project_name}, the project this was forked from`}
         aria-label={`Return to ${projectOrigin.project_name}`}
       >
         <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
@@ -231,7 +232,7 @@
         {projectOrigin.project_name}
       </button>
     {/if}
-    <div class="current-project" title={projectOrigin ? 'Forked project' : undefined}>
+    <div class="current-project" data-tip={projectOrigin ? 'Forked project' : undefined}>
       {#if roomCrumbs.length > 0}
         <button class="crumb" onclick={() => onnavigateRoom?.(null)}>
           {currentProject ? currentProject.split(/[\\/]/).pop() : 'Main'}
@@ -251,7 +252,7 @@
     <button
       class="toolbar-button"
       onclick={() => onrefresh?.()}
-      title="Refresh graph data"
+      data-tip="Refresh graph data"
       aria-label="Refresh graph data"
     >
       <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
@@ -269,7 +270,7 @@
     <button
       class="toolbar-button"
       onclick={() => onimportModel?.()}
-      title="Import model"
+      data-tip="Import model"
       aria-label="Import model"
     >
       <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
@@ -281,7 +282,7 @@
     <button
       class="toolbar-button"
       onclick={handleAddExternalSource}
-      title="Add external audio source"
+      data-tip="Add external audio source"
       aria-label="Add external audio source"
     >
       <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">

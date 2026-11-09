@@ -3,7 +3,6 @@
 from typing import Any, Optional
 import os
 import copy
-import uuid
 import threading
 from coolname import generate_slug
 
@@ -14,7 +13,7 @@ from param_graph.elements.models.base_model_element import Model
 from param_graph.elements.base_elements import Asset
 from diffracture.topology.grating import Grating as DiffractureGrating
 from evolution.genome import LoRAGenome
-from utils.uid import XXH3_64
+from utils.uid import XXH3_64, grating_uid
 
 
 def wrap_artifact_as_individual(
@@ -156,7 +155,13 @@ async def wrap_precursor_as_individual(
         baseline_grating_id = data.get("baseline_grating_id") or params.get("baseline_grating_id")
         elements_input = data.get("elements") or params.get("elements")
         lora_rank = int(data.get("lora_rank") or params.get("lora_rank") or 1)
-        lora_alpha = float(data.get("lora_alpha") or params.get("lora_alpha") or 1.0)
+        # Alpha is tied to the rank so alpha / rank is 1: genomes already size each layer's change to its
+        # natural scale, and any other ratio would silently rescale Mutation Strength for the whole lineage
+        if data.get("lora_alpha") is not None or params.get("lora_alpha") is not None:
+            return None, None, "", None, None, 0, 0.0, {
+                "error": "lora_alpha is no longer configurable; it always equals lora_rank."
+            }, 400
+        lora_alpha = float(lora_rank)
 
         return precursor_node, model_element, model_id, baseline_grating_id, elements_input, lora_rank, lora_alpha, None, None
 
@@ -228,13 +233,13 @@ async def wrap_precursor_as_individual(
         baseline_name = precursor_node.name or precursor_node.alias or "Artifact"
 
         if any("lora_down" not in el.params or "lora_up" not in el.params for el in diff_base_grating.nodes.values()):
-            grating_id = f"grating_{uuid.uuid4().hex[:8]}"
+            grating_id = grating_uid(diff_base_grating, uid_gen)
             grating_path = param_graph.root / "generate" / f"{grating_id}.safetensors"
             os.makedirs(grating_path.parent, exist_ok=True)
             diff_base_grating.save(str(grating_path))
             new_baseline_grating = Grating(
                 id=grating_id,
-                name=f"baseline_{uuid.uuid4().hex[:8]}",
+                name=f"baseline_{grating_id[:8]}",
                 # is_baseline hides the node in the graph view; individuals reference it by baseline_grating_id
                 context={"is_baseline": True},
                 file=Asset(path=str(grating_path), uid=grating_id, extension=".safetensors"),
@@ -293,7 +298,9 @@ async def wrap_precursor_as_individual(
 
     def _link_and_save() -> None:
         if new_baseline_grating is not None:
-            param_graph.add_element(new_baseline_grating)
+            # Content-addressed: an identical grating already in the graph is reused as it is, so a
+            # visible grating is never overwritten into a hidden baseline
+            param_graph.add_element(new_baseline_grating, allow_duplicates=False)
             param_graph.link(model_element, new_baseline_grating, relation='binds_to')
         param_graph.add_element(individual_node, allow_duplicates=False)
         param_graph.link(model_element, individual_node, relation='binds_to')

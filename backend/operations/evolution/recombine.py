@@ -27,7 +27,6 @@ from neutral_selection.builders import (
 )
 
 from param_graph.elements.artifacts.individual_element import Individual
-from param_graph.elements.artifacts.grating_element import Grating
 from param_graph.elements.artifacts.bundle_element import Bundle
 from param_graph.elements.models.base_model_element import Model
 from param_graph.elements.collections.group_element import Group
@@ -42,7 +41,7 @@ from utils.errors import job_traceback
 
 from ..base import Operation
 from ..registry import register
-from .resolution import extract_individual_parent_ids, resolve_exemplar_context
+from .resolution import extract_individual_parent_ids, reject_legacy_baseline, resolve_exemplar_context
 
 
 
@@ -173,21 +172,10 @@ def recombine_evolution_task(
             first_parent = parent_nodes[0]
             model_id = first_parent.base_model_id
             baseline_grating_id = first_parent.baseline_grating_id
-            baseline_elements = first_parent.context.get("baseline_elements")
-            baseline_file_path = first_parent.context.get("baseline_file_path")
+            for parent_node in parent_nodes:
+                reject_legacy_baseline(parent_node)
 
-            base_grating = None
-            if baseline_grating_id:
-                base_grating = param_graph.get_element(baseline_grating_id)
-            elif baseline_file_path:
-                base_grating = Grating(
-                    id=f"grating_{uuid.uuid4().hex[:8]}",
-                    name="Baseline Grating",
-                    context={},
-                    file=Asset(path=str(baseline_file_path), uid=f"grating_{uuid.uuid4().hex[:8]}", extension=".safetensors"),
-                    base_model_id=model_id,
-                    elements=baseline_elements or []
-                )
+            base_grating = param_graph.get_element(baseline_grating_id) if baseline_grating_id else None
 
             model_element = param_graph.get_element(model_id)
             if not model_element:

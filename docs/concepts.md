@@ -113,7 +113,7 @@ A score you set by hand with **Score** on an individual. Recombination prefers p
 fitness.
 
 **Scatter**
-Makes N mutated children from one or more seed individuals. Scatter mutates only; it does not cross
+Makes N mutated children from one parent individual. Scatter mutates only; it does not cross
 genomes. Use it to explore around something you like.
 
 **Recombine**

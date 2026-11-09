@@ -3,6 +3,13 @@
         {
             "name": "prompt",
             "label": "Prompt",
+            "description": "Describe the sound you want. Concrete terms (instruments, genre, tempo, mood, recording character) steer the model more reliably than abstract ones. CFG Scale sets how strictly the result follows the prompt.",
+            "conditionalProps": [
+                {
+                    "show_if": {"init_latent": "exists"},
+                    "description": "Steers how the inverted sound is regenerated. Reusing the prompt from the inversion keeps the result close to the source; a different prompt pulls it toward the new description, more strongly as CFG Scale rises above 1."
+                }
+            ],
             "type": "textarea",
             "defaultValue": "Amen break 174 BPM",
             "placeholder": "Enter a prompt for the model..."
@@ -10,7 +17,9 @@
         {
             "name": "negative_prompt",
             "label": "Negative Prompt",
+            "description": "What the result should avoid. Guidance pushes away from this description instead of from an empty prompt, so it only has an effect when CFG Scale is above 1. Short quality terms such as 'low fidelity, distorted' are typical.",
             "type": "textarea",
+            "disable_if": {"cfg_scale": 1},
             "defaultValue": "low fidelity",
             "placeholder": "Enter a negative prompt for the model...",
             "show_if": {"sampler_category": "k_diffusion"}
@@ -18,7 +27,20 @@
         {
             "name": "steps",
             "label": "Steps",
+            "description": "How many denoising steps the sampler takes. More steps refine detail and reduce artifacts but take proportionally longer. Around 50 is a good default; returns diminish beyond about 100. Hidden with an inverted latent, which retraces the inversion's own steps.",
+            "conditionalProps": [
+                {
+                    "show_if": {"sampler_category": "k_diffusion", "k_sampler_type": "k-dpm-adaptive"},
+                    "description": "Ignored by k-DPM Adaptive, which chooses its own step sizes to keep the error within a tolerance, so its run time varies from one generation to the next."
+                },
+                {
+                    "show_if": {"diffusion_objective": "rf_denoiser"},
+                    "description": "This is a distilled model, trained to finish in a few steps. About 8 is right; many more add time but little quality. Ping-pong is the sampler made for it."
+                }
+            ],
             "type": "integer",
+            "disable_if": {"sampler_category": "k_diffusion", "k_sampler_type": "k-dpm-adaptive"},
+            "show_if": {"init_latent": "absent"},
             "defaultValue": 50,
             "conditionalDefaults": [
                 { "show_if": {"diffusion_objective": "rf_denoiser"}, "value": 8 }
@@ -28,6 +50,17 @@
         {
             "name": "cfg_scale",
             "label": "CFG Scale",
+            "description": "How strongly the result follows the prompt (classifier-free guidance). At 1 the prompt is applied without extra emphasis; higher values follow it more literally, and very high values sound harsh and overprocessed. 5 to 7 is typical.",
+            "conditionalProps": [
+                {
+                    "show_if": {"init_latent": "exists"},
+                    "description": "With an inverted latent, 1 regenerates the source most faithfully. Raising it pushes the result toward the prompt and away from the source, so it works as the strength of a prompt edit."
+                },
+                {
+                    "show_if": {"diffusion_objective": "rf_denoiser"},
+                    "description": "Distilled models are trained to work without guidance, so leave this at 1. Higher values tend to sound harsh."
+                }
+            ],
             "type": "float",
             "defaultValue": 7,
             "conditionalDefaults": [
@@ -39,6 +72,7 @@
         {
             "name": "seconds_start",
             "label": "Seconds Start",
+            "description": "Timing condition: where in a longer piece the clip should seem to begin, in seconds. The model learned from excerpts labeled with their position, so a later start can sound mid-song rather than like an intro. The output is Seconds Total minus Seconds Start long.",
             "type": "float",
             "defaultValue": 0,
             "placeholder": "Enter start time in seconds"
@@ -46,6 +80,7 @@
         {
             "name": "seconds_total",
             "label": "Seconds Total",
+            "description": "Timing condition: the length of the piece being described, in seconds. The model shapes the music to end around this point, and the output is trimmed to Seconds Total minus Seconds Start. It can't run past the model's maximum length.",
             "type": "float",
             "defaultValue": 12,
             "placeholder": "Enter duration in seconds"
@@ -53,7 +88,9 @@
         {
             "name": "sampler_category",
             "label": "Sampler Type",
+            "description": "The sampler family, which follows from how the model was trained: K-Diffusion for v-objective models such as Stable Audio Open 1.0, Rectified Flow for flow models. It is set from the model and can't be changed, because the other family's samplers don't work with it.",
             "type": "select",
+            "readonly": true,
             "defaultValue": "k_diffusion",
             "options": [
                 { "label": "K-Diffusion", "value": "k_diffusion" },
@@ -63,6 +100,37 @@
         {
             "name": "k_sampler_type",
             "label": "K-Sampler",
+            "description": "The K-diffusion sampler: the method that steps from noise to audio along the noise schedule.",
+            "conditionalProps": [
+                {
+                    "show_if": {"k_sampler_type": "dpmpp-3m-sde"},
+                    "description": "DPM++ 3M SDE: a third-order sampler that injects fresh noise at every step. It can give richer detail at higher step counts (50 and up), but needs more steps than DPM++ 2M and varies more between runs with different step counts."
+                },
+                {
+                    "show_if": {"k_sampler_type": "dpmpp-2m"},
+                    "description": "DPM++ 2M: a second-order multistep sampler and a reliable default. It is deterministic, so the same seed and settings always give the same audio, and it converges well in 25 to 50 steps."
+                },
+                {
+                    "show_if": {"k_sampler_type": "k-heun"},
+                    "description": "k-Heun: a second-order sampler that runs the model twice per step, so it takes about twice as long for the same Steps. Accurate, but rarely better than DPM++ 2M for the same time."
+                },
+                {
+                    "show_if": {"k_sampler_type": "k-lms"},
+                    "description": "k-LMS: a linear multistep sampler that reuses earlier steps' results. Fast and deterministic, but less stable than DPM++ 2M at low step counts."
+                },
+                {
+                    "show_if": {"k_sampler_type": "k-dpm-2"},
+                    "description": "k-DPM2: a second-order sampler that runs the model twice per step, so each step costs about twice as much as with DPM++ 2M."
+                },
+                {
+                    "show_if": {"k_sampler_type": "k-dpm-fast"},
+                    "description": "k-DPM Fast: DPM-Solver with its own fixed schedule. It uses Steps, but not the shared noise schedule the other samplers follow, so it can't be used with an inverted latent."
+                },
+                {
+                    "show_if": {"k_sampler_type": "k-dpm-adaptive"},
+                    "description": "k-DPM Adaptive: picks its own step sizes to keep the error within a tolerance, so Steps is ignored and run time varies. It can't be used with an inverted latent."
+                }
+            ],
             "type": "select",
             "defaultValue": "dpmpp-2m",
             "options": [
@@ -79,6 +147,25 @@
         {
             "name": "rf_sampler_type",
             "label": "RF-Sampler",
+            "description": "The rectified-flow sampler: the method that steps from noise to audio along the flow.",
+            "conditionalProps": [
+                {
+                    "show_if": {"rf_sampler_type": "euler"},
+                    "description": "Euler: the simplest flow sampler, one model evaluation per step. Fast and predictable, but needs more steps than the higher-order samplers for the same quality."
+                },
+                {
+                    "show_if": {"rf_sampler_type": "rk4"},
+                    "description": "RK4: fourth-order Runge-Kutta, with four model evaluations per step, so about four times slower than Euler for the same Steps. Very accurate, which helps most at low step counts."
+                },
+                {
+                    "show_if": {"rf_sampler_type": "dpmpp"},
+                    "description": "DPM++: a multistep solver adapted to flow models. It reuses earlier steps to reach second-order accuracy at Euler's cost per step, which makes it strong at low step counts."
+                },
+                {
+                    "show_if": {"rf_sampler_type": "pingpong"},
+                    "description": "Ping-pong: made for distilled models. Each step predicts the finished audio, then re-noises it to the next level, which suits models trained to finish in about 8 steps. On other models it tends to lose detail."
+                }
+            ],
             "type": "select",
             "defaultValue": "euler",
             "options": [
@@ -92,7 +179,9 @@
         {
             "name": "sigma_min",
             "label": "Sigma Min",
+            "description": "The lowest noise level the sampler steps down to before its final jump to clean audio. Lower values give the last steps more room to refine fine detail; raising it ends the refinement earlier, which can sound softer. 0.3 is a common setting. Hidden for rectified-flow models, which don't use it.",
             "type": "float",
+            "show_if": {"init_latent": "absent", "sampler_category": "k_diffusion"},
             "defaultValue": 0.3,
             "conditionalDefaults": [
                 { "show_if": {"sampler_category": "rectified_flow"}, "value": 0.0 }
@@ -102,7 +191,19 @@
         {
             "name": "sigma_max",
             "label": "Sigma Max",
+            "description": "The noise level sampling starts from.",
+            "conditionalProps": [
+                {
+                    "show_if": {"sampler_category": "k_diffusion"},
+                    "description": "The noise level sampling starts from. It must be high enough to drown out all structure, so the model shapes everything itself; 500 does that for Stable Audio Open. Much lower values skip the coarsest steps and tend to sound flatter. With Initial Audio, Noise Level replaces it."
+                },
+                {
+                    "show_if": {"sampler_category": "rectified_flow"},
+                    "description": "Where on the flow sampling starts, from 1 (pure noise) to 0. Keep it at 1 for normal generation: lower values tell the model the noise is already partly shaped into audio, which it isn't, so the result loses structure. With Initial Audio, Noise Level replaces it."
+                }
+            ],
             "type": "float",
+            "show_if": {"init_latent": "absent"},
             "defaultValue": 500,
             "conditionalDefaults": [
                 { "show_if": {"sampler_category": "rectified_flow"}, "value": 1.0 }
@@ -112,7 +213,15 @@
         {
             "name": "seed",
             "label": "Seed",
+            "description": "Sets the starting noise. The same seed with the same settings reproduces the same audio, so you can change one setting and hear only its effect. The dice button picks a random seed.",
+            "conditionalProps": [
+                {
+                    "show_if": {"init_latent": "exists"},
+                    "description": "With an inverted latent, generation starts from the latent instead of seed noise, so the seed only matters for samplers that add noise along the way, such as DPM++ 3M SDE and Ping-pong."
+                }
+            ],
             "type": "integer",
+            "disable_if": [{"init_latent": "exists", "sampler_category": "k_diffusion", "k_sampler_type": "dpmpp-2m"}, {"init_latent": "exists", "sampler_category": "k_diffusion", "k_sampler_type": "k-heun"}, {"init_latent": "exists", "sampler_category": "k_diffusion", "k_sampler_type": "k-lms"}, {"init_latent": "exists", "sampler_category": "k_diffusion", "k_sampler_type": "k-dpm-2"}, {"init_latent": "exists", "sampler_category": "rectified_flow", "rf_sampler_type": "euler"}, {"init_latent": "exists", "sampler_category": "rectified_flow", "rf_sampler_type": "rk4"}, {"init_latent": "exists", "sampler_category": "rectified_flow", "rf_sampler_type": "dpmpp"}],
             "defaultValue": 0,
             "placeholder": "Enter a seed",
             "randomizable": true
@@ -120,44 +229,52 @@
         {
             "name": "cfg_interval_min",
             "label": "CFG Interval Min",
+            "description": "Guidance only runs while the noise level is between CFG Interval Min and Max, on a scale from 0 (clean) to 1 (pure noise). Raising Min skips guidance in the final, detail-forming steps, which can tame the harshness of a high CFG Scale while keeping the prompt's overall shape.",
             "type": "float",
+            "disable_if": {"cfg_scale": 1},
             "defaultValue": 0.0,
-            "placeholder": "Enter CFG interval min",
-            "show_if": {"sampler_category": "rectified_flow"}
+            "placeholder": "Enter CFG interval min"
         },
         {
             "name": "cfg_interval_max",
             "label": "CFG Interval Max",
+            "description": "The upper end of the noise range where guidance runs, from 0 (clean) to 1 (pure noise). Lowering it skips guidance in the first, structure-forming steps, so the prompt shapes details more than the overall arrangement. Steps outside the range are also faster, needing one model pass instead of two.",
             "type": "float",
+            "disable_if": {"cfg_scale": 1},
             "defaultValue": 1.0,
-            "placeholder": "Enter CFG interval max",
-            "show_if": {"sampler_category": "rectified_flow"}
+            "placeholder": "Enter CFG interval max"
         },
         {
             "name": "cfg_rescale",
             "label": "CFG Rescale",
+            "description": "Pulls the guided output's level back toward the unguided output's, from 0 (off) to 1 (fully). A high CFG Scale tends to inflate and oversaturate the sound; rescaling counters that while keeping the prompt's direction. It only acts when CFG Scale isn't 1.",
             "type": "float",
+            "disable_if": {"cfg_scale": 1},
             "defaultValue": 0.0,
             "placeholder": "Enter CFG rescale amount"
         },
         {
             "name": "cfg_norm_threshold",
             "label": "CFG Norm Threshold",
+            "description": "Caps how hard guidance can push at each step: whenever the push toward the prompt grows larger than this value, it is scaled down to it. 0 turns the cap off. It helps a high CFG Scale avoid overshooting into distortion. Useful values depend on the model and clip length, so adjust by ear.",
             "type": "float",
+            "disable_if": {"cfg_scale": 1},
             "defaultValue": 0.0,
             "placeholder": "Enter CFG norm threshold"
         },
         {
             "name": "apg_scale",
             "label": "APG Scale",
+            "description": "Blends two kinds of guidance, from 0 (plain classifier-free guidance) to 1 (adaptive projected guidance, APG). APG drops the part of the guidance push that only makes the sound louder and more saturated, so a high CFG Scale stays cleaner. 0 gives the classic guidance Stable Audio Open 1.0 was first used with. Needs CFG Scale above 1.",
             "type": "float",
+            "disable_if": {"cfg_scale": 1},
             "defaultValue": 1.0,
-            "placeholder": "1.0=full APG, 0.0=vanilla CFG",
-            "show_if": {"sampler_category": "rectified_flow"}
+            "placeholder": "1.0=full APG, 0.0=vanilla CFG"
         },
         {
             "name": "duration_padding_sec",
             "label": "Duration Padding (sec)",
+            "description": "Extra seconds generated beyond Seconds Total, on models that size their output to the timing condition. The room lets the music finish naturally before the extra is trimmed off. Models with a fixed output length, such as Stable Audio Open 1.0, ignore it.",
             "type": "float",
             "defaultValue": 6.0,
             "placeholder": "Enter duration padding in seconds"
@@ -165,6 +282,7 @@
         {
             "name": "init_audio",
             "label": "Initial Audio",
+            "description": "Audio to start from instead of pure noise (audio-to-audio). It is partly noised, by Noise Level, and then regenerated toward the prompt, so its broad shape survives while details change. It is resampled to the model's rate and converted to stereo first.",
             "type": "node",
             "filter": { "type": "audio" },
             "defaultValue": null
@@ -172,6 +290,7 @@
         {
             "name": "noise_level",
             "label": "Noise Level",
+            "description": "How much of the initial audio is replaced by noise before it is regenerated. It takes the place of Sigma Max.",
             "type": "float",
             "defaultValue": 5,
             "conditionalDefaults": [
@@ -182,13 +301,13 @@
                     "show_if": {"sampler_category": "k_diffusion"},
                     "label": "Noise Level (σ)",
                     "placeholder": "Starting sigma, e.g. 1-20",
-                    "description": "Absolute starting sigma; replaces Sigma Max when init audio is used. Rectified-flow equivalent t = σ/(1+σ): σ 1 ≈ 0.5, 5 ≈ 0.83, 20 ≈ 0.95."
+                    "description": "How much of the initial audio is replaced, as the noise level (σ) that generation starts from; it takes the place of Sigma Max. Around 1 keeps the source recognizable, while 20 and above leave little of it. In rectified-flow terms (t = σ/(1+σ)), σ 1 ≈ 0.5, 5 ≈ 0.83 and 20 ≈ 0.95."
                 },
                 {
                     "show_if": {"sampler_category": "rectified_flow"},
                     "label": "Noise Level (0-1)",
                     "placeholder": "Noise fraction, e.g. 0.5-0.95",
-                    "description": "Fraction of noise mixed into the init audio (1.0 = full noise); replaces Sigma Max when init audio is used. K-diffusion equivalent σ = t/(1-t): 0.5 ≈ σ 1, 0.83 ≈ σ 5, 0.95 ≈ σ 20."
+                    "description": "How much of the initial audio is replaced, from 0 (left as it is) to 1 (pure noise, ignoring the source); it takes the place of Sigma Max. Around 0.5 keeps the source recognizable, while 0.9 and above leave little of it. In K-diffusion terms (σ = t/(1-t)), 0.5 ≈ σ 1, 0.83 ≈ σ 5 and 0.95 ≈ σ 20."
                 }
             ],
             "show_if": {
@@ -198,6 +317,7 @@
         {
             "name": "init_latent",
             "label": "Initial Latent",
+            "description": "A latent made by Invert, to regenerate that sound instead of starting from noise. Generation retraces the inversion's steps, so with the same prompt and CFG Scale 1 the result closely reproduces the source; a new prompt or higher CFG edits it.",
             "type": "node",
             "filter": { "type": "latent" },
             "defaultValue": null
@@ -207,6 +327,7 @@
         {
             "name": "source_audio",
             "label": "Source Audio",
+            "description": "The audio to invert into a latent. Only its first Seconds Total minus Seconds Start seconds are used, up to the model's maximum length, and shorter audio is padded with silence. Attach the latent to Generate's Initial Latent to regenerate or edit the sound.",
             "type": "node",
             "filter": { "type": "audio" },
             "required": true
@@ -214,17 +335,40 @@
         {
             "name": "prompt",
             "label": "Prompt",
+            "description": "Conditions the model while it traces the audio back to noise.",
+            "conditionalProps": [
+                {
+                    "show_if": {"sampler_category": "k_diffusion"},
+                    "description": "Conditions the model while it traces the audio back to noise. A prompt that describes the clip gives a latent that regenerates it faithfully with that prompt; generating with a different prompt then edits it. Left empty, it inverts with empty-prompt conditioning."
+                },
+                {
+                    "show_if": {"sampler_category": "rectified_flow", "inversion_unconditional": true},
+                    "description": "Greyed out while Inversion Unconditional is on, which replaces the prompt with the null conditioning. Turn it off to condition the inversion on this prompt."
+                },
+                {
+                    "show_if": {"sampler_category": "rectified_flow"},
+                    "description": "Conditions the inversion, since Inversion Unconditional is off. Describing the clip helps the latent reproduce it, and generating with a different prompt then edits it. Left empty, it uses empty-prompt conditioning, which is not the same as unconditional inversion."
+                }
+            ],
             "type": "textarea",
+            "disable_if": {"sampler_category": "rectified_flow", "inversion_unconditional": true},
             "defaultValue": "",
-            "placeholder": "Enter the original generation prompt...",
-            "show_if": [
-                { "sampler_category": "k_diffusion" },
-                { "inversion_unconditional": false }
-            ]
+            "placeholder": "Enter the original generation prompt..."
         },
         {
             "name": "steps",
             "label": "Steps",
+            "description": "How many steps the inversion takes. Generation from the latent reuses this count.",
+            "conditionalProps": [
+                {
+                    "show_if": {"sampler_category": "k_diffusion"},
+                    "description": "How many steps the inversion takes from Sigma Min to Sigma Max. More steps trace the audio more precisely, so the latent reproduces it more faithfully, at proportionally more time. Generation from the latent reuses this count."
+                },
+                {
+                    "show_if": {"sampler_category": "rectified_flow"},
+                    "description": "How many steps the inversion takes from clean audio to noise. 30 to 50 usually reproduce well and up to 200 is most faithful; fewer steps give a looser latent that suits style transfer. Generation from the latent reuses this count."
+                }
+            ],
             "type": "integer",
             "defaultValue": 50,
             "placeholder": "Enter number of steps"
@@ -232,6 +376,7 @@
         {
             "name": "inversion_strength",
             "label": "Inversion Strength",
+            "description": "How far toward pure noise to invert, as a fraction of Steps. At 1 the audio is traced all the way to Sigma Max, which leaves the most room for a new prompt to change it. Lower values stop partway, so generating from the latent keeps more of the source and only remakes finer detail.",
             "type": "float",
             "defaultValue": 1.0,
             "placeholder": "Enter inversion strength (0 to 1)",
@@ -240,6 +385,7 @@
         {
             "name": "seconds_start",
             "label": "Seconds Start",
+            "description": "Timing condition, with the same meaning as in Generate: the clip is treated as the stretch from Seconds Start to Seconds Total of a longer piece. So the source is read from its beginning, not skipped into. Use the same timing when you generate from the latent.",
             "type": "float",
             "defaultValue": 0,
             "placeholder": "Enter start time in seconds"
@@ -247,6 +393,7 @@
         {
             "name": "seconds_total",
             "label": "Seconds Total",
+            "description": "Timing condition for the inversion, and with Seconds Start it sets how much audio is inverted: the first Seconds Total minus Seconds Start seconds of the source. Use the same timing when you generate from the latent.",
             "type": "float",
             "defaultValue": 11,
             "placeholder": "Enter duration in seconds"
@@ -254,6 +401,7 @@
         {
             "name": "inversion_gamma",
             "label": "Inversion Gamma",
+            "description": "How strongly the inversion is pulled toward a random noise sample, from 0 to 1. Higher values give a latent that looks more like ordinary noise, which tends to reproduce the clip more faithfully; 0.3 to 0.5 suits reproduction. 0 follows the model alone, which suits style transfer. Seed sets the sample.",
             "type": "float",
             "defaultValue": 0,
             "placeholder": "0.3 - 0.5 is good for reproduction",
@@ -262,6 +410,7 @@
         {
             "name": "inversion_unconditional",
             "label": "Inversion Unconditional",
+            "description": "When on, the prompt and timing tokens are replaced by the null conditioning that guidance contrasts against, so Prompt is greyed out and Inversion CFG Scale is held at 1. Models that also take timing as a global condition, such as Stable Audio 3, still receive it.",
             "type": "boolean",
             "defaultValue": true,
             "show_if": {"sampler_category": "rectified_flow"}
@@ -269,7 +418,18 @@
         {
             "name": "inversion_cfg_scale",
             "label": "Inversion CFG Scale",
+            "description": "Classifier-free guidance during inversion. Leave it at 1 in most cases: higher values bend the trace toward the prompt, which distorts the latent and makes it reproduce the clip less faithfully.",
+            "conditionalProps": [
+                {
+                    "show_if": {"inversion_unconditional": true},
+                    "description": "Held at 1 while Inversion Unconditional is on. The model only drops the prompt at a guidance scale of exactly 1; above that it would quietly condition on the prompt again, so unconditional inversion needs this at 1."
+                }
+            ],
             "type": "float",
+            "disable_if": {"inversion_unconditional": true},
+            "conditionalDefaults": [
+                { "show_if": {"inversion_unconditional": true}, "value": 1.0 }
+            ],
             "defaultValue": 1.0,
             "placeholder": "Usually 1.0",
             "show_if": {"sampler_category": "rectified_flow"}
@@ -277,7 +437,19 @@
         {
             "name": "seed",
             "label": "Seed",
+            "description": "Sets the random noise the inversion uses.",
+            "conditionalProps": [
+                {
+                    "show_if": {"sampler_category": "k_diffusion"},
+                    "description": "Sets the faint noise added at Sigma Min before the inversion starts. Its effect on the latent is slight."
+                },
+                {
+                    "show_if": {"sampler_category": "rectified_flow"},
+                    "description": "Sets the random noise sample that Inversion Gamma pulls the inversion toward. With Inversion Gamma at 0 it has no effect."
+                }
+            ],
             "type": "integer",
+            "disable_if": {"sampler_category": "rectified_flow", "inversion_gamma": 0},
             "defaultValue": 0,
             "placeholder": "Enter seed",
             "randomizable": true
@@ -285,6 +457,7 @@
         {
             "name": "sigma_min",
             "label": "Sigma Min",
+            "description": "Where the inversion starts: the audio gets this much noise before tracing begins, and generating from the latent ends at this level. Generation from the latent reuses this range automatically.",
             "type": "float",
             "defaultValue": 0.3,
             "placeholder": "Enter sigma min",
@@ -293,6 +466,7 @@
         {
             "name": "sigma_max",
             "label": "Sigma Max",
+            "description": "The noise level a full inversion reaches, at Inversion Strength 1. 500 reaches effectively pure noise for Stable Audio Open, which leaves the most room for editing. Generation from the latent reuses this range automatically.",
             "type": "float",
             "defaultValue": 500.0,
             "placeholder": "Enter sigma max",
@@ -303,6 +477,7 @@
         {
             "name": "name",
             "label": "Model Name",
+            "description": "The name shown on the model's node. It's only a label: the model is identified by the contents of its checkpoint and text encoder.",
             "type": "text",
             "placeholder": "Enter a name for the model",
             "required": true
@@ -310,6 +485,7 @@
         {
             "name": "checkpoint_path",
             "label": "Checkpoint File",
+            "description": "The model's weights, usually model.safetensors or model.ckpt from the model's release. The file is identified by its contents, so the same weights are recognized wherever they are stored.",
             "type": "file",
             "placeholder": "Select a checkpoint file",
             "required": true,
@@ -321,6 +497,7 @@
         {
             "name": "config_path",
             "label": "Config File",
+            "description": "The model_config.json from the same release. It describes the architecture, sample rate, maximum length and conditioning, so it must match the checkpoint exactly.",
             "type": "file",
             "placeholder": "Select a config file",
             "required": true,
@@ -329,6 +506,7 @@
         {
             "name": "encoder_path",
             "label": "Text Encoder Folder (Optional)",
+            "description": "A local copy of the text encoder the config names (T5, T5Gemma or CLAP). Without it, the encoder is downloaded from Hugging Face on first use. With it, the model works offline, and the encoder becomes part of the model's identity.",
             "type": "directory",
             "placeholder": "Select local directory containing text encoder files (tokenizer, configs, etc.)",
             "required": false

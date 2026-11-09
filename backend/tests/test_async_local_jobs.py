@@ -124,7 +124,8 @@ class TestAsyncLocalJobs(unittest.TestCase):
         job_data = self._poll_job(job_id)
         self.assertEqual(job_data["status"], "completed", f"Job failed with error: {job_data.get('error')}")
         grating = job_data["result"]["grating"]
-        self.assertTrue(grating["id"].startswith("grating_"))
+        # Content-addressed, like other generated assets
+        self.assertTrue(grating["id"].endswith(".xxh3_64"))
         self.assertEqual(grating["base_model_id"], model_id)
         self.assertTrue(self.test_graph.G.has_node(grating["id"]))
 

@@ -65,10 +65,10 @@ take precedence.
 
 ```json
 {
-  "initiator_types": ["individual", "group", "audio"],
+  "initiator_types": ["individual", "audio"],
   "form_config": [
-    { "name": "parents", "type": "node-list", "label": "Seed Individual(s)",
-      "filter": { "type": "individual" }, "required": true, "minItems": 1 },
+    { "name": "parents", "type": "node", "label": "Parent Individual",
+      "filter": { "type": "individual" }, "required": true },
     { "name": "offspring_size", "type": "integer", "label": "Scatter Count (N)",
       "defaultValue": 10, "min": 1, "max": 100 }
   ]

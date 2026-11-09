@@ -176,3 +176,17 @@ class XXH3_64(UIDGenerator):
                         h.update(chunk)
 
         return f"{h.hexdigest()}{self.DELIMITER}{self.get_method_name()}"
+
+
+def grating_uid(grating: Module, uid_generator: "UIDGenerator | None" = None) -> str:
+    """
+    Content UID of a diffracture Grating over exactly what its saved file holds: the weights, and the
+    topology (each element's address, kernel type and metadata). A grating loaded back from its file
+    gets the same UID it was saved under.
+    """
+    topology = [
+        {"address": element.address, "kernel_type": element.kernel_type, "metadata": element.metadata}
+        for element in grating._nodes
+    ]
+    generator = uid_generator or XXH3_64()
+    return generator.from_state_dict({**grating.state_dict(), "topology": json.dumps(topology, sort_keys=True)})

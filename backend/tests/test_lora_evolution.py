@@ -24,6 +24,34 @@ class TestLoRAEvolution(unittest.TestCase):
     def setUp(self) -> None:
         torch.manual_seed(42)
 
+    def test_reject_legacy_baseline(self) -> None:
+        """An unmigrated baseline file path fails fast; a leftover empty baseline_elements list is ignored."""
+        from types import SimpleNamespace
+        from operations.evolution.resolution import reject_legacy_baseline
+
+        legacy = SimpleNamespace(id="ind_legacy", context={"baseline_file_path": "generate/base.safetensors"})
+        with self.assertRaisesRegex(ValueError, "legacy format"):
+            reject_legacy_baseline(legacy)
+        reject_legacy_baseline(SimpleNamespace(id="ind_leftover", context={"baseline_elements": []}))
+        reject_legacy_baseline(SimpleNamespace(id="ind_current", context={}))
+
+    def test_grating_uid_matches_saved_file(self) -> None:
+        """A grating's content UID is the same before saving and after loading it back."""
+        import os
+        import tempfile
+        from utils.uid import grating_uid
+
+        grating = Grating()
+        grating.add_element(LoRAElement("l1", rank=2, alpha=2.0, in_features=8, out_features=4))
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = os.path.join(tmp_dir, "g.safetensors")
+            grating.save(path)
+            self.assertEqual(grating_uid(Grating.load(path)), grating_uid(grating))
+        # Different weights give a different UID
+        other = Grating()
+        other.add_element(LoRAElement("l1", rank=2, alpha=2.0, in_features=8, out_features=4))
+        self.assertNotEqual(grating_uid(other), grating_uid(grating))
+
     def test_gene_from_and_to_tensors(self) -> None:
         """Verify LoRAGene clones genotype tensors on creation and returns them unchanged."""
         self.assertIs(PerturbationGene, LoRAGene)
@@ -870,6 +898,54 @@ class TestLoRAEvolution(unittest.TestCase):
             expressed_grating_id = express_data["grating"]["id"]
             g_reloaded.load()
             self.assertTrue(g_reloaded.G.has_node(expressed_grating_id))
+
+            # Expressed gratings are content-addressed, so expressing again reuses the same grating
+            self.assertTrue(expressed_grating_id.endswith(".xxh3_64"))
+            self.assertTrue(express_data["grating"]["file"]["path"].endswith(f"{expressed_grating_id}.safetensors"))
+            again_resp = client.post("/express_individual", json=express_payload)
+            self.assertEqual(again_resp.status_code, 200)
+            again_data = again_resp.get_json()
+            self.assertEqual(again_data["grating"]["id"], expressed_grating_id)
+            self.assertTrue(again_data["existing"])
+            g_reloaded.load()
+            grating_nodes = [n for n in g_reloaded.G.nodes if g_reloaded.G.nodes[n].get("type") == "grating"]
+            self.assertEqual(grating_nodes, [expressed_grating_id])
+
+            # 7. Scatter takes exactly one parent, so several are rejected up front
+            multi_resp = client.post(
+                "/scatter_evolution", json={"parents": [baseline_ind_id, individual_id], "offspring_size": 2}
+            )
+            self.assertEqual(multi_resp.status_code, 400)
+            self.assertIn("exactly one parent", multi_resp.get_json()["error"])
+
+            # 8. Without a blueprint, every linear layer gets an adapter whose alpha equals the rank
+            mock_engine.get_model_layers = AsyncMock(return_value=[
+                {"address": "l1", "type": "Linear", "in_features": 4, "out_features": 4},
+                {"address": "conv", "type": "Conv2d", "in_features": 4, "out_features": 4},
+            ])
+            built_elements: list[list[dict]] = []
+
+            async def record_build(model_element: object, elements: list[dict]) -> Grating:
+                built_elements.append(elements)
+                grating = Grating()
+                grating.add_element(LoRAElement("l1", rank=4, alpha=4.0, in_features=4, out_features=4))
+                return grating
+
+            mock_engine.build_grating = record_build
+            rank_resp = client.post("/wrap_individual", json={
+                "model_id": "model_test", "precursor_id": "precursor_audio_test", "lora_rank": 4
+            })
+            self.assertEqual(rank_resp.status_code, 200)
+            self.assertEqual([el["address"] for el in built_elements[0]], ["l1"])
+            self.assertEqual(built_elements[0][0]["params"]["rank"], 4)
+            self.assertEqual(built_elements[0][0]["params"]["alpha"], 4.0)
+
+            # Alpha is no longer configurable, so passing one is rejected rather than ignored
+            alpha_resp = client.post("/wrap_individual", json={
+                "model_id": "model_test", "precursor_id": "precursor_audio_test", "lora_rank": 4, "lora_alpha": 1.0
+            })
+            self.assertEqual(alpha_resp.status_code, 400)
+            self.assertIn("lora_alpha", alpha_resp.get_json()["error"])
 
             # Restore original globals
             app_module.param_graph = old_graph

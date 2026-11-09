@@ -30,8 +30,6 @@ Delete each entry once it is resolved.
   "exemplar classifier" used for channel clustering.
 - **"Breakout" has two meanings.** The UI's *Break Out* creates a room, but docstrings in `transfer.py`
   and `graph.py` use "breakout" to mean forking to a project.
-- **Recombine's "Wholesale Layer Splicing (Depth 1)"** actually uses gene granularity with one cut.
-  The *Multi-Tier* options cut at atom granularity, so a cut can fall inside a tensor.
 - **The `wrap_individual` form** restricts its precursor to audio, but its `initiator_types` also
   include image, grating and latent.
 - **No backend code creates `bundle` nodes,** although the frontend and recombine both handle them.

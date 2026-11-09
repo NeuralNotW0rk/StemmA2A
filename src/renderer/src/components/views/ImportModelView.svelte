@@ -261,7 +261,7 @@
               {#if selectedModel.checkpoint?.path}
                 <div class="detail-row">
                   <span class="detail-label">Checkpoint:</span>
-                  <span class="detail-value path-value" title={selectedModel.checkpoint.path}>
+                  <span class="detail-value path-value" data-tip={selectedModel.checkpoint.path}>
                     {selectedModel.checkpoint.path}
                   </span>
                 </div>

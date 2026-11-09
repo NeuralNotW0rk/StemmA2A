@@ -36,9 +36,9 @@ def load_target_image(path: str, size: int, device) -> torch.Tensor:
 
 class ReconstructionLoss:
     """
-    LPIPS (VGG) plus a weighted pixel MSE. LPIPS is optional: without the `lpips` package, or when its
-    VGG16 weights can't be fetched (first use downloads them to TORCH_HOME), the loss falls back to MSE
-    alone, which reconstructs color and layout but leaves fine detail softer.
+    LPIPS (VGG) plus a weighted pixel MSE, or MSE alone when use_lpips is off. When LPIPS is requested but
+    the `lpips` package or its VGG16 weights (downloaded to TORCH_HOME on first use) are unavailable, this
+    raises rather than quietly falling back to MSE, which would give a softer inversion without saying so.
     """
     def __init__(self, device, mse_weight: float = 1.0, use_lpips: bool = True):
         self.mse_weight = mse_weight
@@ -46,14 +46,18 @@ class ReconstructionLoss:
         if use_lpips:
             try:
                 import lpips
-            except ImportError:
-                print("PTI: 'lpips' is not installed; using pixel MSE only. `pip install lpips` for sharper inversions.")
-            else:
-                try:
-                    self.lpips = lpips.LPIPS(net="vgg", verbose=False).to(device).eval()
-                    self.lpips.requires_grad_(False)
-                except Exception as e:
-                    print(f"PTI: could not load LPIPS (VGG16 weights unavailable?): {e}. Using pixel MSE only.")
+            except ImportError as e:
+                raise RuntimeError(
+                    "Perceptual (LPIPS) loss needs the 'lpips' package, which is in backend/requirements.txt. "
+                    "Install it, or turn the option off to invert with pixel MSE alone."
+                ) from e
+            try:
+                self.lpips = lpips.LPIPS(net="vgg", verbose=False).to(device).eval()
+            except Exception as e:
+                raise RuntimeError(
+                    f"Could not load LPIPS's VGG16 weights, which are downloaded to TORCH_HOME on first use: {e}"
+                ) from e
+            self.lpips.requires_grad_(False)
 
     @property
     def name(self) -> str:

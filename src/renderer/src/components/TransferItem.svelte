@@ -10,7 +10,7 @@
   class="transfer-item"
   class:failed={transfer.state === 'failed'}
   class:done={transfer.state === 'done'}
-  title={transfer.uid}
+  data-tip={transfer.uid}
 >
   <div class="transfer-main-row">
     <span class="transfer-direction" aria-label={transfer.direction}>

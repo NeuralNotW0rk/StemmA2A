@@ -340,6 +340,22 @@ class StableAudioAdapter(ModelAdapter):
             }
         }
     )
+    def _sampler_category(self, kwargs: dict) -> str:
+        """
+        The sampler family the model's diffusion objective requires. A request for the other family fails
+        fast: k-diffusion samplers can't run a flow model, and flow samplers on a v-model would silently fall
+        through to a generic v-sampler.
+        """
+        objective = self.model_info.config.get("model", {}).get("diffusion", {}).get("diffusion_objective", "v")
+        required = "rectified_flow" if objective in ("rectified_flow", "rf_denoiser") else "k_diffusion"
+        requested = kwargs.get("sampler_category")
+        if requested and requested != required:
+            raise ValueError(
+                f"Sampler family '{requested}' doesn't work with this model: its '{objective}' objective "
+                f"needs '{required}'."
+            )
+        return required
+
     def generate(self, **kwargs) -> tuple[Audio, torch.Tensor]:
         model = self.model.to(self.device)
         sample_rate = self.model_info.config["sample_rate"]
@@ -375,9 +391,7 @@ class StableAudioAdapter(ModelAdapter):
         diffusion_objective = diffusion_config.get("diffusion_objective", "v")
         is_rf_objective = diffusion_objective in ["rectified_flow", "rf_denoiser"]
 
-        sampler_category = kwargs.get("sampler_category")
-        if not sampler_category:
-            sampler_category = "rectified_flow" if diffusion_objective in ["rectified_flow", "rf_denoiser"] else "k_diffusion"
+        sampler_category = self._sampler_category(kwargs)
 
         sampler_type = None
         if sampler_category == "k_diffusion":
@@ -402,13 +416,15 @@ class StableAudioAdapter(ModelAdapter):
         if init_latent_element:
             print(f"DEBUG: Found init_latent_element with ID {init_latent_element.id}")
             latent_path = Path(init_latent_element.file.path)
-            if latent_path and latent_path.exists():
-                init_latent_tensor = torch.load(latent_path, map_location=self.device, weights_only=True)
-                inversion_meta = getattr(init_latent_element, "context", {}).get("inversion_metadata", None)
-                print(f"DEBUG: Loaded init_latent_tensor of shape {init_latent_tensor.shape}")
-                print(f"DEBUG: inversion_metadata = {inversion_meta}")
-            else:
-                print(f"DEBUG: Latent path does not exist: {latent_path}")
+            # Fail fast: generating from noise instead would look like a successful edit of the latent
+            if not latent_path.is_file():
+                raise FileNotFoundError(
+                    f"Initial latent '{init_latent_element.id}' has no file at '{latent_path}'."
+                )
+            init_latent_tensor = torch.load(latent_path, map_location=self.device, weights_only=True)
+            inversion_meta = getattr(init_latent_element, "context", {}).get("inversion_metadata", None)
+            print(f"DEBUG: Loaded init_latent_tensor of shape {init_latent_tensor.shape}")
+            print(f"DEBUG: inversion_metadata = {inversion_meta}")
 
         # Establish execution steps and schedule boundaries
         for required_param in ["steps", "cfg_scale", "sigma_min", "sigma_max", "seed"]:
@@ -540,12 +556,16 @@ class StableAudioAdapter(ModelAdapter):
             noise_level = kwargs.get("noise_level", 0.7)
             
             audio_path = Path(init_audio_element.file.path)
-            if audio_path and audio_path.exists():
-                from utils.audio import load_audio
-                init_audio_tensor = load_audio(self.device, audio_path, sample_rate)
-                
-                args["init_audio"] = (sample_rate, init_audio_tensor)
-                args["init_noise_level"] = noise_level
+            # Fail fast: generating from noise instead would look like a successful audio-to-audio run
+            if not audio_path.is_file():
+                raise FileNotFoundError(
+                    f"Initial audio '{init_audio_element.id}' has no file at '{audio_path}'."
+                )
+            from utils.audio import load_audio
+            init_audio_tensor = load_audio(self.device, audio_path, sample_rate)
+
+            args["init_audio"] = (sample_rate, init_audio_tensor)
+            args["init_noise_level"] = noise_level
 
         # Generate stereo audio
         with torch.no_grad():
@@ -815,8 +835,7 @@ class StableAudioAdapter(ModelAdapter):
         # Normalisation stats for k-diffusion latents; the RF path stores its latent unnormalised
         latent_stats: dict[str, float] = {}
 
-        is_rf = (self.model_info.config.get("model", {}).get("diffusion", {}).get("diffusion_objective") in ["rectified_flow", "rf_denoiser"])
-        sampler_category = kwargs.get("sampler_category", "rectified_flow" if is_rf else "k_diffusion")
+        sampler_category = self._sampler_category(kwargs)
 
         if sampler_category == "rectified_flow":
             import stable_audio_tools.inference.inversion as sat_inv
@@ -825,6 +844,13 @@ class StableAudioAdapter(ModelAdapter):
             inversion_gamma = kwargs.get("inversion_gamma", 0.3)
             inversion_unconditional = kwargs.get("inversion_unconditional", True)
             inversion_cfg_scale = kwargs.get("inversion_cfg_scale", 1.0)
+            # The DiT only applies CFG dropout at a scale of exactly 1; above it, "unconditional" would
+            # silently condition on the prompt
+            if inversion_unconditional and float(inversion_cfg_scale) != 1.0:
+                raise ValueError(
+                    f"Unconditional inversion needs Inversion CFG Scale 1, got {inversion_cfg_scale}: "
+                    "at any other scale the model conditions on the prompt."
+                )
             
             inversion_params = {
                 "inversion_steps": steps,

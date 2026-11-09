@@ -4,6 +4,7 @@
   import Toolbar from './components/Toolbar.svelte'
   import AudioPlayer from './components/AudioPlayer.svelte'
   import ContentPanel from './components/ContentPanel.svelte'
+  import TipView from './components/TipView.svelte'
   import ElementInfoView from './components/views/ElementInfoView.svelte'
   import MessageView from './components/views/MessageView.svelte'
   import ImportGratingView from './components/views/ImportGratingView.svelte'
@@ -1000,6 +1001,7 @@
     onselectOperation={handleSelectOperation}
     onrefresh={refreshGraphData}
   />
+  <TipView />
   {#if audioSrc}
     <AudioPlayer src={audioSrc} title={audioTitle} onclose={() => (audioSrc = null)} />
   {/if}

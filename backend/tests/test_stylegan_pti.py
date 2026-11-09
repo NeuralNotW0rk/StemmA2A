@@ -112,6 +112,17 @@ class TestStyleGANAdapterInversion(unittest.TestCase):
         self.assertEqual(latent.context["reconstruction_loss"], "mse")
         self.assertEqual(grating.context["reconstruction_loss"], "mse")
 
+    def test_missing_lpips_raises_instead_of_falling_back(self):
+        import sys
+        from unittest.mock import patch
+        from engine.model_adapters.stylegan_pti import ReconstructionLoss
+
+        # A None entry in sys.modules makes `import lpips` raise ImportError
+        with patch.dict(sys.modules, {"lpips": None}):
+            with self.assertRaisesRegex(RuntimeError, "needs the 'lpips' package"):
+                ReconstructionLoss("cpu", use_lpips=True)
+            self.assertEqual(ReconstructionLoss("cpu", use_lpips=False).name, "mse")
+
     @unittest.skipUnless(importlib.util.find_spec("lpips"), "lpips is not installed")
     def test_invert_with_lpips(self):
         (_, _), (grating, _) = self.invert(projection_steps=2, tuning_steps=2, use_lpips=True).outputs

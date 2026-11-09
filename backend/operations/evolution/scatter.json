@@ -3,23 +3,24 @@
   "description": "Scatter variant offspring across the parameter space",
   "category": "evolution",
   "execution": "queued",
-  "initiator_types": ["individual", "group", "audio"],
+  "initiator_types": ["individual", "audio"],
   "context_overrides": {},
   "form_config": [
     {
       "name": "parents",
-      "type": "node-list",
-      "label": "Seed Individual(s)",
+      "type": "node",
+      "label": "Parent Individual",
+      "description": "The individual to scatter from. Every offspring is a mutated copy of this parent, with no crossover, so scatter explores the neighborhood around one individual. To breed from several individuals, use Recombine.",
       "filter": {
         "type": "individual"
       },
-      "required": true,
-      "minItems": 1
+      "required": true
     },
     {
       "name": "offspring_size",
       "type": "integer",
       "label": "Scatter Count (N)",
+      "description": "How many offspring to make. Each is an independent random variation of the parent, so a larger count samples its neighborhood more thoroughly. An offspring identical to an individual already in the graph is discarded, so you can get fewer than N when Mutation Strength is very low.",
       "defaultValue": 10,
       "min": 1,
       "max": 100,
@@ -59,6 +60,7 @@
       "name": "generate_exemplars",
       "type": "boolean",
       "label": "Auto-Generate Exemplars",
+      "description": "When on, each offspring gets an exemplar as soon as it is made, using the settings of the parent's exemplar (prompt, random seed and so on), so you can compare offspring like for like. When off, offspring have no exemplar until you make one with Generate Exemplar.",
       "defaultValue": true,
       "allowSequence": false
     }

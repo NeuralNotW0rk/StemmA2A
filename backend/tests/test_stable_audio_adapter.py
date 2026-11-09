@@ -287,10 +287,72 @@ class TestStableAudioLatentGeneration(unittest.TestCase):
                           fake_generate_diffusion_cond):
                 adapter.generate(
                     init_latent_element=element, steps=50, cfg_scale=1.0, sigma_min=0.3,
-                    sigma_max=500.0, seed=0, sampler_category="k_diffusion",
+                    sigma_max=500.0, seed=0,
+                    sampler_category="rectified_flow" if diffusion_objective in ("rectified_flow", "rf_denoiser") else "k_diffusion",
                     k_sampler_type=sampler_type, rf_sampler_type="euler", seconds_total=0.3,
                 )
         return recorded
+
+    def _bare_adapter(self, diffusion_objective: str) -> "StableAudioAdapter":
+        from types import SimpleNamespace
+
+        adapter = StableAudioAdapter()
+        adapter.device = "cpu"
+        model = MagicMock()
+        model.to.return_value = model
+        adapter.model = model
+        adapter.model_info = SimpleNamespace(config={
+            "sample_rate": 44100, "sample_size": 2048 * 8,
+            "model": {"diffusion": {"diffusion_objective": diffusion_objective}},
+        })
+        return adapter
+
+    def test_sampler_family_follows_the_model(self) -> None:
+        self.assertEqual(self._bare_adapter("v")._sampler_category({}), "k_diffusion")
+        self.assertEqual(self._bare_adapter("rf_denoiser")._sampler_category({}), "rectified_flow")
+        self.assertEqual(
+            self._bare_adapter("rectified_flow")._sampler_category({"sampler_category": "rectified_flow"}),
+            "rectified_flow",
+        )
+        for objective, wrong in (("v", "rectified_flow"), ("rectified_flow", "k_diffusion")):
+            with self.subTest(objective=objective), self.assertRaisesRegex(ValueError, "doesn't work with this model"):
+                self._bare_adapter(objective)._sampler_category({"sampler_category": wrong})
+
+    def test_missing_init_files_fail_instead_of_generating_from_noise(self) -> None:
+        from types import SimpleNamespace
+
+        missing = SimpleNamespace(id="gone", file=SimpleNamespace(path="does/not/exist.pt"), context={})
+        common = dict(steps=50, cfg_scale=1.0, sigma_min=0.3, sigma_max=500.0, seed=0,
+                      k_sampler_type="dpmpp-2m", seconds_total=1.0)
+        with self.assertRaisesRegex(FileNotFoundError, "Initial latent 'gone'"):
+            self._bare_adapter("v").generate(init_latent_element=missing, **common)
+
+        adapter = self._bare_adapter("v")
+        adapter.model.conditioner.return_value = {}
+        adapter.model.mask_padding_attention = False
+        adapter.model.use_effective_length_for_schedule = False
+        adapter.model.pretransform.downsampling_ratio = 2048
+        with self.assertRaisesRegex(FileNotFoundError, "Initial audio 'gone'"):
+            adapter.generate(init_audio_element=missing, **common)
+
+    def test_unconditional_inversion_requires_cfg_one(self) -> None:
+        # The DiT skips CFG dropout above a scale of 1, so "unconditional" would condition on the prompt
+        import torch
+        from types import SimpleNamespace
+        from utils.audio import save_audio
+
+        adapter = self._bare_adapter("rectified_flow")
+        adapter.model.mask_padding_attention = False
+        adapter.model.use_effective_length_for_schedule = False
+        with tempfile.TemporaryDirectory() as tmp:
+            source_path = Path(tmp) / "source.wav"
+            save_audio(torch.zeros(2, 4410), source_path, 44100)
+            source = SimpleNamespace(id="source", file=SimpleNamespace(path=str(source_path)))
+            with self.assertRaisesRegex(ValueError, "needs Inversion CFG Scale 1"):
+                adapter.invert(
+                    source_audio_element=source, steps=10, seconds_total=0.1,
+                    inversion_unconditional=True, inversion_cfg_scale=2.0, inversion_gamma=0.0,
+                )
 
     def test_v_model_keeps_its_sigma_range(self) -> None:
         recorded = self._generate_from_latent("v", {

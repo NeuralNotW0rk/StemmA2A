@@ -7,6 +7,20 @@ from param_graph.elements.base_elements import Asset
 from utils.audio import load_audio
 from utils.uid import XXH3_64
 
+# librosa's peak-picking threshold on its normalized onset envelope; sensitivity 0.5 maps to it exactly
+DEFAULT_ONSET_DELTA = 0.07
+
+
+def onset_delta_from_sensitivity(sensitivity: float) -> float:
+    """
+    Maps a 0-1 sensitivity onto librosa's onset threshold (delta) on a log scale: 0 gives 0.7 (only the
+    strongest attacks), 0.5 gives librosa's default 0.07 and 1 gives 0.007 (nearly every peak).
+    """
+    if not 0.0 <= sensitivity <= 1.0:
+        raise ValueError(f"Sensitivity must be between 0 and 1, got {sensitivity}.")
+    return DEFAULT_ONSET_DELTA * 10 ** (1.0 - 2.0 * sensitivity)
+
+
 @register
 class LibrosaOnsetSliceOperation(SyncOperation):
     @property
@@ -26,6 +40,8 @@ class LibrosaOnsetSliceOperation(SyncOperation):
         
         source_element = kwargs.get("source_audio_element")
         backtrack = bool(kwargs.get("backtrack", True))
+        sensitivity = float(kwargs.get("sensitivity", 0.5))
+        delta = onset_delta_from_sensitivity(sensitivity)
         device = kwargs.get("device", "cpu")
         sample_rate = kwargs.get("sample_rate", 48000)
         
@@ -36,7 +52,8 @@ class LibrosaOnsetSliceOperation(SyncOperation):
             y=mono_audio, 
             sr=sample_rate, 
             units='samples',
-            backtrack=backtrack
+            backtrack=backtrack,
+            delta=delta
         )
         
         total_samples = audio_tensor.shape[-1]
@@ -60,7 +77,7 @@ class LibrosaOnsetSliceOperation(SyncOperation):
                         duration=float(chunk.shape[-1]) / sample_rate,
                         context={
                             "operation": self.name,
-                            "params": {"backtrack": backtrack},
+                            "params": {"backtrack": backtrack, "sensitivity": sensitivity},
                             "source_id": source_element.id,
                             "index": len(results),
                             "seconds_start": float(start) / sample_rate,

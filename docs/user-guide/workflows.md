@@ -57,7 +57,9 @@ reusable **grating**.
 1. Right-click a model and choose **Bend**.
 2. Choose a **Target Layer**. The list shows each layer's address, type and shape.
 3. Choose a **Bending Kernel**: Erode, Dilate, Scale, Rotate, Translate, Scalar Multiply or Ablate.
-4. Optionally tick **Precompute Feature Clustering** and set the **Number of Clusters** (2–20). This
+   Erode, Dilate, Scale, Rotate and Translate work on 2D feature maps, so they're only available for
+   2D convolution layers, such as those in StyleGAN. Scalar Multiply and Ablate work on any layer.
+4. Optionally tick **Precompute Feature Clustering**, which enables **Number of Clusters** (2–20). This
    groups the layer's channels by what they respond to, so you can bend one cluster at a time.
 5. Click **Create Grating**. This runs as a job.
 
@@ -90,7 +92,7 @@ This is StemmA2A's main loop. You evolve **changes to the model**, judged by ear
 4. **Breed the next generation.**
    - **Scatter** again from a single favorite to explore around it.
    - **Recombine** a group or a selection of scored individuals to mix their traits.
-5. **Audition more widely** (optional). Run **Generate** on one or more individuals. The **Lineage
+5. **Audition more widely** (optional). Run **Generate Exemplar** on one or more individuals. The **Lineage
    Exemplars** list lets you render them with every prompt and seed their ancestors were judged on,
    so you can check that a change works across different material.
 6. **Repeat** from step 3.

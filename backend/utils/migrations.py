@@ -122,8 +122,10 @@ def migrate_baseline_references(project_path: Path) -> None:
     import json
     import shutil
     import uuid
+    from diffracture.topology.grating import Grating as DiffractureGrating
     from param_graph.elements.artifacts.grating_element import Grating
     from param_graph.elements.base_elements import Asset
+    from utils.uid import grating_uid
 
     try:
         with open(graph_file, "r", encoding="utf-8") as f:
@@ -150,7 +152,16 @@ def migrate_baseline_references(project_path: Path) -> None:
             return None
         key = normalize(file_path)
         if key not in grating_by_path:
-            grating_id = f"grating_{uuid.uuid4().hex[:8]}"
+            if not os.path.isfile(file_path):
+                raise FileNotFoundError(
+                    f"Baseline grating file '{file_path}' is referenced by the project but missing, so the "
+                    "individuals that use it cannot be migrated."
+                )
+            # Content-addressed like other gratings; an identical grating already in the graph is reused
+            grating_id = grating_uid(DiffractureGrating.load(str(file_path)))
+            if grating_id in node_data:
+                grating_by_path[key] = grating_id
+                return grating_id
             grating = Grating(
                 id=grating_id,
                 name="Baseline Grating",

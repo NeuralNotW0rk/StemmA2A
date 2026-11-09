@@ -165,7 +165,7 @@
             type="button"
             class="remove-button"
             onclick={() => handleRemove(item.id)}
-            title="Remove item"
+            data-tip="Remove item"
             aria-label="Remove item"
           >
             ✕
@@ -179,21 +179,24 @@
                 type="text"
                 bind:value={items[index].strength}
                 placeholder="e.g. -1, 0.5, 1..2:0.5"
-                title="Sequence of strengths to sweep"
+                data-tip="Sequence of strengths to sweep"
+                aria-label="Sequence of strengths to sweep"
               />
             {:else}
               <input
                 type="number"
                 step={strengthStep}
                 bind:value={items[index].strength}
-                title="Negative values invert the effect, values above 1 exaggerate it"
+                data-tip="Negative values invert the effect, values above 1 exaggerate it"
+                aria-label="Negative values invert the effect, values above 1 exaggerate it"
               />
             {/if}
             <button
               type="button"
               class="batch-toggle"
               onclick={() => toggleStrengthBatch(items[index])}
-              title="Toggle sequence mode"
+              data-tip="Toggle sequence mode"
+              aria-label="Toggle sequence mode"
             >
               {items[index].strengthBatch ? '−' : '+'}
             </button>

@@ -81,11 +81,19 @@ class TestMigrations(unittest.TestCase):
             shutil.rmtree(tmp_dir)
 
     def test_baseline_references_migration(self):
+        from diffracture.topology.grating import Grating as DiffractureGrating
+        from diffracture.topology.lora import LoRAElement
+        from utils.uid import grating_uid
+
         tmp_dir = tempfile.mkdtemp()
         project_path = Path(tmp_dir)
 
         try:
             baseline_path = str(project_path / "generate" / "grating_old.safetensors")
+            os.makedirs(os.path.dirname(baseline_path))
+            baseline_grating = DiffractureGrating()
+            baseline_grating.add_element(LoRAElement("layer1", rank=1, alpha=1.0, in_features=4, out_features=4))
+            baseline_grating.save(baseline_path)
             elements = [{"address": "layer1", "kernel_type": "lora", "metadata": {"rank": 1}}]
             ind_context = {"model_id": "model_1", "baseline_elements": elements, "baseline_file_path": baseline_path}
             serialized_grating = {
@@ -123,6 +131,9 @@ class TestMigrations(unittest.TestCase):
             self.assertEqual(len(baselines), 1)
             baseline = baselines[0]
             self.assertTrue(baseline["context"]["is_baseline"])
+            # Content-addressed: the UID read back from the file matches the grating it was saved from
+            self.assertEqual(baseline["id"], grating_uid(baseline_grating))
+            self.assertEqual(baseline["file"]["uid"], baseline["id"])
             self.assertEqual(baseline["elements"], elements)
             self.assertEqual(baseline["file"]["path"], baseline_path)
             for ind_id in ("ind_1", "ind_2"):
@@ -142,6 +153,33 @@ class TestMigrations(unittest.TestCase):
             before = graph_file.read_bytes()
             migrate_baseline_references(project_path)
             self.assertEqual(graph_file.read_bytes(), before)
+        finally:
+            shutil.rmtree(tmp_dir)
+
+    def test_baseline_references_migration_missing_file(self):
+        tmp_dir = tempfile.mkdtemp()
+        project_path = Path(tmp_dir)
+
+        try:
+            missing_path = str(project_path / "generate" / "gone.safetensors")
+            context = {"model_id": "model_1", "baseline_elements": [], "baseline_file_path": missing_path}
+            graph_data = {"project_name": "MissingBaseline", "graph": {"elements": {
+                "nodes": [
+                    {"data": {"id": "model_1", "type": "model"}},
+                    {"data": {"id": "ind_1", "type": "individual", "baseline_grating_id": None,
+                              "base_model_id": "model_1", "context": context}},
+                ],
+                "edges": [],
+            }}}
+            graph_file = project_path / "graph.json"
+            with open(graph_file, "w") as f:
+                json.dump(graph_data, f)
+            original = graph_file.read_bytes()
+
+            # A baseline file that can't be hashed fails the migration instead of getting a placeholder ID
+            with self.assertRaises(FileNotFoundError):
+                migrate_baseline_references(project_path)
+            self.assertEqual(graph_file.read_bytes(), original)
         finally:
             shutil.rmtree(tmp_dir)
 

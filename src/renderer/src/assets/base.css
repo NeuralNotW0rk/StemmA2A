@@ -1,4 +1,7 @@
 :root {
+  /* Height of the tip view pinned to the bottom-left; left panels end above it.
+     Fits a title plus 8 body lines, about 350 characters of description. */
+  --tip-view-height: 11.75rem;
   --color-overlay-background-primary: rgba(0, 0, 0, 0.7);
   --color-overlay-background-secondary: rgba(0, 0, 0, 0.8);
   --color-overlay-border-primary: rgba(255, 255, 255, 0.2);

@@ -147,7 +147,7 @@
   <button
     class="toolbar-button"
     onclick={openMenu}
-    title={engine?.mode === 'remote' ? connectionText : 'Choose engine'}
+    data-tip={engine?.mode === 'remote' ? connectionText : 'Choose engine'}
     aria-label="Open engine menu"
   >
     {#if engine?.mode === 'remote'}

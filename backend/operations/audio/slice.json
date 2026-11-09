@@ -3,6 +3,7 @@
     "name": "source_audio",
     "type": "node",
     "label": "Source Audio",
+    "description": "The audio to slice. Each slice is saved as a new audio node linked to this one, which is left unchanged. Mono audio comes out as stereo, and everything is resampled to 48 kHz.",
     "filter": {
       "type": "audio"
     },
@@ -12,6 +13,7 @@
     "name": "chunk_duration",
     "type": "float",
     "label": "Chunk Duration (s)",
+    "description": "Length of each slice, in seconds. Slices are cut from the start of the clip, each becoming its own numbered audio node. The cuts have no fades, so one that lands mid-sound can click. Slicing stops at the first slice that reaches the end of the clip, which may be shorter than the rest.",
     "defaultValue": 1.0,
     "required": true
   },
@@ -19,6 +21,7 @@
     "name": "overlap",
     "type": "float",
     "label": "Overlap (s)",
+    "description": "How much each slice shares with the one before it, in seconds. A new slice starts every Chunk Duration minus Overlap, so overlap makes more slices, and a sound cut at one slice's edge appears whole in its neighbor. Must be shorter than Chunk Duration; at 0 slices meet end to end.",
     "defaultValue": 0.0,
     "required": false
   }

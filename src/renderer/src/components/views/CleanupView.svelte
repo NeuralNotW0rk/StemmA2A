@@ -149,7 +149,7 @@
           <summary>Show files</summary>
           <ul class="file-list">
             {#each preview.orphans.slice(0, MAX_LISTED_FILES) as orphan (orphan.path)}
-              <li title={orphan.path}>
+              <li data-tip={orphan.path}>
                 <span class="file-path">{orphan.path}</span>
                 <span class="file-size">{formatBytes(orphan.size)}</span>
               </li>

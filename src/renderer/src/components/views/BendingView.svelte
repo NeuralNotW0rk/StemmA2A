@@ -8,7 +8,26 @@
     address: string
     type: string
     shape?: number[]
+    // Whether the layer outputs 2D feature maps (B, C, H, W), which spatial kernels require
+    spatial_output: boolean
   }
+
+  interface KernelOption {
+    value: string
+    label: string
+    // Spatial kernels raise an error on anything but 2D feature maps
+    spatial: boolean
+  }
+
+  const KERNELS: KernelOption[] = [
+    { value: 'erode', label: 'Erode (Morphological Erosion)', spatial: true },
+    { value: 'dilate', label: 'Dilate (Morphological Dilation)', spatial: true },
+    { value: 'scale', label: 'Scale (2D Spatial Zoom)', spatial: true },
+    { value: 'rotate', label: 'Rotate (2D Spatial Rotation)', spatial: true },
+    { value: 'translate', label: 'Translate (2D Spatial Translation)', spatial: true },
+    { value: 'scalar-multiply', label: 'Scalar Multiply (Gain/Ablation)', spatial: false },
+    { value: 'ablate', label: 'Ablate (Zero Ablation)', spatial: false }
+  ]
 
   let { modelElement, onclose, onrefresh, onError }: {
     modelElement: NodeData | null
@@ -36,6 +55,11 @@
   let numClusters = $state(5)
 
   let selectedLayer = $derived(layers.find((l): boolean => l.address === selectedAddress))
+  let selectedKernel = $derived(KERNELS.find((k): boolean => k.value === kernelType))
+  // The selection is kept, not switched, so the user sees why Create is disabled
+  let kernelUnsupported = $derived(
+    !!selectedLayer && !!selectedKernel?.spatial && !selectedLayer.spatial_output
+  )
 
   $effect((): (() => void) | void => {
     const modelId = selectedModel?.id
@@ -92,9 +116,26 @@
     }
   })
 
-  let isFormValid = $derived(selectedAddress !== '' && !loadingLayers && !!selectedModel)
+  let isFormValid = $derived(
+    selectedAddress !== '' && !loadingLayers && !!selectedModel && !kernelUnsupported
+  )
 
   import { addJob, pollJobStatus } from '../../utils/job-management'
+
+  // Shown in the tip view while each field is hovered or focused
+  const TIPS = {
+    model:
+      'The model this grating bends. Bending changes what a layer outputs while the model generates; the model itself is never altered. The new grating is bound to this model and only works with it.',
+    name: "Name shown on the grating's node. Left empty, the grating is named after its layer and kernel, for example 'conv1.conv [erode]'.",
+    layer:
+      'The layer whose output the kernel changes. In image models, earlier layers tend to shape broad structure and later layers finer detail. Erode, Dilate, Scale, Rotate and Translate need a layer with 2D spatial output, such as a convolution in an image model.',
+    kernel:
+      "How the layer's output is changed. Erode and Dilate shrink or grow the strong regions of each feature map; Scale, Rotate and Translate move them. Scalar Multiply scales channels up or down, and Ablate silences them. Kernels the layer can't take are disabled. Amounts are set in Generate.",
+    clustering:
+      "Groups the layer's channels by how they respond, so the grating can bend one group instead of the whole layer. It runs a few test generations, learns a profile of each channel and sorts the channels with k-means, which makes creating the grating slower. Pick a cluster in Generate.",
+    clusters:
+      "How many groups to sort the layer's channels into. More clusters give smaller, more specific groups; fewer give broader ones. Each cluster can be targeted on its own in Generate. Greyed out until Precompute Feature Clustering is on."
+  } as const
 
   async function createGrating(): Promise<void> {
     if (!isFormValid || !selectedModel) return
@@ -150,19 +191,21 @@
 
 <div class="view-container">
   <div class="view-content">
-    <NodeSelector
-      label="Target Model"
-      filter={{ type: 'model' }}
-      bind:node={selectedModel}
-      id="target-model-selector"
-    />
+    <div data-tip={TIPS.model} data-tip-title="Target Model">
+      <NodeSelector
+        label="Target Model"
+        filter={{ type: 'model' }}
+        bind:node={selectedModel}
+        id="target-model-selector"
+      />
+    </div>
 
-    <label>
+    <label data-tip={TIPS.name} data-tip-title="Grating Name">
       Grating Name
       <input type="text" bind:value={name} placeholder="e.g., Erode Layer 4" />
     </label>
 
-    <label>
+    <label data-tip={TIPS.layer} data-tip-title="Target Layer">
       Target Layer
       {#if loadingLayers}
         <div class="loading-layers-box">
@@ -182,21 +225,32 @@
       {/if}
     </label>
 
-    <label>
+    <label data-tip={TIPS.kernel} data-tip-title="Bending Kernel">
       Bending Kernel
       <select bind:value={kernelType}>
-        <option value="erode">Erode (Morphological Erosion)</option>
-        <option value="dilate">Dilate (Morphological Dilation)</option>
-        <option value="scale">Scale (2D Spatial Zoom)</option>
-        <option value="rotate">Rotate (2D Spatial Rotation)</option>
-        <option value="translate">Translate (2D Spatial Translation)</option>
-        <option value="scalar-multiply">Scalar Multiply (Gain/Ablation)</option>
-        <option value="ablate">Ablate (Zero Ablation)</option>
+        {#each KERNELS as kernel (kernel.value)}
+          <option
+            value={kernel.value}
+            disabled={kernel.spatial && !!selectedLayer && !selectedLayer.spatial_output}
+          >
+            {kernel.label}
+          </option>
+        {/each}
       </select>
+      {#if kernelUnsupported && selectedKernel}
+        <span class="field-error">
+          {selectedKernel.label.split(' (')[0]} needs a layer with 2D spatial output. Choose Scalar Multiply
+          or Ablate, or a convolution layer of an image model.
+        </span>
+      {/if}
     </label>
 
     <!-- Feature Clustering Pre-computation Toggle -->
-    <div style="margin-top: 0.5rem;">
+    <div
+      style="margin-top: 0.5rem;"
+      data-tip={TIPS.clustering}
+      data-tip-title="Precompute Feature Clustering"
+    >
       <label
         style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; color: var(--color-overlay-text);"
       >
@@ -209,18 +263,19 @@
       </label>
     </div>
 
-    {#if performClustering}
-      <div class="clustering-group">
-        <div class="alert-box info">
-          Dynamic Exemplar training runs a few forward passes, trains a CNN classifier on features,
-          and runs K-Means in the backend to partition channel activities.
-        </div>
-        <label>
-          Number of Clusters
-          <input type="number" min="2" max="20" bind:value={numClusters} />
-        </label>
-      </div>
-    {/if}
+    <!-- Greyed out rather than hidden: the checkbox is a setting, not an attached artifact -->
+    <div class="clustering-group" class:disabled={!performClustering}>
+      <label data-tip={TIPS.clusters} data-tip-title="Number of Clusters">
+        Number of Clusters
+        <input
+          type="number"
+          min="2"
+          max="20"
+          bind:value={numClusters}
+          disabled={!performClustering}
+        />
+      </label>
+    </div>
   </div>
 
   <div class="panel-actions">
@@ -256,6 +311,14 @@
     font-weight: 500;
     font-size: 0.9rem;
   }
+  .field-error {
+    display: block;
+    margin-top: 0.375rem;
+    color: var(--color-error);
+    font-size: 0.8rem;
+    font-weight: 400;
+    line-height: 1.4;
+  }
   input,
   select {
     width: 100%;
@@ -284,16 +347,8 @@
     flex-direction: column;
     gap: 0.75rem;
   }
-  .alert-box {
-    padding: 0.6rem 0.8rem;
-    border-radius: 0.375rem;
-    font-size: 0.8rem;
-    line-height: 1.3;
-  }
-  .alert-box.info {
-    background: rgba(99, 102, 241, 0.15);
-    border: 1px dashed rgba(99, 102, 241, 0.4);
-    color: #a5b4fc;
+  .clustering-group.disabled {
+    opacity: 0.45;
   }
   .panel-actions {
     display: flex;

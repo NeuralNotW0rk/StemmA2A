@@ -66,6 +66,44 @@ class TestImmediateDspDispatch(unittest.TestCase):
         self.assertIsInstance(group, Group)
         self.assertCountEqual(group.member_ids, [a["id"] for a in response["artifacts"]])
 
+    def test_overlapping_slices_stop_at_the_end(self):
+        # A slice reaching the end of the clip is the last; no shorter fragments of its tail follow
+        response, status = self._dispatch("slice", chunk_duration=1.0, overlap=0.5)
+
+        self.assertEqual(status, 200, response)
+        slices = sorted(response["artifacts"], key=lambda a: a["context"]["seconds_start"])
+        self.assertEqual([a["context"]["seconds_start"] for a in slices], [0.0, 0.5, 1.0])
+        self.assertEqual([a["duration"] for a in slices], [1.0, 1.0, 1.0])
+
+    def test_onset_sensitivity_maps_to_threshold(self):
+        from operations.audio.onset_slice import DEFAULT_ONSET_DELTA, onset_delta_from_sensitivity
+
+        self.assertAlmostEqual(onset_delta_from_sensitivity(0.5), DEFAULT_ONSET_DELTA)
+        self.assertAlmostEqual(onset_delta_from_sensitivity(0.0), 0.7)
+        self.assertAlmostEqual(onset_delta_from_sensitivity(1.0), 0.007)
+        for out_of_range in (-0.1, 1.1):
+            with self.assertRaises(ValueError):
+                onset_delta_from_sensitivity(out_of_range)
+
+    def test_higher_onset_sensitivity_never_gives_fewer_slices(self):
+        counts = []
+        for sensitivity in (0.0, 0.5, 1.0):
+            response, status = self._dispatch("librosa_onset_slice", sensitivity=sensitivity, backtrack=True)
+            self.assertEqual(status, 200, response)
+            artifacts = response.get("artifacts") or [response["artifact"]]
+            self.assertTrue(all(a["context"]["params"]["sensitivity"] == sensitivity for a in artifacts))
+            counts.append(len(artifacts))
+        self.assertLessEqual(counts[0], counts[1])
+        self.assertLessEqual(counts[1], counts[2])
+        self.assertLess(counts[0], counts[2])
+
+    def test_remainder_slice_is_kept(self):
+        response, status = self._dispatch("slice", chunk_duration=0.75, overlap=0.0)
+
+        self.assertEqual(status, 200, response)
+        durations = sorted(a["duration"] for a in response["artifacts"])
+        self.assertEqual(durations, [0.5, 0.75, 0.75])
+
 
 if __name__ == "__main__":
     unittest.main()

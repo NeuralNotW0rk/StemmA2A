@@ -9,6 +9,7 @@ The app has no native menu bar. Every command is in the in-app toolbar or on the
 | **Toolbar** | Top | Project menu, breadcrumb, view mode, import and utility actions |
 | **Graph canvas** | Fills the window | The parameter graph |
 | **Left panel** | Left, 320 px | One task panel at a time: an operation form, import, bending, confirmations, messages |
+| **Tip view** | Bottom left, below the left panel | An explanation of whichever control the pointer is over or keyboard focus is on |
 | **Jobs** | Top right | Background jobs. Shown only when there are jobs |
 | **Element details** | Right | Properties of the selected node or edge |
 | **Audio player** | Bottom center | Playback of the selected audio |
@@ -139,6 +140,13 @@ Move with **↑/↓**, run with **Enter**, close with **Esc**.
 Operation panels are built from the backend's form definitions. Some controls work the same across
 all of them:
 
+- **Tip view**: hover over a field, or move focus to it with the keyboard, to see what it does in the
+  tip view at the bottom left. While you change a number, its current value is shown next to the
+  field's name. Some explanations change with the form, for example to describe the sampler you've
+  picked.
+- **Hidden and greyed-out fields**: a field disappears when a node you've attached makes it
+  irrelevant, such as Steps once an initial latent is attached. It's greyed out instead when another
+  setting makes it irrelevant, so you can still see it.
 - **Node fields**: click **Select** to pick a node on the graph. Valid targets get a green border and
   everything else dims. Click the field to center the chosen node in view, or **×** to clear it.
   **+** switches the field to a list, so you can run the operation on several nodes. Picking a group

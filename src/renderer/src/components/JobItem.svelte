@@ -73,7 +73,7 @@
   class:pending={job.status === 'pending'}
 >
   <div class="job-main-row">
-    <span class="job-name" title={job.name}>{job.name}</span>
+    <span class="job-name" data-tip={job.name}>{job.name}</span>
 
     {#if (job.status === 'running' || job.status === 'pending') && job.progress}
       <div class="progress-container">
@@ -97,7 +97,8 @@
         </button>
         <button
           class="remove-btn icon-btn"
-          title="Dismiss"
+          data-tip="Dismiss"
+          aria-label="Dismiss"
           onclick={(e) => {
             e.stopPropagation()
             removeJob(job.id)
@@ -112,7 +113,8 @@
         >
         <button
           class="remove-btn icon-btn"
-          title="Dismiss"
+          data-tip="Dismiss"
+          aria-label="Dismiss"
           onclick={(e) => {
             e.stopPropagation()
             removeJob(job.id)
@@ -135,7 +137,8 @@
       {:else}
         <button
           class="remove-btn icon-btn"
-          title="Dismiss"
+          data-tip="Dismiss"
+          aria-label="Dismiss"
           onclick={(e) => {
             e.stopPropagation()
             removeJob(job.id)

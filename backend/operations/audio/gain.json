@@ -3,6 +3,7 @@
     "name": "source_audio",
     "type": "node",
     "label": "Source Audio",
+    "description": "The audio to process. The result is saved as a new audio node linked to this one, which is left unchanged. Mono audio comes out as stereo, and everything is resampled to 48 kHz.",
     "filter": {
       "type": "audio"
     },
@@ -12,6 +13,7 @@
     "name": "gain_db",
     "type": "float",
     "label": "Gain (dB)",
+    "description": "How much louder or quieter to make the audio, in decibels. +6 dB roughly doubles the amplitude, -6 dB halves it and 0 leaves it unchanged. Nothing limits the result, so any peak pushed past full scale is clipped flat when the file is saved, which sounds harsh. Normalize raises the level without clipping.",
     "defaultValue": 3.0,
     "required": true
   }

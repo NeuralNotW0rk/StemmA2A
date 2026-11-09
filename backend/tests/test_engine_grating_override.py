@@ -210,7 +210,8 @@ def test_flask_endpoints():
 
         assert status_data.get("status") == "completed", f"Job failed: {status_data.get('error')}"
         grating_node = status_data["result"]["grating"]
-        assert grating_node["id"].startswith("grating_")
+        # Content-addressed, like other generated assets
+        assert grating_node["id"].endswith(".xxh3_64")
         assert grating_node["base_model_id"] == model_info.id
         
         # Verify the created elements have a resolved cluster_map

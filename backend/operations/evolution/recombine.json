@@ -10,6 +10,7 @@
       "name": "parents",
       "type": "node-list",
       "label": "Parent Individuals",
+      "description": "The individuals to breed from. Each offspring comes from its own pair of parents, chosen by the Selection Strategy. A single parent works too: it is paired with itself, so its offspring differ from it only by mutation.",
       "filter": {
         "type": "individual"
       },
@@ -20,6 +21,7 @@
       "name": "offspring_size",
       "type": "integer",
       "label": "Offspring Count (N)",
+      "description": "How many new individuals to breed. Each offspring comes from a separate pairing, so a larger count tries more combinations of parents. An offspring identical to an individual already in the graph is discarded, so you can get fewer than N when crossover and mutation change little.",
       "defaultValue": 10,
       "min": 1,
       "max": 100,
@@ -28,27 +30,35 @@
     {
       "name": "crossover_type",
       "type": "select",
+      "disable_if": {"crossover_prob": 0},
       "label": "Recombination Strategy",
+      "description": "How each pair of parents is mixed. Two-Point and One-Point treat a genome's weights as one long sequence and swap the piece between cut points, which can fall inside a layer. Layer Splicing cuts only between whole layers. Uniform Swap takes each weight from either parent at random. Weight Average takes the midpoint of the two parents.",
+      "conditionalProps": [
+        {
+          "show_if": {"crossover_prob": 0},
+          "description": "Greyed out at Crossover Probability 0: no pair is crossed over, so every offspring is a mutated copy of one parent and the strategy has nothing to do."
+        }
+      ],
       "defaultValue": "two_point",
       "options": [
         {
-          "label": "Two-Point Crossover (Multi-Tier Default)",
+          "label": "Two-Point",
           "value": "two_point"
         },
         {
-          "label": "One-Point Crossover (Multi-Tier)",
+          "label": "One-Point",
           "value": "one_point"
         },
         {
-          "label": "Wholesale Layer Splicing (Depth 1)",
+          "label": "Layer Splicing",
           "value": "layer_crossover"
         },
         {
-          "label": "Uniform Element Swap",
+          "label": "Uniform Swap",
           "value": "uniform_crossover"
         },
         {
-          "label": "Continuous Weight Blend (BLX)",
+          "label": "Weight Average",
           "value": "blend_crossover"
         }
       ],
@@ -58,6 +68,7 @@
       "name": "selection_type",
       "type": "select",
       "label": "Selection Strategy",
+      "description": "How parents are picked for each pairing. Tournament favors parents with higher fitness, which you set with Score, and Tournament Size sets how strongly. Uniform Random ignores fitness and gives every parent the same chance, which keeps the next generation more varied.",
       "defaultValue": "tournament",
       "options": [
         {
@@ -74,8 +85,9 @@
     {
       "name": "tournament_size",
       "type": "integer",
+      "disable_if": {"selection_type": "uniform"},
       "label": "Tournament Size",
-      "description": "Tournament selection only. Each parent is the fittest of this many individuals drawn at random, so larger tournaments favour the top scorers more strongly. Only the order of fitness scores matters, not how far apart they are. Capped at the number of parents.",
+      "description": "Tournament selection only. Each parent is the fittest of this many individuals drawn at random, so larger tournaments favor the top scorers more strongly. Only the order of fitness scores matters, not how far apart they are. Capped at the number of parents.",
       "defaultValue": 3,
       "min": 1,
       "max": 20,
@@ -84,7 +96,9 @@
     {
       "name": "default_fitness",
       "type": "float",
+      "disable_if": {"selection_type": "uniform"},
       "label": "Default / Null Fitness Override",
+      "description": "Fitness assumed for parents you haven't scored. Only Tournament selection uses fitness, and only rank matters: a tournament always picks its highest scorer, so a 100 beats a 2 no more often than a 3 does. This value just sets where unscored parents rank; at 0 they rank below every positive score.",
       "defaultValue": 0.0,
       "step": 0.1,
       "allowSequence": false
@@ -93,6 +107,7 @@
       "name": "crossover_prob",
       "type": "float",
       "label": "Crossover Probability",
+      "description": "Chance that a pair of parents is actually crossed over. Otherwise the offspring is a copy of one parent, changed only by mutation. At 1.0 every offspring mixes two parents; lower values keep more offspring close to a single parent.",
       "defaultValue": 1.0,
       "min": 0.0,
       "max": 1.0,
@@ -113,8 +128,15 @@
     {
       "name": "noise_scale",
       "type": "float",
+      "disable_if": {"mutation_rate": 0},
       "label": "Mutation Strength (σ, in units of each layer's natural scale)",
       "description": "How much each perturbed layer changes. Gaussian noise with standard deviation σ is added in units of the layer's natural weight scale, which is set from the layer's width, so the same σ moves wide and narrow layers comparably. A fresh layer's weights are about 0.6 in these units, so 0.05 is a small step.",
+      "conditionalProps": [
+        {
+          "show_if": {"mutation_rate": 0},
+          "description": "Greyed out at Mutation Rate 0: no layer is perturbed, so the strength has nothing to scale."
+        }
+      ],
       "defaultValue": 0.05,
       "min": 0.0,
       "max": 2.0,
@@ -144,6 +166,7 @@
       "name": "generate_exemplars",
       "type": "boolean",
       "label": "Auto-Generate Exemplars",
+      "description": "When on, each offspring gets an exemplar as soon as it is bred, using the settings of the first parent's exemplar (prompt, random seed and so on), so you can compare offspring like for like. When off, offspring have no exemplar until you make one with Generate Exemplar.",
       "defaultValue": true,
       "allowSequence": false
     }

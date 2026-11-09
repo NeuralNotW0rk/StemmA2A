@@ -1,6 +1,5 @@
 import os
 import tempfile
-import uuid
 import inspect
 import torch
 from abc import ABC, abstractmethod
@@ -9,6 +8,7 @@ from typing import Any
 
 from param_graph.elements.base_elements import GraphElement, Asset
 from param_graph.elements.artifacts.grating_element import Grating as GratingArtifact
+from utils.uid import grating_uid
 from diffracture.topology.grating import Grating as DiffractureGrating
 from diffracture.registry import get_element as get_bending_element_cls
 
@@ -39,6 +39,23 @@ class Engine(ABC):
             raise Exception(f"Adapter '{adapter_name}' not found in adapter_registry.")
         return adapter_class
 
+    @staticmethod
+    def _has_spatial_output(module) -> bool:
+        """
+        True when a layer outputs 2D feature maps (B, C, H, W), which the spatial bending kernels (erode,
+        dilate, scale, rotate, translate) require. Judged from the first weighted submodule (the layer itself,
+        or the convolution inside a wrapper such as StyleGAN's StyledConv): a 2D convolution weight is
+        [out, in, kh, kw], and StyleGAN's modulated convolutions keep a leading batch axis, [1, out, in, kh, kw].
+        """
+        import torch
+        if isinstance(module, (torch.nn.Conv3d, torch.nn.ConvTranspose3d)):
+            return False
+        for submodule in module.modules():
+            weight = getattr(submodule, 'weight', None)
+            if isinstance(weight, torch.Tensor) and weight.ndim >= 2:
+                return weight.ndim == 4 or (weight.ndim == 5 and weight.shape[0] == 1)
+        return False
+
     def _extract_model_layers(self, model) -> list[dict]:
         """Helper to extract model layers locally from a loaded PyTorch model."""
         import torch
@@ -62,7 +79,8 @@ class Engine(ABC):
                     "type": cls_name,
                     "shape": shape,
                     "in_features": in_features,
-                    "out_features": out_features
+                    "out_features": out_features,
+                    "spatial_output": self._has_spatial_output(module)
                 })
         return layers
 
@@ -208,9 +226,9 @@ class Engine(ABC):
         output_dir = self.data_root / "generate"
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Save Grating safetensors file
-        grating_uid = "grating_" + str(uuid.uuid4())[:8]
-        file_name = f"{grating_uid}.safetensors"
+        # Save Grating safetensors file, content-addressed like other generated assets
+        grating_id = grating_uid(grating)
+        file_name = f"{grating_id}.safetensors"
         grating_path = output_dir / file_name
         grating.save(str(grating_path))
 
@@ -221,9 +239,9 @@ class Engine(ABC):
             "metadata": element.metadata
         } for element in grating._nodes]
 
-        asset = Asset(path=str(grating_path.resolve()), uid=grating_uid, extension=".safetensors")
+        asset = Asset(path=str(grating_path.resolve()), uid=grating_id, extension=".safetensors")
         grating_artifact = GratingArtifact(
-            id=grating_uid,
+            id=grating_id,
             name=name,
             context={},
             file=asset,

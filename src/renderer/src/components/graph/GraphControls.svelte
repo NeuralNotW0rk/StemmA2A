@@ -21,17 +21,19 @@
     <button
       class="cancel-selection"
       onclick={() => selectionStore.cancelSelection()}
-      title="Cancel selection"
+      data-tip="Cancel selection"
       aria-label="Cancel selection"
     >
       Cancel
     </button>
   {/if}
-  <button onclick={() => ontidy?.()} title="Tidy layout" aria-label="Tidy layout"> Tidy </button>
+  <button onclick={() => ontidy?.()} data-tip="Tidy layout" aria-label="Tidy layout"> Tidy </button>
 
-  <button onclick={() => onfit?.()} title="Fit to screen" aria-label="Fit to screen"> Fit </button>
+  <button onclick={() => onfit?.()} data-tip="Fit to screen" aria-label="Fit to screen">
+    Fit
+  </button>
 
-  <button onclick={() => oncenter?.()} title="Center view" aria-label="Center view">
+  <button onclick={() => oncenter?.()} data-tip="Center view" aria-label="Center view">
     Center
   </button>
 </div>

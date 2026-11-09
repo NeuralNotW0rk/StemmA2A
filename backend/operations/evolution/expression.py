@@ -2,14 +2,13 @@
 
 from typing import Any, Optional
 import os
-import uuid
 import threading
 
 from param_graph.elements.artifacts.individual_element import Individual
 from param_graph.elements.artifacts.grating_element import Grating
 from param_graph.elements.base_elements import Asset
 from evolution.genome import LoRAGenome, express_to_grating
-from utils.uid import XXH3_64
+from utils.uid import XXH3_64, grating_uid
 
 
 def express_individual_to_grating_artifact(
@@ -45,16 +44,13 @@ def express_individual_to_grating_artifact(
             return {"error": f"Node '{individual_id}' is not a valid individual."}, 400
 
         baseline_grating_id = individual_node.baseline_grating_id
-        baseline_elements = individual_node.context.get("baseline_elements")
-        baseline_file_path = individual_node.context.get("baseline_file_path")
+        reject_legacy_baseline(individual_node)
 
         if baseline_grating_id:
             baseline_grating_node = param_graph.get_element(baseline_grating_id)
             if not isinstance(baseline_grating_node, Grating):
                 return {"error": f"Baseline grating '{baseline_grating_id}' not found."}, 400
             base_path = baseline_grating_node.file.path
-        elif baseline_elements and baseline_file_path:
-            base_path = baseline_file_path
         else:
             # Genomes carry their own topology, so an individual can be expressed without a baseline
             base_path = None
@@ -66,7 +62,23 @@ def express_individual_to_grating_artifact(
         # Express to new Diffracture Grating
         expressed_diff_grating = express_to_grating(genome, base_path)
 
-        grating_id = f"grating_{uid_gen.from_string(str(uuid.uuid4()))}"
+        # Content-addressed, so expressing the same phenotype again reuses its grating instead of duplicating it
+        grating_id = grating_uid(expressed_diff_grating, uid_gen)
+
+        if param_graph.G.has_node(grating_id):
+            existing_grating = param_graph.get_element(grating_id)
+            if not isinstance(existing_grating, Grating):
+                raise TypeError(f"Expressed grating UID '{grating_id}' is already used by a '{existing_grating.type}' node.")
+            # Another individual may share this phenotype, so link this one too
+            param_graph.link(individual_node, existing_grating, relation='expressed_to')
+            param_graph.save()
+            return {
+                "success": True,
+                "message": "Individual was already expressed to this grating",
+                "grating": existing_grating.to_dict(),
+                "existing": True
+            }, 200
+
         output_dir = param_graph.root / "generate"
         os.makedirs(output_dir, exist_ok=True)
         expressed_grating_path = output_dir / f"{grating_id}.safetensors"
@@ -168,7 +180,7 @@ async def express_individuals(
 
 from ..base import Operation
 from ..registry import register
-from .resolution import extract_individual_parent_ids
+from .resolution import extract_individual_parent_ids, reject_legacy_baseline
 
 
 @register

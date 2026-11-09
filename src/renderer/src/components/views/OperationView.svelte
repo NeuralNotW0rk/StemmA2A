@@ -932,7 +932,8 @@
                     type="button"
                     class="sub-action-btn"
                     onclick={() => toggleGratingBatchMode(ov, 'radius')}
-                    title="Toggle sequence mode"
+                    data-tip="Toggle sequence mode"
+                    aria-label="Toggle sequence mode"
                   >
                     {ov.batchFields?.radius ? '−' : '+'}
                   </button>
@@ -955,7 +956,8 @@
                     type="button"
                     class="sub-action-btn"
                     onclick={() => toggleGratingBatchMode(ov, 'scale_factor')}
-                    title="Toggle sequence mode"
+                    data-tip="Toggle sequence mode"
+                    aria-label="Toggle sequence mode"
                   >
                     {ov.batchFields?.scale_factor ? '−' : '+'}
                   </button>
@@ -978,7 +980,8 @@
                     type="button"
                     class="sub-action-btn"
                     onclick={() => toggleGratingBatchMode(ov, 'angle')}
-                    title="Toggle sequence mode"
+                    data-tip="Toggle sequence mode"
+                    aria-label="Toggle sequence mode"
                   >
                     {ov.batchFields?.angle ? '−' : '+'}
                   </button>
@@ -1003,7 +1006,8 @@
                         type="button"
                         class="sub-action-btn"
                         onclick={() => toggleGratingBatchMode(ov, 'offset_x')}
-                        title="Toggle sequence mode"
+                        data-tip="Toggle sequence mode"
+                        aria-label="Toggle sequence mode"
                       >
                         {ov.batchFields?.offset_x ? '−' : '+'}
                       </button>
@@ -1027,7 +1031,8 @@
                         type="button"
                         class="sub-action-btn"
                         onclick={() => toggleGratingBatchMode(ov, 'offset_y')}
-                        title="Toggle sequence mode"
+                        data-tip="Toggle sequence mode"
+                        aria-label="Toggle sequence mode"
                       >
                         {ov.batchFields?.offset_y ? '−' : '+'}
                       </button>
@@ -1052,7 +1057,8 @@
                     type="button"
                     class="sub-action-btn"
                     onclick={() => toggleGratingBatchMode(ov, 'factor')}
-                    title="Toggle sequence mode"
+                    data-tip="Toggle sequence mode"
+                    aria-label="Toggle sequence mode"
                   >
                     {ov.batchFields?.factor ? '−' : '+'}
                   </button>
@@ -1077,7 +1083,8 @@
                         type="button"
                         class="sub-action-btn"
                         onclick={() => toggleGratingBatchMode(ov, 'scale_x')}
-                        title="Toggle sequence mode"
+                        data-tip="Toggle sequence mode"
+                        aria-label="Toggle sequence mode"
                       >
                         {ov.batchFields?.scale_x ? '−' : '+'}
                       </button>
@@ -1101,7 +1108,8 @@
                         type="button"
                         class="sub-action-btn"
                         onclick={() => toggleGratingBatchMode(ov, 'scale_y')}
-                        title="Toggle sequence mode"
+                        data-tip="Toggle sequence mode"
+                        aria-label="Toggle sequence mode"
                       >
                         {ov.batchFields?.scale_y ? '−' : '+'}
                       </button>
@@ -1126,7 +1134,8 @@
                     type="button"
                     class="sub-action-btn"
                     onclick={() => toggleGratingBatchMode(ov, 'threshold')}
-                    title="Toggle sequence mode"
+                    data-tip="Toggle sequence mode"
+                    aria-label="Toggle sequence mode"
                   >
                     {ov.batchFields?.threshold ? '−' : '+'}
                   </button>
@@ -1180,7 +1189,8 @@
                     type="button"
                     class="sub-action-btn"
                     onclick={() => toggleGratingBatchMode(ov, 'indicesText')}
-                    title="Toggle sequence mode"
+                    data-tip="Toggle sequence mode"
+                    aria-label="Toggle sequence mode"
                   >
                     {ov.batchFields?.indicesText ? '−' : '+'}
                   </button>
@@ -1207,7 +1217,8 @@
                     type="button"
                     class="sub-action-btn"
                     onclick={() => toggleGratingBatchMode(ov, 'cluster')}
-                    title="Toggle sequence mode"
+                    data-tip="Toggle sequence mode"
+                    aria-label="Toggle sequence mode"
                   >
                     {ov.batchFields?.cluster ? '−' : '+'}
                   </button>

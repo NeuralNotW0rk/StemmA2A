@@ -94,7 +94,7 @@
   <div class="form-item">
     <label for="project-location">Location</label>
     <div class="location-picker">
-      <span class="path-display" title={parentLocation ?? ''}>
+      <span class="path-display" data-tip={parentLocation ?? ''}>
         {parentLocation || 'No location selected'}
       </span>
       <button

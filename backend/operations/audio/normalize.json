@@ -3,6 +3,7 @@
     "name": "source_audio",
     "type": "node",
     "label": "Source Audio",
+    "description": "The audio to process. The result is saved as a new audio node linked to this one, which is left unchanged. Mono audio comes out as stereo, and everything is resampled to 48 kHz.",
     "filter": {
       "type": "audio"
     },
@@ -12,6 +13,7 @@
     "name": "target_peak",
     "type": "float",
     "label": "Target Peak",
+    "description": "The level the loudest sample is scaled to, as a fraction of full scale: 1.0 is the maximum, 0.5 is about -6 dB and 0.89 about -1 dB. Both channels are scaled together, so their balance is kept. This matches peaks, not perceived loudness, so a clip with sharp transients can still sound quieter. Above 1.0 the peaks clip.",
     "defaultValue": 1.0,
     "required": true
   }
