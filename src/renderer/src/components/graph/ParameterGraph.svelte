@@ -11,6 +11,9 @@
   import graphStyle from './Style'
   import layoutConfig from './Layout'
   import NodePropertyPopper from './NodePropertyPopper.svelte'
+  import { nodeElementTip, edgeElementTip } from './ElementTips'
+  import { radialCommandTip } from './RadialMenuTips'
+  import { externalTip } from '../../utils/tips'
   import { cyInstanceStore, selectionStore } from '../../utils/stores'
   import { engineUnavailableReason, runsOnEngine } from '../../utils/engine-connection'
   import { GROUPING_CONFIG } from '../../utils/app-config'
@@ -345,11 +348,7 @@
     return Array.from(new Map(candidates.map((item) => [item.id, item])).values())
   }
 
-  const MULTI_INITIATOR_OPERATIONS = new Set([
-    'recombine',
-    'generate',
-    'express'
-  ])
+  const MULTI_INITIATOR_OPERATIONS = new Set(['recombine', 'generate', 'express'])
 
   function buildInitiatorData(op: any, ele: cytoscape.NodeSingular): any {
     if (!MULTI_INITIATOR_OPERATIONS.has(op.name)) return ele.data()
@@ -748,6 +747,7 @@
       edgeVisibilityRafId = null
     }
     removeKeydownListener?.()
+    externalTip.set(null) // A tip for an element of this graph would outlive it
     cyInstanceStore.set(null) // Clean up
     if (cy) {
       cy.destroy()
@@ -790,7 +790,18 @@
   function setupContextMenus(): void {
     if (!cy) return
 
-    type Command = { content: string; select: () => void }
+    // tip overrides the RadialMenuTips entry for the command's label; hover is added by withTips
+    type Command = { content: string; select: () => void; tip?: string; hover?: () => void }
+
+    // Every radial command explains itself in the tip view while it is highlighted
+    const withTips = (scope: string, commands: Command[]): Command[] =>
+      commands.map((command) => {
+        const body = command.tip ?? radialCommandTip(scope, command.content)
+        return {
+          ...command,
+          hover: (): void => externalTip.set({ title: command.content, body })
+        }
+      })
 
     // --- Command Definitions (Inheritance-style) ---
 
@@ -812,7 +823,9 @@
           const display = getOpDisplayProps(op, effectiveType)
           return {
             content: toTitleCase(display.name),
-            select: () => onselectOperation?.(op, buildInitiatorData(op, ele))
+            select: () => onselectOperation?.(op, buildInitiatorData(op, ele)),
+            // Pinned operations describe themselves, as they do in the Operations list
+            tip: display.description
           }
         })
     }
@@ -1079,7 +1092,7 @@
 
     cy.cxtmenu({
       selector: 'core',
-      commands: [
+      commands: withTips('core', [
         { content: 'Tidy', select: tidyView },
         { content: 'Fit', select: fitView },
         {
@@ -1099,45 +1112,51 @@
             }
           }
         }
-      ]
+      ])
     })
+
+    const nodeMenuCommands = (ele: cytoscape.NodeSingular): Command[] => {
+      switch (ele.data('type')) {
+        case 'model':
+          return modelNodeCommands(ele)
+        case 'grating':
+          return gratingNodeCommands(ele)
+        case 'audio':
+          return audioNodeCommands(ele)
+        case 'image':
+          return imageNodeCommands(ele)
+        case 'external':
+          return externalNodeCommands(ele)
+        case 'local_path':
+          return pathNodeCommands(ele)
+        case 'directory':
+          return directoryNodeCommands(ele)
+        case 'group':
+          return groupNodeCommands(ele)
+        case 'individual':
+          return individualNodeCommands(ele)
+        case 'latent':
+          return latentNodeCommands(ele)
+        case 'room':
+          return roomNodeCommands(ele)
+        default:
+          return nodeCommands(ele) // Fallback for any other node type
+      }
+    }
 
     cy.cxtmenu({
       selector: 'node',
-      commands: (ele: cytoscape.NodeSingular): Command[] => {
-        switch (ele.data('type')) {
-          case 'model':
-            return modelNodeCommands(ele)
-          case 'grating':
-            return gratingNodeCommands(ele)
-          case 'audio':
-            return audioNodeCommands(ele)
-          case 'image':
-            return imageNodeCommands(ele)
-          case 'external':
-            return externalNodeCommands(ele)
-          case 'local_path':
-            return pathNodeCommands(ele)
-          case 'directory':
-            return directoryNodeCommands(ele)
-          case 'group':
-            return groupNodeCommands(ele)
-          case 'individual':
-            return individualNodeCommands(ele)
-          case 'latent':
-            return latentNodeCommands(ele)
-          case 'room':
-            return roomNodeCommands(ele)
-          default:
-            return nodeCommands(ele) // Fallback for any other node type
-        }
-      }
+      commands: (ele: cytoscape.NodeSingular): Command[] =>
+        withTips(ele.data('type') as string, nodeMenuCommands(ele))
     })
 
     cy.cxtmenu({
       selector: 'edge',
-      commands: elementCommands
+      commands: (ele: cytoscape.EdgeSingular): Command[] => withTips('edge', elementCommands(ele))
     })
+
+    // The menu has no hover-end callback, so its command tip is cleared when it closes
+    cy.on('cxttapend', (): void => externalTip.set(null))
   }
 
   function setupEventListeners(): void {
@@ -1498,6 +1517,25 @@
 
     cy.on('mouseup', handleMouseUp)
 
+    // Graph elements are drawn on the canvas, so they reach the tip view through externalTip
+    cy.on('mouseover', 'node, edge', (evt: EventObject): void => {
+      const ele = evt.target as cytoscape.NodeSingular | cytoscape.EdgeSingular
+      // No tips while any button is held (a drag, or the radial menu, which has its own command tips),
+      // or for the temporary ghost node that follows a Ctrl-drag
+      const oe = evt.originalEvent as MouseEvent | undefined
+      if ((oe && oe.buttons !== 0) || ghostNode || ele.id().startsWith('ghost-node-')) return
+      externalTip.set(
+        ele.isNode()
+          ? nodeElementTip(ele as cytoscape.NodeSingular)
+          : edgeElementTip(ele as cytoscape.EdgeSingular)
+      )
+    })
+    cy.on('mouseout', 'node, edge', (): void => externalTip.set(null))
+    // Dragging moves the element away from the pointer's tip, and a removed element (for example on
+    // a graph reload) never sends its mouseout
+    cy.on('grab', 'node', (): void => externalTip.set(null))
+    cy.on('remove', (): void => externalTip.set(null))
+
     // dragfree fires once per node in a multi-node drag; coalesce into a single save
     let dragSaveTimer: ReturnType<typeof setTimeout> | null = null
     cy.on('dragfree', 'node', () => {
@@ -1553,14 +1591,7 @@
     })
   }
 
-  const ARTIFACT_TYPES = new Set([
-    'audio',
-    'latent',
-    'image',
-    'individual',
-    'bundle',
-    'grating'
-  ])
+  const ARTIFACT_TYPES = new Set(['audio', 'latent', 'image', 'individual', 'bundle', 'grating'])
 
   // Artifacts respect the chronological constraint unless they were imported from disk.
   // Models are deliberately excluded: model modification is represented by gratings.
@@ -1994,11 +2025,7 @@
             {#each filteredOperations as op, index (op.name)}
               {@const display = getOpDisplayProps(op, displayType, outputType)}
               {@const unavailable = runsOnEngine(op) && !!$engineUnavailableReason}
-              <li
-                class="operation-item"
-                class:active={index === selectedIndex}
-                class:unavailable
-              >
+              <li class="operation-item" class:active={index === selectedIndex} class:unavailable>
                 <button
                   type="button"
                   data-tip={unavailable ? ($engineUnavailableReason ?? undefined) : undefined}

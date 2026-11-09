@@ -89,6 +89,7 @@ When an edge points into every member of a group, it is drawn as a single edge i
 
 | Action | Result |
 |---|---|
+| Hover over a node or edge | Explains what it is in the tip view |
 | Click a node | Selects it and opens its details. Audio starts playing; an image opens in the preview card. |
 | Click empty canvas | Clears the selection |
 | Drag on empty canvas | Box-selects |
@@ -108,7 +109,8 @@ A group only accepts a node with the same type, the same prompt and the same inp
 
 ### The radial menu
 
-Right-click a node to see the actions available for its type:
+Right-click a node to see the actions available for its type. While you move toward an item, the tip
+view explains what it will do.
 
 | Node | Actions |
 |---|---|

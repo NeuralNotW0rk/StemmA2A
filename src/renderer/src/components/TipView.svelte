@@ -2,17 +2,46 @@
   // Fixed contextual help panel. Any element with a data-tip attribute shows its
   // text here while hovered or focused, so hints never cover what they describe.
   // An optional data-tip-title on the same element is shown as a heading above it.
-
-  interface Tip {
-    title: string | null
-    body: string
-  }
+  // Elements without DOM nodes, such as those drawn on the graph canvas, set externalTip instead.
+  import { externalTip, type Tip } from '../utils/tips'
 
   // Grace period before clearing, so the tip doesn't flicker across gaps between controls
   const CLEAR_DELAY_MS = 250
 
+  // The DOM tip, from data-tip attributes
   let tip = $state<Tip | null>(null)
   let clearTimer: number | null = null
+
+  // The external tip, cleared after the same grace period so moving between adjacent graph
+  // elements doesn't flicker. It takes precedence, since the canvas itself carries no data-tip.
+  let graphTip = $state<Tip | null>(null)
+  let graphClearTimer: number | null = null
+  let shown = $derived(graphTip ?? tip)
+
+  function cancelGraphClear(): void {
+    if (graphClearTimer !== null) {
+      window.clearTimeout(graphClearTimer)
+      graphClearTimer = null
+    }
+  }
+
+  $effect((): (() => void) => {
+    const unsubscribe = externalTip.subscribe((value): void => {
+      if (value) {
+        cancelGraphClear()
+        graphTip = value
+      } else if (graphClearTimer === null) {
+        graphClearTimer = window.setTimeout((): void => {
+          graphClearTimer = null
+          graphTip = null
+        }, CLEAR_DELAY_MS)
+      }
+    })
+    return (): void => {
+      unsubscribe()
+      cancelGraphClear()
+    }
+  })
 
   function tippedElement(target: EventTarget | null): HTMLElement | SVGElement | null {
     if (!(target instanceof Element)) return null
@@ -44,6 +73,9 @@
     if (tipped) {
       cancelClear()
       tip = tipFrom(tipped)
+      // A control with its own tip takes over from a lingering graph tip straight away
+      cancelGraphClear()
+      graphTip = null
     } else {
       scheduleClear()
     }
@@ -78,13 +110,13 @@
 </script>
 
 <div class="tip-view" role="status" aria-live="polite">
-  {#if tip}
-    {#if tip.title}
-      <span class="tip-title">{tip.title}</span>
+  {#if shown}
+    {#if shown.title}
+      <span class="tip-title">{shown.title}</span>
     {/if}
-    <span class="tip-body">{tip.body}</span>
+    <span class="tip-body">{shown.body}</span>
   {:else}
-    <span class="tip-placeholder">Hover over a control to see what it does</span>
+    <span class="tip-placeholder">Hover over a control or graph element to see what it does</span>
   {/if}
 </div>
 
