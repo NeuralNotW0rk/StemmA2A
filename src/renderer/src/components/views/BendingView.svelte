@@ -17,16 +17,59 @@
     label: string
     // Spatial kernels raise an error on anything but 2D feature maps
     spatial: boolean
+    // Shown in the tip view while the option is hovered, and while it is selected
+    description: string
   }
 
+  const SPATIAL_NOTE = ' Needs a layer with 2D spatial output.'
   const KERNELS: KernelOption[] = [
-    { value: 'erode', label: 'Erode (Morphological Erosion)', spatial: true },
-    { value: 'dilate', label: 'Dilate (Morphological Dilation)', spatial: true },
-    { value: 'scale', label: 'Scale (2D Spatial Zoom)', spatial: true },
-    { value: 'rotate', label: 'Rotate (2D Spatial Rotation)', spatial: true },
-    { value: 'translate', label: 'Translate (2D Spatial Translation)', spatial: true },
-    { value: 'scalar-multiply', label: 'Scalar Multiply (Gain/Ablation)', spatial: false },
-    { value: 'ablate', label: 'Ablate (Zero Ablation)', spatial: false }
+    {
+      value: 'erode',
+      label: 'Erode (Morphological Erosion)',
+      spatial: true,
+      description:
+        'Shrinks the strong regions of each feature map, thinning out whatever features they draw.' +
+        SPATIAL_NOTE
+    },
+    {
+      value: 'dilate',
+      label: 'Dilate (Morphological Dilation)',
+      spatial: true,
+      description:
+        'Grows the strong regions of each feature map, thickening whatever features they draw.' +
+        SPATIAL_NOTE
+    },
+    {
+      value: 'scale',
+      label: 'Scale (2D Spatial Zoom)',
+      spatial: true,
+      description: 'Zooms each feature map in or out around its center.' + SPATIAL_NOTE
+    },
+    {
+      value: 'rotate',
+      label: 'Rotate (2D Spatial Rotation)',
+      spatial: true,
+      description: 'Rotates each feature map around its center.' + SPATIAL_NOTE
+    },
+    {
+      value: 'translate',
+      label: 'Translate (2D Spatial Translation)',
+      spatial: true,
+      description: 'Shifts each feature map horizontally and vertically.' + SPATIAL_NOTE
+    },
+    {
+      value: 'scalar-multiply',
+      label: 'Scalar Multiply (Gain/Ablation)',
+      spatial: false,
+      description:
+        'Multiplies the chosen channels by a factor: above 1 boosts them, between 0 and 1 weakens them and 0 silences them. Works on any layer.'
+    },
+    {
+      value: 'ablate',
+      label: 'Ablate (Zero Ablation)',
+      spatial: false,
+      description: 'Sets the chosen channels to zero, removing their contribution. Works on any layer.'
+    }
   ]
 
   let { modelElement, onclose, onrefresh, onError }: {
@@ -56,6 +99,13 @@
 
   let selectedLayer = $derived(layers.find((l): boolean => l.address === selectedAddress))
   let selectedKernel = $derived(KERNELS.find((k): boolean => k.value === kernelType))
+  // The field's own tip, then the selected kernel's on its own line, as in DynamicForm selects
+  let kernelTip = $derived(
+    selectedKernel
+      ? `${TIPS.kernel}
+${selectedKernel.label.split(' (')[0]}: ${selectedKernel.description}`
+      : TIPS.kernel
+  )
   // The selection is kept, not switched, so the user sees why Create is disabled
   let kernelUnsupported = $derived(
     !!selectedLayer && !!selectedKernel?.spatial && !selectedLayer.spatial_output
@@ -130,7 +180,7 @@
     layer:
       'The layer whose output the kernel changes. In image models, earlier layers tend to shape broad structure and later layers finer detail. Erode, Dilate, Scale, Rotate and Translate need a layer with 2D spatial output, such as a convolution in an image model.',
     kernel:
-      "How the layer's output is changed. Erode and Dilate shrink or grow the strong regions of each feature map; Scale, Rotate and Translate move them. Scalar Multiply scales channels up or down, and Ablate silences them. Kernels the layer can't take are disabled. Amounts are set in Generate.",
+      "How the layer's output is changed. Kernels the selected layer can't take are disabled. Amounts are set in Generate.",
     clustering:
       "Groups the layer's channels by how they respond, so the grating can bend one group instead of the whole layer. It runs a few test generations, learns a profile of each channel and sorts the channels with k-means, which makes creating the grating slower. Pick a cluster in Generate.",
     clusters:
@@ -225,13 +275,15 @@
       {/if}
     </label>
 
-    <label data-tip={TIPS.kernel} data-tip-title="Bending Kernel">
+    <label data-tip={kernelTip} data-tip-title="Bending Kernel">
       Bending Kernel
       <select bind:value={kernelType}>
         {#each KERNELS as kernel (kernel.value)}
           <option
             value={kernel.value}
             disabled={kernel.spatial && !!selectedLayer && !selectedLayer.spatial_output}
+            data-tip={kernel.description}
+            data-tip-title={kernel.label.split(' (')[0]}
           >
             {kernel.label}
           </option>

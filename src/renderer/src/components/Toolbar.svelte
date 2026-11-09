@@ -85,6 +85,46 @@
     onprojectLoad?.({ project_path: path })
   }
 
+  // Shown in the tip view while each control is hovered or focused
+  const TIPS = {
+    file: 'Start a new project, open one, or reopen a recent one. A project is a folder holding its graph and every file generated in it.',
+    newProject:
+      'Creates an empty project folder and opens it. Models, sources and everything you generate are added to it as you work.',
+    openProject: 'Opens an existing project folder, picking up its graph where you left it.',
+    removeRecent:
+      'Removes this project from the Recent Projects list. The project folder itself is not touched.',
+    breadcrumb:
+      "The open project, followed by the room you're in, if any. Click an earlier name to go back up to it.",
+    forkedBreadcrumb:
+      'This project is a fork: a selection copied out of another project, with everything it depends on. The button to the left returns to that original project.',
+    refresh:
+      'Reloads the graph from the backend. The graph already updates itself when jobs finish, so this is only needed if the view looks out of date, for example after files changed outside the app.',
+    importModel:
+      "Adds a generative model to the project so you can generate with it: a Stable Audio or StyleGAN2 checkpoint on disk, or a model the engine has shared. Files aren't copied; the model is identified by a hash of its contents, so large checkpoints take a while.",
+    addSource:
+      'Links a folder of your own audio or images into the project as a folder node. Right-click it and choose Expand to load its files, which you can then use as initial audio, invert, or wrap as an individual. The files stay where they are; nothing is copied.',
+    utilities: 'Maintenance tasks for the project, and options for what the graph shows.',
+    updateEmbeddings:
+      'Recomputes the similarity embeddings that place related sounds and images near each other, and the spring edges between them. New items are embedded automatically, so this is mainly for refreshing a whole project. Runs as a job.',
+    updateLabels:
+      'Re-derives the automatic labels of groups and their members from what they contain.',
+    repairEdges:
+      'Rebuilds the structural edges, such as generated from and parent of, from what each node recorded about how it was made. Use it if edges look missing or wrong, for example after an interrupted job.',
+    cleanup:
+      'Finds files in the project folder that no element uses any more, and moves the ones you choose to the project trash, where they can be restored or deleted for good. Unavailable while jobs are running.',
+    evolutionaryEdges:
+      'Hides or shows the lineage edges between individuals. While hidden, they still appear for the node you select, so a large lineage stays readable.',
+    allEdges:
+      'Hides or shows every edge except the spring (similarity) edges. While hidden, edges still appear for the node you select.',
+    springEdges:
+      'Shows or hides the similarity edges, the springs that pull related items together in the layout.',
+    detailedLabels:
+      "Shows each node's alias or prompt along with its name. Hold Alt to peek at detailed labels without turning them on.",
+    edgeLabels: 'Labels each edge with what it means, such as generated, binds to or parent of.',
+    chronological:
+      'Lays generated items out from left to right in the order they were made, so a session reads like a timeline.'
+  } as const
+
   async function handleAddExternalSource(): Promise<void> {
     try {
       const sourcePath = await window.api.selectDirectory()
@@ -169,6 +209,8 @@
         class="project-button"
         onclick={() => (showFileMenu = !showFileMenu)}
         aria-label="Open file menu"
+        data-tip={TIPS.file}
+        data-tip-title="File"
       >
         File
         <svg
@@ -191,10 +233,19 @@
               $isCreatingNewProject = true
               showFileMenu = false
             }}
+            data-tip={TIPS.newProject}
+            data-tip-title="New Project"
           >
             New Project...
           </button>
-          <button class="dropdown-item" onclick={openProject}> Open Project... </button>
+          <button
+            class="dropdown-item"
+            onclick={openProject}
+            data-tip={TIPS.openProject}
+            data-tip-title="Open Project"
+          >
+            Open Project...
+          </button>
           <div class="dropdown-divider"></div>
           <div class="dropdown-header">Recent Projects</div>
           {#each recentProjects as project (project)}
@@ -205,7 +256,8 @@
               </button>
               <button
                 class="remove-recent"
-                data-tip="Remove from recent"
+                data-tip={TIPS.removeRecent}
+                data-tip-title="Remove from Recent"
                 aria-label="Remove from recent"
                 onclick={(e) => handleRemoveRecent(project, e)}
               >
@@ -224,6 +276,7 @@
         class="toolbar-button"
         onclick={() => onreturnToOrigin?.()}
         data-tip={`Return to ${projectOrigin.project_name}, the project this was forked from`}
+        data-tip-title="Return to Origin"
         aria-label={`Return to ${projectOrigin.project_name}`}
       >
         <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
@@ -232,7 +285,11 @@
         {projectOrigin.project_name}
       </button>
     {/if}
-    <div class="current-project" data-tip={projectOrigin ? 'Forked project' : undefined}>
+    <div
+      class="current-project"
+      data-tip={projectOrigin ? TIPS.forkedBreadcrumb : TIPS.breadcrumb}
+      data-tip-title={projectOrigin ? 'Forked Project' : 'Project'}
+    >
       {#if roomCrumbs.length > 0}
         <button class="crumb" onclick={() => onnavigateRoom?.(null)}>
           {currentProject ? currentProject.split(/[\\/]/).pop() : 'Main'}
@@ -252,7 +309,8 @@
     <button
       class="toolbar-button"
       onclick={() => onrefresh?.()}
-      data-tip="Refresh graph data"
+      data-tip={TIPS.refresh}
+      data-tip-title="Refresh"
       aria-label="Refresh graph data"
     >
       <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
@@ -270,7 +328,8 @@
     <button
       class="toolbar-button"
       onclick={() => onimportModel?.()}
-      data-tip="Import model"
+      data-tip={TIPS.importModel}
+      data-tip-title="Import Model"
       aria-label="Import model"
     >
       <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
@@ -282,7 +341,8 @@
     <button
       class="toolbar-button"
       onclick={handleAddExternalSource}
-      data-tip="Add external audio source"
+      data-tip={TIPS.addSource}
+      data-tip-title="Add Source"
       aria-label="Add external audio source"
     >
       <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
@@ -298,6 +358,8 @@
         class="toolbar-button"
         onclick={() => (showUtilitiesMenu = !showUtilitiesMenu)}
         aria-label="Open utilities menu"
+        data-tip={TIPS.utilities}
+        data-tip-title="Utilities"
       >
         <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
           <path
@@ -325,6 +387,8 @@
               onupdateEmbeddings?.()
               showUtilitiesMenu = false
             }}
+            data-tip={TIPS.updateEmbeddings}
+            data-tip-title="Update Embeddings"
           >
             Update Embeddings
           </button>
@@ -334,6 +398,8 @@
               onupdateLabels?.()
               showUtilitiesMenu = false
             }}
+            data-tip={TIPS.updateLabels}
+            data-tip-title="Update Labels"
           >
             Update Labels
           </button>
@@ -343,6 +409,8 @@
               onrepairEdges?.()
               showUtilitiesMenu = false
             }}
+            data-tip={TIPS.repairEdges}
+            data-tip-title="Repair Edges"
           >
             Repair Edges
           </button>
@@ -352,28 +420,60 @@
               oncleanup?.()
               showUtilitiesMenu = false
             }}
+            data-tip={TIPS.cleanup}
+            data-tip-title="Clean Up Project Files"
           >
             Clean Up Project Files...
           </button>
           <div class="dropdown-divider"></div>
-          <button class="dropdown-item" onclick={toggleEvolutionaryEdges}>
+          <button
+            class="dropdown-item"
+            onclick={toggleEvolutionaryEdges}
+            data-tip={TIPS.evolutionaryEdges}
+            data-tip-title="Evolutionary Edges"
+          >
             {hideEvolutionaryEdges
               ? 'Show Evolutionary Edges'
               : 'Hide Evolutionary Edges (Show on Select)'}
           </button>
-          <button class="dropdown-item" onclick={toggleAllEdges}>
+          <button
+            class="dropdown-item"
+            onclick={toggleAllEdges}
+            data-tip={TIPS.allEdges}
+            data-tip-title="All Edges"
+          >
             {hideAllEdges ? 'Show All Edges' : 'Hide All Edges (Show on Select)'}
           </button>
-          <button class="dropdown-item" onclick={toggleSprings}>
+          <button
+            class="dropdown-item"
+            onclick={toggleSprings}
+            data-tip={TIPS.springEdges}
+            data-tip-title="Spring Edges"
+          >
             {showSpringEdges ? 'Hide Spring Edges' : 'Show Spring Edges'}
           </button>
-          <button class="dropdown-item" onclick={toggleDetailedLabels}>
+          <button
+            class="dropdown-item"
+            onclick={toggleDetailedLabels}
+            data-tip={TIPS.detailedLabels}
+            data-tip-title="Detailed Labels"
+          >
             {showDetailedLabels ? 'Hide Detailed Labels' : 'Show Detailed Labels'}
           </button>
-          <button class="dropdown-item" onclick={toggleEdgeLabels}>
+          <button
+            class="dropdown-item"
+            onclick={toggleEdgeLabels}
+            data-tip={TIPS.edgeLabels}
+            data-tip-title="Edge Labels"
+          >
             {showEdgeLabels ? 'Hide Edge Labels' : 'Show Edge Labels'}
           </button>
-          <button class="dropdown-item" onclick={toggleChronological}>
+          <button
+            class="dropdown-item"
+            onclick={toggleChronological}
+            data-tip={TIPS.chronological}
+            data-tip-title="Chronological Layout"
+          >
             {chronologicalConstraint
               ? 'Disable Chronological Layout'
               : 'Enable Chronological Layout'}

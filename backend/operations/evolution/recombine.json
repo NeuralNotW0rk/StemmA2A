@@ -32,7 +32,7 @@
       "type": "select",
       "disable_if": {"crossover_prob": 0},
       "label": "Recombination Strategy",
-      "description": "How each pair of parents is mixed. Two-Point and One-Point treat a genome's weights as one long sequence and swap the piece between cut points, which can fall inside a layer. Layer Splicing cuts only between whole layers. Uniform Swap takes each weight from either parent at random. Weight Average takes the midpoint of the two parents.",
+      "description": "How each pair of parents is mixed into an offspring.",
       "conditionalProps": [
         {
           "show_if": {"crossover_prob": 0},
@@ -43,23 +43,28 @@
       "options": [
         {
           "label": "Two-Point",
-          "value": "two_point"
+          "value": "two_point",
+          "description": "Treats a genome's weights as one long sequence, cuts both parents at two points and swaps the middle piece. A cut can fall inside a layer."
         },
         {
           "label": "One-Point",
-          "value": "one_point"
+          "value": "one_point",
+          "description": "Treats a genome's weights as one long sequence, cuts both parents at one point and joins the start of one to the end of the other. The cut can fall inside a layer."
         },
         {
           "label": "Layer Splicing",
-          "value": "layer_crossover"
+          "value": "layer_crossover",
+          "description": "Inherits each layer whole, from one parent or the other, with a single cut between layers, so no layer is split."
         },
         {
           "label": "Uniform Swap",
-          "value": "uniform_crossover"
+          "value": "uniform_crossover",
+          "description": "Takes each weight from either parent at random, so the parents are mixed finely within every layer."
         },
         {
           "label": "Weight Average",
-          "value": "blend_crossover"
+          "value": "blend_crossover",
+          "description": "Takes the midpoint of the two parents, layer by layer. Each layer's two LoRA factors are averaged separately, so the result is not exactly the average of the parents' changes."
         }
       ],
       "allowSequence": false
@@ -68,16 +73,18 @@
       "name": "selection_type",
       "type": "select",
       "label": "Selection Strategy",
-      "description": "How parents are picked for each pairing. Tournament favors parents with higher fitness, which you set with Score, and Tournament Size sets how strongly. Uniform Random ignores fitness and gives every parent the same chance, which keeps the next generation more varied.",
+      "description": "How parents are picked for each pairing.",
       "defaultValue": "tournament",
       "options": [
         {
           "label": "Tournament (Fitness-Biased)",
-          "value": "tournament"
+          "value": "tournament",
+          "description": "Each parent is the fittest of a few individuals drawn at random (Tournament Size), so higher-scored parents breed more often. Only the order of the scores matters, not the gaps between them."
         },
         {
           "label": "Uniform Random",
-          "value": "uniform"
+          "value": "uniform",
+          "description": "Every parent has the same chance, whatever its score, which keeps the next generation more varied. Tournament Size and Default Fitness are greyed out."
         }
       ],
       "allowSequence": false

@@ -26,9 +26,15 @@ The app has no native menu bar. Every command is in the in-app toolbar or on the
 - **← Origin**: only shown in a forked project. It returns to the project the fork came from.
 - **Breadcrumb**: shows the project name and, when you are inside a room, the path
   `Project › Room › Subroom`. Click any earlier crumb to go back up to it.
-- **Refresh**: reloads the graph from the backend.
-- **+ Import Model**: opens the [Import Model](workflows.md#import-a-model) panel.
-- **Add Source**: adds an external folder of audio or images to the graph.
+- **Engine ▾**: where models run, on this machine (**Local**) or on an engine service such as a GPU
+  server (**Remote**). Projects always stay on this machine.
+- **Refresh**: reloads the graph from the backend. The graph already updates when jobs finish, so this
+  is only needed if the view looks out of date.
+- **+ Import Model**: opens the [Import Model](workflows.md#import-a-model) panel, which adds a Stable
+  Audio or StyleGAN2 model to the project. The checkpoint isn't copied; the model is identified by a
+  hash of its contents.
+- **Add Source**: links a folder of your own audio or images into the graph as a folder node. Nothing
+  is copied. See [Bring in your own audio or images](workflows.md#bring-in-your-own-audio-or-images).
 - **Utilities ▾**:
 
   | Item | Effect |
@@ -142,8 +148,8 @@ all of them:
 
 - **Tip view**: hover over a field, or move focus to it with the keyboard, to see what it does in the
   tip view at the bottom left. While you change a number, its current value is shown next to the
-  field's name. Some explanations change with the form, for example to describe the sampler you've
-  picked.
+  field's name. In a dropdown, the tip explains the field and then the option currently selected,
+  and with the list open, hovering an option explains that option before you pick it.
 - **Hidden and greyed-out fields**: a field disappears when a node you've attached makes it
   irrelevant, such as Steps once an initial latent is attached. It's greyed out instead when another
   setting makes it irrelevant, so you can still see it.

@@ -1,1 +1,58 @@
 @import './base.css';
+
+/* Customizable selects: the open list is drawn in the page rather than as a native popup, so each
+   option can carry its own tip (data-tip) for the tip view. Components still style the closed trigger. */
+select,
+::picker(select) {
+  appearance: base-select;
+}
+
+select {
+  display: flex;
+  align-items: center;
+  font: inherit;
+  cursor: pointer;
+}
+
+select:disabled {
+  cursor: not-allowed;
+}
+
+select::picker-icon {
+  color: var(--color-text-overlay-secondary);
+}
+
+::picker(select) {
+  margin-top: 0.25rem;
+  padding: 0.25rem;
+  background: var(--color-background-glass-4);
+  border: 1px solid var(--color-overlay-border-primary);
+  border-radius: 0.375rem;
+  color: var(--color-overlay-text);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+
+option {
+  padding: 0.375rem 0.5rem;
+  border-radius: 0.25rem;
+  cursor: pointer;
+}
+
+option:hover,
+option:focus-visible {
+  background: var(--color-background-glass-hover-1);
+  outline: none;
+}
+
+option:checked {
+  font-weight: 600;
+}
+
+option::checkmark {
+  color: var(--color-primary);
+}
+
+option:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}

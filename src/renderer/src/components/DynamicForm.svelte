@@ -190,6 +190,15 @@
     }
   }
 
+  // A select's tip adds the selected option's description on its own line below the field's own
+  function fieldTip(field: FormField): string | undefined {
+    if (field.type !== 'select') return field.description
+    const selected = field.options?.find((option) => option.value === formData[field.name])
+    if (!selected?.description) return field.description
+    const optionLine = `${selected.label}: ${selected.description}`
+    return field.description ? `${field.description}\n${optionLine}` : optionLine
+  }
+
   async function selectFieldDirectory(fieldName: string): Promise<void> {
     const path = await window.api.selectDirectory()
     if (path) {
@@ -270,7 +279,7 @@
     <fieldset
       class="form-field"
       disabled={field.disabled}
-      data-tip={field.description}
+      data-tip={fieldTip(field)}
       data-tip-title={field.label}
     >
       {#if field.type === 'textarea'}
@@ -455,7 +464,9 @@
           {:else}
             <select bind:value={formData[field.name]} id={field.name}>
               {#each field.options as option (option.value)}
-                <option value={option.value}>{option.label}</option>
+                <option value={option.value} data-tip={option.description} data-tip-title={option.label}
+                  >{option.label}</option
+                >
               {/each}
             </select>
           {/if}
@@ -684,11 +695,6 @@
     padding: 0.5rem;
     border-radius: 0.375rem;
     box-sizing: border-box;
-  }
-
-  select option {
-    background: var(--color-background-mute);
-    color: var(--color-overlay-text);
   }
 
   .path-input {

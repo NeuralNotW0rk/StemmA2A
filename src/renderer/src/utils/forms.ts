@@ -3,6 +3,9 @@ import type { NodeFilter } from './types'
 export interface FormFieldOption {
   label: string;
   value: any;
+  // Shown in the tip view while the option is hovered in the open list, and after the field's own
+  // description while the option is selected
+  description?: string;
 }
 
 export interface FormField {

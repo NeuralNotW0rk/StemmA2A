@@ -101,46 +101,16 @@
             "name": "k_sampler_type",
             "label": "K-Sampler",
             "description": "The K-diffusion sampler: the method that steps from noise to audio along the noise schedule.",
-            "conditionalProps": [
-                {
-                    "show_if": {"k_sampler_type": "dpmpp-3m-sde"},
-                    "description": "DPM++ 3M SDE: a third-order sampler that injects fresh noise at every step. It can give richer detail at higher step counts (50 and up), but needs more steps than DPM++ 2M and varies more between runs with different step counts."
-                },
-                {
-                    "show_if": {"k_sampler_type": "dpmpp-2m"},
-                    "description": "DPM++ 2M: a second-order multistep sampler and a reliable default. It is deterministic, so the same seed and settings always give the same audio, and it converges well in 25 to 50 steps."
-                },
-                {
-                    "show_if": {"k_sampler_type": "k-heun"},
-                    "description": "k-Heun: a second-order sampler that runs the model twice per step, so it takes about twice as long for the same Steps. Accurate, but rarely better than DPM++ 2M for the same time."
-                },
-                {
-                    "show_if": {"k_sampler_type": "k-lms"},
-                    "description": "k-LMS: a linear multistep sampler that reuses earlier steps' results. Fast and deterministic, but less stable than DPM++ 2M at low step counts."
-                },
-                {
-                    "show_if": {"k_sampler_type": "k-dpm-2"},
-                    "description": "k-DPM2: a second-order sampler that runs the model twice per step, so each step costs about twice as much as with DPM++ 2M."
-                },
-                {
-                    "show_if": {"k_sampler_type": "k-dpm-fast"},
-                    "description": "k-DPM Fast: DPM-Solver with its own fixed schedule. It uses Steps, but not the shared noise schedule the other samplers follow, so it can't be used with an inverted latent."
-                },
-                {
-                    "show_if": {"k_sampler_type": "k-dpm-adaptive"},
-                    "description": "k-DPM Adaptive: picks its own step sizes to keep the error within a tolerance, so Steps is ignored and run time varies. It can't be used with an inverted latent."
-                }
-            ],
             "type": "select",
             "defaultValue": "dpmpp-2m",
             "options": [
-                { "label": "DPM++ 3M SDE", "value": "dpmpp-3m-sde" },
-                { "label": "DPM++ 2M", "value": "dpmpp-2m" },
-                { "label": "k-Heun", "value": "k-heun" },
-                { "label": "k-LMS", "value": "k-lms" },
-                { "label": "k-DPM2", "value": "k-dpm-2" },
-                { "label": "k-DPM Fast", "value": "k-dpm-fast" },
-                { "label": "k-DPM Adaptive", "value": "k-dpm-adaptive" }
+                { "label": "DPM++ 3M SDE", "value": "dpmpp-3m-sde", "description": "A third-order sampler that injects fresh noise at every step. It can give richer detail at higher step counts (50 and up), but needs more steps than DPM++ 2M and varies more between runs with different step counts." },
+                { "label": "DPM++ 2M", "value": "dpmpp-2m", "description": "A second-order multistep sampler and a reliable default. It is deterministic, so the same seed and settings always give the same audio, and it converges well in 25 to 50 steps." },
+                { "label": "k-Heun", "value": "k-heun", "description": "A second-order sampler that runs the model twice per step, so it takes about twice as long for the same Steps. Accurate, but rarely better than DPM++ 2M for the same time." },
+                { "label": "k-LMS", "value": "k-lms", "description": "A linear multistep sampler that reuses earlier steps' results. Fast and deterministic, but less stable than DPM++ 2M at low step counts." },
+                { "label": "k-DPM2", "value": "k-dpm-2", "description": "A second-order sampler that runs the model twice per step, so each step costs about twice as much as with DPM++ 2M." },
+                { "label": "k-DPM Fast", "value": "k-dpm-fast", "description": "DPM-Solver with its own fixed schedule. It uses Steps, but not the shared noise schedule the other samplers follow, so it can't be used with an inverted latent." },
+                { "label": "k-DPM Adaptive", "value": "k-dpm-adaptive", "description": "Picks its own step sizes to keep the error within a tolerance, so Steps is ignored and run time varies. It can't be used with an inverted latent." }
             ],
             "show_if": {"sampler_category": "k_diffusion"}
         },
@@ -148,31 +118,13 @@
             "name": "rf_sampler_type",
             "label": "RF-Sampler",
             "description": "The rectified-flow sampler: the method that steps from noise to audio along the flow.",
-            "conditionalProps": [
-                {
-                    "show_if": {"rf_sampler_type": "euler"},
-                    "description": "Euler: the simplest flow sampler, one model evaluation per step. Fast and predictable, but needs more steps than the higher-order samplers for the same quality."
-                },
-                {
-                    "show_if": {"rf_sampler_type": "rk4"},
-                    "description": "RK4: fourth-order Runge-Kutta, with four model evaluations per step, so about four times slower than Euler for the same Steps. Very accurate, which helps most at low step counts."
-                },
-                {
-                    "show_if": {"rf_sampler_type": "dpmpp"},
-                    "description": "DPM++: a multistep solver adapted to flow models. It reuses earlier steps to reach second-order accuracy at Euler's cost per step, which makes it strong at low step counts."
-                },
-                {
-                    "show_if": {"rf_sampler_type": "pingpong"},
-                    "description": "Ping-pong: made for distilled models. Each step predicts the finished audio, then re-noises it to the next level, which suits models trained to finish in about 8 steps. On other models it tends to lose detail."
-                }
-            ],
             "type": "select",
             "defaultValue": "euler",
             "options": [
-                { "label": "Euler", "value": "euler" },
-                { "label": "RK4", "value": "rk4" },
-                { "label": "DPM++", "value": "dpmpp" },
-                { "label": "Ping-pong", "value": "pingpong" }
+                { "label": "Euler", "value": "euler", "description": "The simplest flow sampler, one model evaluation per step. Fast and predictable, but needs more steps than the higher-order samplers for the same quality." },
+                { "label": "RK4", "value": "rk4", "description": "Fourth-order Runge-Kutta, with four model evaluations per step, so about four times slower than Euler for the same Steps. Very accurate, which helps most at low step counts." },
+                { "label": "DPM++", "value": "dpmpp", "description": "A multistep solver adapted to flow models. It reuses earlier steps to reach second-order accuracy at Euler's cost per step, which makes it strong at low step counts." },
+                { "label": "Ping-pong", "value": "pingpong", "description": "Made for distilled models. Each step predicts the finished audio, then re-noises it to the next level, which suits models trained to finish in about 8 steps. On other models it tends to lose detail." }
             ],
             "show_if": {"sampler_category": "rectified_flow"}
         },

@@ -121,6 +121,8 @@
   }
 
   .tip-body {
+    /* Line breaks separate a select's own tip from its selected option's */
+    white-space: pre-line;
     display: -webkit-box;
     -webkit-line-clamp: 8;
     line-clamp: 8;

@@ -120,6 +120,13 @@
     switchTo({ mode: 'remote', remote_url: remoteUrl.trim() })
   }
 
+  // Shown in the tip view; while remote, the connection status comes first
+  const ENGINE_TIP =
+    'Where models run: on this machine (Local), or on an engine service elsewhere, such as a GPU server (Remote). Projects always stay on this machine; a remote engine is sent the files it needs.'
+  let engineTip = $derived(
+    engine?.mode === 'remote' ? `${connectionText}\n${ENGINE_TIP}` : ENGINE_TIP
+  )
+
   // Choosing an option switches straight away
   const options: { mode: EngineMode; name: string; hint: string; choose: () => void }[] = [
     { mode: 'local', name: 'Local', hint: 'Runs models on this machine', choose: chooseLocal },
@@ -147,7 +154,8 @@
   <button
     class="toolbar-button"
     onclick={openMenu}
-    data-tip={engine?.mode === 'remote' ? connectionText : 'Choose engine'}
+    data-tip={engineTip}
+    data-tip-title={label}
     aria-label="Open engine menu"
   >
     {#if engine?.mode === 'remote'}
