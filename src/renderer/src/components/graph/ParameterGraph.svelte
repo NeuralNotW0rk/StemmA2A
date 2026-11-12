@@ -1,7 +1,7 @@
 <!-- src/renderer/src/components/ParameterGraph.svelte -->
 <script lang="ts">
   /* eslint-disable @typescript-eslint/no-explicit-any */
-  import { onMount, onDestroy } from 'svelte'
+  import { onMount, onDestroy, untrack } from 'svelte'
   import { SvelteSet } from 'svelte/reactivity'
   import cytoscape, { type EventObject } from 'cytoscape'
   import fcose from 'cytoscape-fcose'
@@ -48,6 +48,8 @@
     onsavePositions?: (positions: Record<string, { x: number; y: number }>) => void | Promise<void>
     onexpandPath?: (id: string) => void
     ontoggleFavorite?: (data: any, isFavorite: boolean) => void
+    // Called after the backend saved new attributes for an element, so graphData can carry them
+    onelementUpdated?: (id: string, attrs: Record<string, unknown>) => void
     onchangeGroupMembership?: (
       nodeId: string,
       oldGroupId: string | null,
@@ -85,6 +87,7 @@
     onsavePositions,
     onexpandPath,
     ontoggleFavorite,
+    onelementUpdated,
     onchangeGroupMembership,
     onselectOperation,
     onrefresh
@@ -117,7 +120,6 @@
 
   // --- Inline Node Property Popper State ---
   interface NodePropertyPopperConfig {
-    targetNode: cytoscape.NodeSingular
     title: string
     inputType?: 'number' | 'text'
     initialValue?: string | number | null
@@ -129,6 +131,8 @@
     onsubmit: (value: string | number | null) => Promise<void> | void
   }
   let activePropertyPopper = $state<NodePropertyPopperConfig | null>(null)
+  // Kept apart from the config so that re-anchoring after a rebuild does not reset the popper's input
+  let popperTarget = $state<cytoscape.NodeSingular | null>(null)
 
   const displayType = $derived(
     targetNode
@@ -419,10 +423,28 @@
     return undefined
   })
 
+  // updateGraph replaces every node, and a running job can trigger it while a popper is open, so the
+  // element is addressed by ID, and graphData is updated so that later rebuilds keep the new values
+  async function saveNodeAttributes(nodeId: string, attrs: Record<string, unknown>): Promise<void> {
+    await window.api.updateElement(nodeId, attrs)
+    onelementUpdated?.(nodeId, attrs)
+    const live = cy?.getElementById(nodeId)
+    if (live && live.nonempty()) {
+      live.data(attrs)
+      onnodeSelect?.(live.data())
+    }
+  }
+
+  function closePropertyPopper(): void {
+    activePropertyPopper = null
+    popperTarget = null
+  }
+
   function openScorePopper(node: cytoscape.NodeSingular): void {
+    const nodeId = node.id()
     const currentFitness = node.data('fitness')
+    popperTarget = node
     activePropertyPopper = {
-      targetNode: node,
       title: 'Fitness Score',
       inputType: 'number',
       initialValue: currentFitness !== undefined && currentFitness !== null ? currentFitness : null,
@@ -431,17 +453,16 @@
       allowClear: true,
       onsubmit: async (val: string | number | null): Promise<void> => {
         const numVal = val !== null && val !== '' ? Number(val) : null
-        node.data('fitness', numVal)
-        await window.api.updateElement(node.id(), { fitness: numVal })
-        onnodeSelect?.(node.data())
+        await saveNodeAttributes(nodeId, { fitness: numVal })
       }
     }
   }
 
   function openRenamePopper(node: cytoscape.NodeSingular): void {
-    const currentName = (node.data('name') || node.data('alias') || node.id()) as string
+    const nodeId = node.id()
+    const currentName = (node.data('name') || node.data('alias') || nodeId) as string
+    popperTarget = node
     activePropertyPopper = {
-      targetNode: node,
       title: 'Rename Node',
       inputType: 'text',
       initialValue: currentName,
@@ -453,9 +474,7 @@
         if (!newName) {
           throw new Error('Name cannot be empty.')
         }
-        node.data('name', newName)
-        await window.api.updateElement(node.id(), { name: newName })
-        onnodeSelect?.(node.data())
+        await saveNodeAttributes(nodeId, { name: newName })
       }
     }
   }
@@ -1929,6 +1948,18 @@
         customFit(undefined, getDynamicPadding())
       }
     }
+
+    // 5. Re-anchor an open property popper to the rebuilt node, or close it if its node left the view.
+    // Untracked so this does not make the rebuild effect depend on the popper.
+    untrack((): void => {
+      if (!popperTarget || !cy) return
+      const live = cy.getElementById(popperTarget.id())
+      if (live.nonempty() && live.isNode()) {
+        popperTarget = live as cytoscape.NodeSingular
+      } else {
+        closePropertyPopper()
+      }
+    })
   }
 
   $effect(() => {
@@ -2057,9 +2088,9 @@
     </div>
   {/if}
 
-  {#if activePropertyPopper}
+  {#if activePropertyPopper && popperTarget}
     <NodePropertyPopper
-      targetNode={activePropertyPopper.targetNode}
+      targetNode={popperTarget}
       title={activePropertyPopper.title}
       inputType={activePropertyPopper.inputType}
       initialValue={activePropertyPopper.initialValue}
@@ -2069,7 +2100,7 @@
       clearLabel={activePropertyPopper.clearLabel}
       step={activePropertyPopper.step}
       onsubmit={activePropertyPopper.onsubmit}
-      onclose={() => (activePropertyPopper = null)}
+      onclose={closePropertyPopper}
     />
   {/if}
 </div>

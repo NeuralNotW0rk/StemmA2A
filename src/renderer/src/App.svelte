@@ -768,9 +768,20 @@
     return 'Action'
   }
 
+  // Carries attributes the backend has already saved into graphData, so that graph rebuilds from it
+  // (which a running job can trigger at any time) show them without waiting for a refresh
+  function patchGraphElement(id: string, attrs: Record<string, unknown>): void {
+    const element = flattenElements(graphData).find((ele) => ele.data?.id === id)
+    if (!element) {
+      throw new Error(`Element '${id}' is no longer in the graph.`)
+    }
+    Object.assign(element.data, attrs)
+  }
+
   async function handleToggleFavorite(data: any, isFavorite: boolean): Promise<void> {
     try {
       await window.api.updateElement(data.id, { favorite: isFavorite })
+      patchGraphElement(data.id, { favorite: isFavorite })
     } catch (error: any) {
       console.error('Error toggling favorite:', error)
       panelMessage = {
@@ -992,6 +1003,7 @@
     onexpandPath={handleExpandPath}
     onrescanSource={handleRescanSource}
     ontoggleFavorite={handleToggleFavorite}
+    onelementUpdated={patchGraphElement}
     {showDetailedLabels}
     {showEdgeLabels}
     {chronologicalConstraint}

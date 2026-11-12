@@ -12,7 +12,6 @@ import torchaudio
 from einops import rearrange
 from stable_audio_tools import create_model_from_config
 from stable_audio_tools.inference.generation import generate_diffusion_cond
-from safetensors.torch import load_file
 from coolname import generate_slug
 from tqdm import tqdm
 from k_diffusion.sampling import get_sigmas_karras
@@ -25,6 +24,7 @@ from param_graph.elements.models.stable_audio_element import StableAudioModel
 from utils.uid import UIDMismatchError
 from utils.filesystem import get_path_size
 from utils.hf_hub import load_cached_first
+from utils.safetensors_io import read_safetensors
 
 # Workaround for the file extension-based safetensors loading in stable audio tools
 def load_ckpt_state_dict(ckpt_path):
@@ -36,7 +36,9 @@ def load_ckpt_state_dict(ckpt_path):
                           struct.unpack("<Q", header[:8])[0] < 100_000_000)
         
     if is_safetensors:
-        state_dict = load_file(ckpt_path)
+        # Read sequentially rather than memory-mapped: on slow filesystems (e.g. Docker Desktop's 9p
+        # share of a Windows folder) faulting a mapped checkpoint in page by page takes minutes
+        state_dict = read_safetensors(ckpt_path)
     else:
         state_dict = torch.load(ckpt_path, map_location="cpu", weights_only=True)["state_dict"]
     
