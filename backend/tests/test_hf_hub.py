@@ -1,3 +1,4 @@
+import errno
 import sys
 import unittest
 from pathlib import Path
@@ -31,7 +32,15 @@ class TestHfHub(unittest.TestCase):
         with self.assertRaises(OSError) as ctx:
             _transformers_style_miss()
         self.assertTrue(is_cache_miss(ctx.exception))
-        self.assertFalse(is_cache_miss(OSError("disk full")))
+
+    def test_bare_transformers_missing_file_is_a_cache_miss(self):
+        # transformers 5 raises this for an uncached feature extractor, with nothing chained
+        self.assertTrue(is_cache_miss(OSError("Can't load feature extractor for 'laion/clap-htsat-unfused'.")))
+
+    def test_operating_system_errors_are_not_cache_misses(self):
+        self.assertFalse(is_cache_miss(OSError(errno.ENOSPC, "No space left on device")))
+        self.assertFalse(is_cache_miss(PermissionError(errno.EACCES, "Permission denied")))
+        self.assertFalse(is_cache_miss(FileNotFoundError("config.json")))
 
     def test_cache_hit_stays_offline(self):
         calls = []

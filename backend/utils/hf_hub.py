@@ -26,11 +26,20 @@ def hub_online():
             constants.HF_HUB_OFFLINE = previous
 
 
+def _is_transformers_missing_file(exc: BaseException) -> bool:
+    """
+    transformers reports files it can't find (e.g. "Can't load feature extractor for ...") as a bare
+    OSError(message), sometimes with nothing chained to say the cache was the problem. Errors from
+    the operating system (disk full, permission denied) carry an errno or are OSError subclasses.
+    """
+    return type(exc) is OSError and exc.errno is None
+
+
 def is_cache_miss(exc: BaseException) -> bool:
     """True when exc (or anything it was raised from) means Hub files weren't in the local cache."""
     seen = set()
     while exc is not None and id(exc) not in seen:
-        if isinstance(exc, (LocalEntryNotFoundError, OfflineModeIsEnabled)):
+        if isinstance(exc, (LocalEntryNotFoundError, OfflineModeIsEnabled)) or _is_transformers_missing_file(exc):
             return True
         seen.add(id(exc))
         exc = exc.__cause__ or exc.__context__
