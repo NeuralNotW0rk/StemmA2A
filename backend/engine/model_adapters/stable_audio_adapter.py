@@ -24,7 +24,7 @@ from param_graph.elements.models.stable_audio_element import StableAudioModel
 from utils.uid import UIDMismatchError
 from utils.filesystem import get_path_size
 from utils.hf_hub import load_cached_first
-from utils.safetensors_io import read_safetensors
+from utils.safetensors_io import materialize_from_safetensors, read_safetensors
 
 # Workaround for the file extension-based safetensors loading in stable audio tools
 def load_ckpt_state_dict(ckpt_path):
@@ -72,6 +72,33 @@ def _skip_weight_init() -> Iterator[None]:
     finally:
         for name, fn in originals.items():
             setattr(torch.nn.init, name, fn)
+
+
+def _read_local_conditioner_weights(model: torch.nn.Module) -> None:
+    """
+    Reads the weights of Hugging Face conditioners loaded from a local directory (e.g. a T5Gemma
+    encoder asset) into memory sequentially.
+
+    from_pretrained leaves safetensors weights memory-mapped, so they are only read when the
+    conditioner first moves to the GPU, and on slow filesystems (e.g. Docker Desktop's 9p share of a
+    Windows folder) faulting them in page by page adds tens of seconds to the first generation.
+    Conditioners loaded from the Hub cache by repo ID are left as they are.
+    """
+    from transformers import PreTrainedModel
+
+    conditioners = getattr(getattr(model, "conditioner", None), "conditioners", None) or {}
+    for cond_name, conditioner in conditioners.items():
+        # Kept out of the module tree (in __dict__) unless the conditioner is trainable
+        hf_model = getattr(conditioner, "model", None)
+        if not isinstance(hf_model, PreTrainedModel):
+            continue
+        source = Path(hf_model.name_or_path)
+        files = sorted(source.glob("*.safetensors")) if source.is_dir() else []
+        if not files:
+            continue
+        prefix = hf_model.base_model_prefix
+        read = materialize_from_safetensors(hf_model, files, ("", f"{prefix}.") if prefix else ("",))
+        print(f"Read {read / 2**20:.0f} MB of '{cond_name}' conditioner weights from {source}")
 
 
 def _adopt_state_dict(model: torch.nn.Module, state_dict: dict[str, torch.Tensor]) -> None:
@@ -304,6 +331,7 @@ class StableAudioAdapter(ModelAdapter):
             model = load_cached_first(lambda **_: create_model_from_config(config), "Stable Audio conditioners")
         # Read after building, so a conditioner download doesn't hold the weights in memory meanwhile
         _adopt_state_dict(model, load_ckpt_state_dict(info.checkpoint.path))
+        _read_local_conditioner_weights(model)
         self.model = model
         self.model_info = info
 

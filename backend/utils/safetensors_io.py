@@ -11,7 +11,7 @@ pass in file order.
 import json
 import os
 import struct
-from typing import BinaryIO
+from typing import BinaryIO, Collection, Sequence
 
 import torch
 
@@ -46,19 +46,39 @@ def _read_exact(f: BinaryIO, buffer: memoryview, path: str) -> None:
         filled += count
 
 
-def read_safetensors(path: str | os.PathLike) -> dict[str, torch.Tensor]:
-    """Loads every tensor in a safetensors file onto the CPU, reading the file sequentially once."""
+def _read_header(f: BinaryIO, path: str) -> tuple[dict[str, dict], int]:
+    """Returns the tensor entries of an open safetensors file and the offset its data starts at."""
+    length_bytes = f.read(8)
+    if len(length_bytes) != 8:
+        raise ValueError(f"{path} is too short to be a safetensors file")
+    header_length = struct.unpack("<Q", length_bytes)[0]
+    if header_length > _MAX_HEADER_BYTES:
+        raise ValueError(f"{path} has a {header_length}-byte header; it isn't a safetensors file")
+    header = json.loads(f.read(header_length))
+    header.pop("__metadata__", None)
+    return header, 8 + header_length
+
+
+def safetensors_names(path: str | os.PathLike) -> list[str]:
+    """The names of the tensors in a safetensors file, read from its header alone."""
+    path = os.fspath(path)
+    with open(path, "rb") as f:
+        return list(_read_header(f, path)[0])
+
+
+def read_safetensors(path: str | os.PathLike, names: Collection[str] | None = None) -> dict[str, torch.Tensor]:
+    """
+    Loads the tensors in a safetensors file onto the CPU, reading the file sequentially once. With
+    names, loads only those tensors (skipping the rest of the file) and raises if any is missing.
+    """
     path = os.fspath(path)
     with open(path, "rb", buffering=0) as f:
-        length_bytes = f.read(8)
-        if len(length_bytes) != 8:
-            raise ValueError(f"{path} is too short to be a safetensors file")
-        header_length = struct.unpack("<Q", length_bytes)[0]
-        if header_length > _MAX_HEADER_BYTES:
-            raise ValueError(f"{path} has a {header_length}-byte header; it isn't a safetensors file")
-        header = json.loads(f.read(header_length))
-        header.pop("__metadata__", None)
-        data_start = 8 + header_length
+        header, data_start = _read_header(f, path)
+        if names is not None:
+            missing = set(names) - set(header)
+            if missing:
+                raise KeyError(f"{path} has no tensors named {sorted(missing)}")
+            header = {name: header[name] for name in names}
 
         # File order, so the reads stay sequential
         entries = sorted(header.items(), key=lambda item: item[1]["data_offsets"][0])
@@ -74,3 +94,62 @@ def read_safetensors(path: str | os.PathLike) -> dict[str, torch.Tensor]:
                 _read_exact(f, memoryview(raw.numpy()).cast("B"), path)
             tensors[name] = raw.view(dtype).reshape(info["shape"])
         return tensors
+
+
+def materialize_from_safetensors(
+    module: torch.nn.Module, files: Sequence[str | os.PathLike], key_prefixes: Sequence[str] = ("",)
+) -> int:
+    """
+    Replaces the data of module's parameters and persistent buffers with tensors read sequentially
+    from files, in place, so tied weights stay tied. A library that loaded the module from the same
+    files may have left its weights memory-mapped; this swaps them for weights held in memory.
+
+    Each weight is looked up in the files as one of key_prefixes followed by its name in module (for
+    example "model." for a Hugging Face model saved with its base_model_prefix). Raises if any weight
+    is missing from the files or has a different shape there. Returns the number of bytes read.
+    """
+    # Every name each distinct tensor goes by, since a tied weight may be saved under any of them
+    persistent = set(module.state_dict().keys())
+    aliases: dict[int, tuple[torch.Tensor, list[str]]] = {}
+    named = list(module.named_parameters(remove_duplicate=False)) + [
+        (name, buffer) for name, buffer in module.named_buffers(remove_duplicate=False) if name in persistent
+    ]
+    for name, tensor in named:
+        aliases.setdefault(id(tensor), (tensor, []))[1].append(name)
+
+    file_of: dict[str, str] = {}
+    for file in files:
+        for key in safetensors_names(file):
+            file_of.setdefault(key, os.fspath(file))
+
+    # file -> key in that file -> the module tensors it fills
+    plan: dict[str, dict[str, list[tuple[str, torch.Tensor]]]] = {}
+    missing = []
+    for tensor, names in aliases.values():
+        name = names[0]
+        key = next(
+            (prefix + alias for alias in names for prefix in key_prefixes if prefix + alias in file_of), None
+        )
+        if key is None:
+            missing.append(name)
+            continue
+        plan.setdefault(file_of[key], {}).setdefault(key, []).append((name, tensor))
+    if missing:
+        raise KeyError(
+            f"{len(missing)} weight(s) not found in {[os.fspath(f) for f in files]} under prefixes "
+            f"{list(key_prefixes)}, e.g. {missing[:3]}"
+        )
+
+    total = 0
+    for file, wanted in plan.items():
+        loaded = read_safetensors(file, names=wanted.keys())
+        for key, fills in wanted.items():
+            source = loaded.pop(key)
+            for name, tensor in fills:
+                if source.shape != tensor.shape:
+                    raise ValueError(
+                        f"'{key}' in {file} has shape {tuple(source.shape)}, but '{name}' is {tuple(tensor.shape)}"
+                    )
+                tensor.data = source.to(tensor.dtype)
+                total += tensor.numel() * tensor.element_size()
+    return total
