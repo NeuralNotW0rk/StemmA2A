@@ -1251,6 +1251,7 @@ DYNAMIC_LABELING_BLACKLIST = {
     "is_baseline",
     "phenotype_status",
     "phenotype_duplicate_of",
+    "engine_seconds",
     "shared_exemplar_id",
     ORIGIN_KEY,
     "file",
@@ -1421,6 +1422,10 @@ async def get_job_status(job_id):
                             merged_context = {**job_context.get("validated_params", {}), **current_context}
                             merged_context.pop("job_id", None)
                             merged_context.pop("execution_mode", None)
+                            # The engine's compute time for the job (shared by every artifact of a multi-artifact
+                            # result). Engines from before this field existed don't report it.
+                            if status_info.get("elapsed_seconds") is not None:
+                                merged_context["engine_seconds"] = round(status_info["elapsed_seconds"], 2)
                             stored = replace(stored, context=merged_context)
                         return stored
 

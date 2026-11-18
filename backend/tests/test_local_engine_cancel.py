@@ -53,7 +53,10 @@ class TestLocalEngineCancel(unittest.TestCase):
     def test_completes_normally(self):
         self._run("job")
         self._finish()
-        self.assertEqual(self._status("job"), {"status": "completed", "result": "result"})
+        status = self._status("job")
+        # The engine reports its compute time, which the host records on the artifacts
+        self.assertGreaterEqual(status.pop("elapsed_seconds"), 0)
+        self.assertEqual(status, {"status": "completed", "result": "result"})
 
     def test_running_job_reports_its_stage(self):
         self._run("job")

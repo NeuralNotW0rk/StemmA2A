@@ -189,7 +189,7 @@ class TestJobStatusMultiArtifact(unittest.TestCase):
         EngineProvider._engine_instance = None
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def _complete(self, job_id, group_id=None):
+    def _complete(self, job_id, group_id=None, elapsed_seconds=None):
         files = {}
         for name in ("lat_3", "grt_3"):
             files[name] = os.path.join(self.tmp, f"{name}.bin")
@@ -198,7 +198,10 @@ class TestJobStatusMultiArtifact(unittest.TestCase):
             "artifacts": [_latent("lat_3", files["lat_3"]), _grating("grt_3", files["grt_3"], "model_pti", "lat_3")],
             "links": [ArtifactLink("lat_3", "grt_3", "pivot")]
         })
-        self.engine.get_job_status = AsyncMock(return_value={"status": "completed", "result": result})
+        status = {"status": "completed", "result": result}
+        if elapsed_seconds is not None:
+            status["elapsed_seconds"] = elapsed_seconds
+        self.engine.get_job_status = AsyncMock(return_value=status)
         app_module.active_jobs[job_id] = {
             "parent_id": None,
             "group_id": group_id,
@@ -240,6 +243,15 @@ class TestJobStatusMultiArtifact(unittest.TestCase):
         self.assertEqual(members, ["lat_3"])
         self.assertEqual(self.graph.G.nodes["lat_3"].get("parent"), "grp_pti")
         self.assertIsNone(self.graph.G.nodes["grt_3"].get("parent"))
+
+    def test_engine_time_is_recorded_on_every_artifact(self):
+        self._complete("job_pti_timed", elapsed_seconds=12.3456)
+        for artifact_id in ("lat_3", "grt_3"):
+            self.assertEqual(self.graph.get_element(artifact_id).context["engine_seconds"], 12.35)
+
+    def test_engine_time_is_absent_when_the_engine_does_not_report_it(self):
+        self._complete("job_pti_untimed")
+        self.assertNotIn("engine_seconds", self.graph.get_element("lat_3").context)
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@ import tempfile
 import queue
 import shutil
 import threading
+import time
 import uuid
 import asyncio
 import contextvars
@@ -403,11 +404,14 @@ class LocalEngine(Engine):
                 # Run the async operation function in the current thread's event loop. The loop's
                 # tasks copy this thread's context, so the operation sees which job it belongs to
                 _current_job_id.set(job_id)
+                started = time.perf_counter()
                 result = asyncio.run(func(**op_kwargs))
+                # Compute time only: excludes queue wait, uploads and downloads
+                elapsed = time.perf_counter() - started
 
                 # A job cancelled while running stays cancelled and its result is discarded. Its output file is
                 # left in place: files are content-addressed, so another artifact may share it
-                if self._finish_job(job_id, {"status": "completed", "result": result}):
+                if self._finish_job(job_id, {"status": "completed", "result": result, "elapsed_seconds": elapsed}):
                     print(f"Worker: Job {job_id} completed successfully.")
                 else:
                     print(f"Worker: Job {job_id} finished after being cancelled. Discarding its result.")
