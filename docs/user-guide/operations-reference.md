@@ -159,8 +159,6 @@ named **Scatter (Gen N)**.
 | Parent Individual | required | A single individual |
 | Scatter Count (N) | 10 | 1–100. Children identical to an existing individual are discarded, so very low σ can give fewer than N. |
 | Mutation Strength (σ) | 0.1 | Measured relative to each layer's natural scale. Freshly initialized weights are about 0.6 in these units. |
-| Expected On/Off Toggles per Offspring | 0.0 | How many layers flip between on and off, on average. Leave this at 0 until a lineage has developed. |
-| Freeze Switched-Off Layers | on | Layers that are switched off aren't mutated, so switching one back on restores it as it was. |
 | Auto-Generate Exemplars | on | Renders each child with its parent's exemplar settings. When off, use **Generate Exemplar** later. |
 
 ---
@@ -180,10 +178,8 @@ pairings. The children go into a group named **Recombination (Gen N)**.
 | Tournament Size | 3 | Tournament only. How many random parents compete for each slot. Larger values favor the top scorers more. Capped at the number of parents. |
 | Default / Null Fitness Override | 0.0 | Fitness used for parents you haven't scored. Only rank matters: a tournament always picks its highest scorer. |
 | Crossover Probability | 1.0 | Chance that a pair is crossed over. Otherwise the child is a mutated copy of one parent. |
-| Mutation Rate | 0.01 | Chance that each layer is perturbed |
+| Mutated Layers per Offspring | 2 | Average number of layers that get noise in each child, whatever the model's size. Every weight in a picked layer changes; the other layers are copied unchanged. |
 | Mutation Strength (σ) | 0.05 | In units of each layer's natural scale |
-| Expected On/Off Toggles per Offspring | 1.0 | |
-| Freeze Switched-Off Layers | on | |
 | Auto-Generate Exemplars | on | Uses the *first* parent's exemplar settings |
 
 | Strategy | What it does |

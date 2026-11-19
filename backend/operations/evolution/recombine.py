@@ -44,6 +44,26 @@ from ..registry import register
 from .resolution import extract_individual_parent_ids, reject_legacy_baseline, resolve_exemplar_context
 
 
+# Expected number of layers perturbed per offspring when neither mutation_rate nor mutated_layers is given
+DEFAULT_MUTATED_LAYERS = 2.0
+
+
+def resolve_mutation_amount(mutation_cfg: dict) -> tuple[Optional[float], Optional[float]]:
+    """
+    Returns (mutation_rate, mutated_layers) from a mutation config, exactly one of them set.
+    mutated_layers (expected layers changed per offspring) is the form's setting; mutation_rate (a fixed
+    per-layer probability) is still accepted from API callers. Giving both is an error, and giving
+    neither uses DEFAULT_MUTATED_LAYERS.
+    """
+    rate = mutation_cfg.get("mutation_rate")
+    layers = mutation_cfg.get("mutated_layers")
+    if rate is not None and layers is not None:
+        raise ValueError("Pass either mutation_rate or mutated_layers, not both.")
+    if rate is not None:
+        return float(rate), None
+    return None, float(layers) if layers is not None else DEFAULT_MUTATED_LAYERS
+
+
 
 @dataclass
 class LineageRecord:
@@ -284,16 +304,11 @@ def recombine_evolution_task(
         )
 
         noise_scale = float(mutation_cfg.get("noise_scale", merged_context.get("noise_scale", 0.05)))
-        active_flips = float(mutation_cfg.get("active_flips", merged_context.get("active_flips", 1.0)))
-        mutation_rate = float(mutation_cfg.get("mutation_rate", 0.1))
-        freeze_inactive = mutation_cfg.get("freeze_inactive", True)
-        if isinstance(freeze_inactive, str):
-            freeze_inactive = freeze_inactive.lower() in ("true", "1", "yes")
+        mutation_rate, mutated_layers = resolve_mutation_amount(mutation_cfg)
         mutation_strat = get_lora_mutation_strategy(
             noise_scale=noise_scale,
-            active_flips=active_flips,
             mutation_rate=mutation_rate,
-            freeze_inactive=bool(freeze_inactive)
+            mutated_layers=mutated_layers,
         )
 
         offspring_records: list[RecombinedOffspring] = recombine_offspring(
@@ -355,10 +370,11 @@ def recombine_evolution_task(
 
             child_context = copy.deepcopy(merged_context)
             child_context["recombine_operation"] = {
-                "crossover_type": crossover_cfg.get("type", "hierarchical") if isinstance(crossover_cfg, dict) else str(crossover_cfg),
+                "crossover_type": crossover_type,
                 "selection_type": selection_cfg.get("type", "tournament") if isinstance(selection_cfg, dict) else str(selection_cfg),
                 "default_fitness": default_fitness,
                 "mutation_rate": mutation_rate,
+                "mutated_layers": mutated_layers,
                 "crossover_prob": crossover_prob,
                 "elitism": elitism,
                 "selection_cfg": selection_cfg,
@@ -563,12 +579,26 @@ async def dispatch_recombine_operation(
         "tournament_size": int(_numeric_param("tournament_size", 3)),
     }
 
+    def _optional_numeric_param(key: str) -> Optional[float]:
+        value = data.get(key)
+        if value is None:
+            value = params.get(key)
+        return float(value) if value is not None else None
+
     mutation_cfg = data.get("mutation") or params.get("mutation") or {
-        "mutation_rate": _numeric_param("mutation_rate", 0.1),
+        "mutation_rate": _optional_numeric_param("mutation_rate"),
+        "mutated_layers": _optional_numeric_param("mutated_layers"),
         "noise_scale": _numeric_param("noise_scale", 0.05),
-        "active_flips": _numeric_param("active_flips", 1.0),
-        "freeze_inactive": data.get("freeze_inactive") if data.get("freeze_inactive") is not None else params.get("freeze_inactive", True)
     }
+
+    # Rejects bad strategy and mutation settings here, so the caller gets a 400 rather than a failed job
+    try:
+        get_lora_crossover_strategy(
+            strategy_type=crossover_cfg.get("type", "two_point") if isinstance(crossover_cfg, dict) else str(crossover_cfg)
+        )
+        resolve_mutation_amount(mutation_cfg)
+    except ValueError as error:
+        return {"error": str(error)}, 400
 
     crossover_prob = _numeric_param("crossover_prob", 1.0)
     elitism = int(data.get("elitism") or params.get("elitism") or 0)
@@ -666,7 +696,7 @@ class RecombineOperation(Operation):
             offspring_size=kwargs.get("offspring_size"),
             selection_cfg=kwargs.get("selection_cfg", {"type": "tournament", "tournament_size": 3}),
             crossover_cfg=kwargs.get("crossover_cfg", {"type": "two_point"}),
-            mutation_cfg=kwargs.get("mutation_cfg", {"mutation_rate": 0.1}),
+            mutation_cfg=kwargs.get("mutation_cfg", {"mutated_layers": DEFAULT_MUTATED_LAYERS}),
             crossover_prob=kwargs.get("crossover_prob", 1.0),
             elitism=kwargs.get("elitism", 0),
             generation_context=kwargs.get("generation_context", {}),

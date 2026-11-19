@@ -192,11 +192,16 @@ evolutionary operators come from the sibling `neutral-selection` library.
   crossover can inherit it) and `topology` (the kernel type, alpha and so on).
 - **Genes are stored normalized.** `down` is scaled by `1/sqrt(fan_in)` and `up` by `sqrt(3/rank)`.
   As a result, one σ means the same relative perturbation in wide and narrow layers.
-- **`LoRAMutation`** adds Gaussian noise to a gene with probability `mutation_rate`. It flips
-  activations with probability `active_flips / len(genome)`. With `freeze_inactive` on, genes that are
-  switched off are left unchanged.
+- **`LoRAMutation`** picks whole genes, then adds Gaussian noise to every weight of each picked gene.
+  The per-gene probability is either a fixed `mutation_rate`, or `mutated_layers` divided by the
+  number of genes that can be perturbed, so the expected number changed is the same for any model.
+  Recombine's form sets `mutated_layers`; scatter perturbs every gene. Mutation never switches genes
+  on or off, and genes that are already off are left unchanged. (A random on/off toggle was removed
+  in November 2026 because it did little in short lineages; `activation` stays in the genome so
+  existing files and IDs are unchanged.)
 - **Crossover** strategies map onto neutral-selection operators at different granularities: *atom*
-  (any scalar), or *gene* (a whole layer). Blend crossover is a custom `FunctionCrossover`.
+  (any scalar), or *gene* (a whole layer). Blend crossover is a custom `FunctionCrossover`. An
+  unknown strategy name raises an error.
 - **Genome files** are safetensors, format `"2"`. The hash of the state dict is the individual's ID,
   so identical genomes become the same node.
 - **`express_to_grating`** turns a genome into a diffracture Grating. When generating, the

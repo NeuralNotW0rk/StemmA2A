@@ -54,7 +54,7 @@ class TestRecombinationEngine(unittest.TestCase):
 
         selection_strat = TournamentSelection(tournament_size=2)
         crossover_strat = get_lora_crossover_strategy(num_cut_points=1)
-        mutation_strat = get_lora_mutation_strategy(noise_scale=0.05, active_flips=0.0)
+        mutation_strat = get_lora_mutation_strategy(noise_scale=0.05)
 
         offspring = recombine_offspring(
             parents=parents,
@@ -86,7 +86,7 @@ class TestRecombinationEngine(unittest.TestCase):
 
         selection_strat = TournamentSelection(tournament_size=2)
         crossover_strat = get_lora_crossover_strategy(num_cut_points=1)
-        mutation_strat = get_lora_mutation_strategy(noise_scale=0.1, active_flips=0.0)
+        mutation_strat = get_lora_mutation_strategy(noise_scale=0.1)
 
         offspring = recombine_offspring(
             parents=parents,
@@ -123,7 +123,7 @@ class TestRecombinationEngine(unittest.TestCase):
 
         selection_strat = TournamentSelection(tournament_size=2)
         crossover_strat = get_lora_crossover_strategy(num_cut_points=1)
-        mutation_strat = get_lora_mutation_strategy(noise_scale=0.05, active_flips=0.0)
+        mutation_strat = get_lora_mutation_strategy(noise_scale=0.05)
 
         offspring = recombine_offspring(
             parents=parents,
@@ -194,12 +194,16 @@ class TestRecombinationEngine(unittest.TestCase):
                 self.assertTrue(torch.allclose(gene.lora_down, torch.full((2, 2), 2.0)))
                 self.assertTrue(torch.allclose(gene.lora_up, torch.full((2, 2), 2.0)))
 
-    def test_lora_hierarchical_crossover_strategy(self) -> None:
-        """Verify default hierarchical crossover strategy for LoRAGenome."""
+    def test_unknown_crossover_strategy_raises(self) -> None:
+        """Verify an unrecognised strategy name fails instead of falling back to another strategy."""
+        with self.assertRaises(ValueError):
+            get_lora_crossover_strategy(strategy_type="two_pont")
+
+    def test_lora_default_crossover_strategy(self) -> None:
+        """Verify the default (two-point) crossover strategy for LoRAGenome."""
         p1 = self._create_mock_lora_individual(1.0)
         p2 = self._create_mock_lora_individual(3.0)
 
-        # Default is hierarchical
         crossover_strat = get_lora_crossover_strategy()
         child_genomes = crossover_strat(p1.genotype, p2.genotype)
 
@@ -319,9 +323,6 @@ class TestRecombinationAPI(unittest.TestCase):
                 "crossover_type": "blend_crossover",
                 "mutation_rate": 1.0,
                 "noise_scale": 0.05,
-                # A toggled layer is frozen, so on these 2-layer genomes toggles could leave a child
-                # unperturbed and identical to another child of the same two parents, which gets discarded
-                "active_flips": 0.0
             }
 
             resp = client.post("/recombine_evolution", json=payload)
@@ -384,6 +385,7 @@ class TestRecombinationAPI(unittest.TestCase):
                 self.assertEqual(recombine_ctx.get("crossover_type"), "blend_crossover")
                 self.assertEqual(recombine_ctx.get("selection_type"), "tournament")
                 self.assertEqual(recombine_ctx.get("mutation_rate"), 1.0)
+                self.assertIsNone(recombine_ctx.get("mutated_layers"))
                 self.assertEqual(recombine_ctx.get("offspring_size"), 4)
 
             # Check that child exemplar sub-jobs complete cleanly without spurious audio-to-audio source edges
@@ -396,6 +398,12 @@ class TestRecombinationAPI(unittest.TestCase):
                 self.assertIsNotNone(audio_node_id)
                 # Verify no direct source edges from precursor audio to this evolved exemplar audio
                 self.assertFalse(app_module.param_graph.G.has_edge(precursor_audio.id, audio_node_id))
+
+            # Bad strategy names and conflicting mutation settings are rejected before a job starts
+            bad_strategy = client.post("/recombine_evolution", json={**payload, "crossover_type": "two_pont"})
+            self.assertEqual(bad_strategy.status_code, 400)
+            both_amounts = client.post("/recombine_evolution", json={**payload, "mutated_layers": 2.0})
+            self.assertEqual(both_amounts.status_code, 400)
 
             # 6. Test /execute_operation with operation="recombine"
             execute_payload = {
@@ -729,7 +737,7 @@ class TestRecombinationAPI(unittest.TestCase):
                 offspring_size=2,
                 selection_cfg={"type": "uniform"},
                 crossover_cfg={"type": "two_point"},
-                mutation_cfg={"mutation_rate": 0.0, "noise_scale": 0.0, "active_flips": 0.0},
+                mutation_cfg={"mutation_rate": 0.0, "noise_scale": 0.0},
                 crossover_prob=0.0,
                 elitism=0,
                 generation_context={},

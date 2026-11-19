@@ -176,47 +176,59 @@ def lora_gene_scales(lora_down: torch.Tensor, lora_up: torch.Tensor) -> tuple[fl
 class LoRAMutation(MutationStrategy):
     """
     Mutation strategy for LoRAGenomes.
-    Each gene is perturbed with probability mutation_rate by adding Gaussian noise with std noise_scale
-    to both genotype factors; expression scales that into a width-appropriate step in weight space.
-    Separately, each gene's on/off state flips with probability active_flips / len(genome), so the
-    expected number of flips per offspring stays fixed regardless of model size, and every mutated
-    gene's activation is snapped to +1 or -1.
-    With freeze_inactive (the default), only genes that are on both before and after this step are
-    perturbed: a gene switched off keeps its weights, so switching it back on restores the state it was
-    selected in rather than an unheard random drift. Without it, switched-off genes drift too.
+    Mutation selects whole genes (layers), not individual weights: each gene is picked with a per-gene
+    probability, and every element of both genotype factors of a picked gene gets Gaussian noise with
+    std noise_scale; unpicked genes are left as they are. Expression scales that noise into a
+    width-appropriate step in weight space.
+    The probability is set by exactly one of:
+      - mutation_rate: a fixed per-gene probability, so the number of genes changed grows with the genome.
+      - mutated_layers: the expected number of genes changed per offspring, whatever the genome's size.
+        It is divided by the number of active genes, and capped at every gene.
+    Mutation never switches genes on or off. Genes that are already off (from a baseline grating or an
+    older genome) are never perturbed, so their stored weights are kept. Crossover can blend an
+    activation between +1 and -1; mutation snaps it back to its decoded state.
     """
-    def __init__(self, noise_scale: float, active_flips: float, mutation_rate: float, freeze_inactive: bool = True) -> None:
+    def __init__(
+        self,
+        noise_scale: float,
+        mutation_rate: Optional[float] = None,
+        mutated_layers: Optional[float] = None,
+    ) -> None:
         if noise_scale < 0.0:
             raise ValueError("noise_scale must be non-negative.")
-        if active_flips < 0.0:
-            raise ValueError("active_flips must be non-negative.")
-        if not (0.0 <= mutation_rate <= 1.0):
+        if (mutation_rate is None) == (mutated_layers is None):
+            raise ValueError("Pass exactly one of mutation_rate or mutated_layers.")
+        if mutation_rate is not None and not (0.0 <= mutation_rate <= 1.0):
             raise ValueError("mutation_rate must be between 0.0 and 1.0 inclusive.")
+        if mutated_layers is not None and mutated_layers < 0.0:
+            raise ValueError("mutated_layers must be non-negative.")
         self.noise_scale = float(noise_scale)
-        self.active_flips = float(active_flips)
-        self.mutation_rate = float(mutation_rate)
-        self.freeze_inactive = bool(freeze_inactive)
+        self.mutation_rate = None if mutation_rate is None else float(mutation_rate)
+        self.mutated_layers = None if mutated_layers is None else float(mutated_layers)
+
+    def _perturb_prob(self, genes: list[LoRAGene]) -> float:
+        """Returns the per-gene perturbation probability for this genome."""
+        if self.mutation_rate is not None:
+            return self.mutation_rate
+        assert self.mutated_layers is not None
+        eligible = sum(1 for gene in genes if gene.active)
+        return min(1.0, self.mutated_layers / eligible) if eligible else 0.0
 
     def __call__(self, genome: Genome) -> Genome:
         if not isinstance(genome, Genome):
             raise TypeError("genome must be an instance of Genome.")
 
         genes = list(genome)
-        flip_prob = min(1.0, self.active_flips / len(genes)) if genes else 0.0
-        mutated: list[LoRAGene] = []
         for gene in genes:
             if not isinstance(gene, LoRAGene):
                 raise TypeError(f"LoRAMutation expects LoRAGene items, got {type(gene).__name__}.")
-            was_active = gene.active
-            flip = random.random() < flip_prob
-            now_active = was_active != flip
-            perturb = (
-                (not self.freeze_inactive or (was_active and now_active))
-                and self.noise_scale > 0.0 and random.random() < self.mutation_rate
-            )
+        perturb_prob = self._perturb_prob(genes)
+        mutated: list[LoRAGene] = []
+        for gene in genes:
+            perturb = gene.active and self.noise_scale > 0.0 and random.random() < perturb_prob
             # An activation left between +1 and -1 by a blending crossover is snapped to its decoded state
             snapped = abs(gene.activation.item()) == 1.0
-            if not perturb and not flip and snapped:
+            if not perturb and snapped:
                 # Genes are never modified in place, so the parent's gene can be shared
                 mutated.append(gene)
                 continue
@@ -224,7 +236,7 @@ class LoRAMutation(MutationStrategy):
                 gene,
                 lora_down=self._perturb(gene.lora_down) if perturb else gene.lora_down,
                 lora_up=self._perturb(gene.lora_up) if perturb else gene.lora_up,
-                activation=encode_activation(now_active, gene.activation)
+                activation=encode_activation(gene.active, gene.activation)
             ))
         return genome.__class__(mutated)
 
@@ -234,18 +246,19 @@ class LoRAMutation(MutationStrategy):
 
 def get_lora_mutation_strategy(
     noise_scale: float = 0.1,
-    active_flips: float = 1.0,
-    mutation_rate: float = 1.0,
-    freeze_inactive: bool = True
+    mutation_rate: Optional[float] = None,
+    mutated_layers: Optional[float] = None,
 ) -> Any:
     """
-    Returns a LoRAMutation strategy for LoRAGenome instances.
+    Returns a LoRAMutation strategy for LoRAGenome instances. Pass at most one of mutation_rate or
+    mutated_layers (see LoRAMutation); with neither, every active gene is perturbed (mutation_rate 1.0).
     """
+    if mutation_rate is None and mutated_layers is None:
+        mutation_rate = 1.0
     return LoRAMutation(
         noise_scale=noise_scale,
-        active_flips=active_flips,
         mutation_rate=mutation_rate,
-        freeze_inactive=freeze_inactive,
+        mutated_layers=mutated_layers,
     )
 
 
@@ -283,6 +296,7 @@ def get_lora_crossover_strategy(
       - "layer_crossover": Wholesale layer splicing (gene granularity: each LoRAGene is one leaf).
       - "uniform_crossover" / "uniform": Independent per-element coin-flip swap.
       - "blend_crossover" / "blend" / "arithmetic": Continuous tensor weight blending, gene by gene.
+    Any other strategy_type raises a ValueError.
     """
     from neutral_selection.variation.recombination import (
         OnePointCrossover,
@@ -303,8 +317,12 @@ def get_lora_crossover_strategy(
         return FunctionCrossover(lora_gene_blend_crossover_fn, blend_factor=blend_factor, granularity="gene", num_children=1)
     elif s_type in ("uniform_crossover", "uniform"):
         return UniformCrossover(swap_prob=swap_prob, max_depth=max_depth)
-    else:
+    elif s_type in ("random_n_point", "n_point"):
         return RandomNPointCrossover(num_cut_points=num_cut_points, max_depth=max_depth)
+    raise ValueError(
+        f"Unknown crossover strategy {strategy_type!r}. Expected one of: two_point, one_point, "
+        "random_n_point, layer_crossover, uniform_crossover, blend_crossover."
+    )
 
 
 # --- LoRA Genome Representation ---
@@ -418,7 +436,6 @@ class LoRAGenome(Genome):
         base_grating: Grating,
         population_size: int,
         noise_scale: float,
-        active_flips: float
     ) -> list["LoRAGenome"]:
         """
         Creates an initial population of LoRAGenomes from a base grating.
@@ -429,11 +446,7 @@ class LoRAGenome(Genome):
         base_genome = cls.from_grating(base_grating)
         population: list[LoRAGenome] = []
 
-        mutation_strategy = get_lora_mutation_strategy(
-            noise_scale=noise_scale,
-            active_flips=active_flips,
-            mutation_rate=1.0
-        )
+        mutation_strategy = get_lora_mutation_strategy(noise_scale=noise_scale, mutation_rate=1.0)
 
         for _ in range(population_size):
             # Mutation builds a new genome and never modifies the base genome's tensors in place

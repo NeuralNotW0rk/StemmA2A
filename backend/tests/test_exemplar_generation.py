@@ -134,7 +134,6 @@ class TestExemplarGeneration(unittest.TestCase):
             # Crossover cannot cut these 1-layer genomes, so each child copies a parent; noise on every
             # layer, with no toggles to freeze it, keeps two copies of one parent from being identical
             "mutation_rate": 1.0,
-            "active_flips": 0.0
         })
         self.assertEqual(resp.status_code, 202)
         job_id = resp.get_json()["job_id"]
@@ -201,8 +200,6 @@ class TestExemplarGeneration(unittest.TestCase):
             "parents": [parent_ind.id],
             "offspring_size": 2,
             "noise_scale": 0.05,
-            # Single-gene genomes would flip on every child; flips are covered by unit tests
-            "active_flips": 0.0,
             "mutation_rate": 1.0
         })
         self.assertEqual(resp.status_code, 202)
@@ -329,7 +326,6 @@ class TestExemplarGeneration(unittest.TestCase):
             "crossover_type": "two_point",
             # See test_decoupled_recombination_offline: keeps copies of one 1-layer parent distinct
             "mutation_rate": 1.0,
-            "active_flips": 0.0,
             "generate_exemplars": True,
             "params": {
                 "truncation": 0.7
@@ -415,8 +411,6 @@ class TestExemplarGeneration(unittest.TestCase):
             "offspring_size": 2,
             "generate_exemplars": True,
             "noise_scale": 0.05,
-            # Single-gene genomes would flip on every child; flips are covered by unit tests
-            "active_flips": 0.0,
             "mutation_rate": 1.0
         })
 

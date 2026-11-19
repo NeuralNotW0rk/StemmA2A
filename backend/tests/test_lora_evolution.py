@@ -212,7 +212,7 @@ class TestLoRAEvolution(unittest.TestCase):
     def test_noise_is_uniform_in_genotype_and_scaled_at_expression(self) -> None:
         """Verify mutation adds plain noise to genotype values, and expression turns it into a width-appropriate step."""
         torch.manual_seed(0)
-        strategy = get_lora_mutation_strategy(noise_scale=0.1, active_flips=0.0)
+        strategy = get_lora_mutation_strategy(noise_scale=0.1)
 
         # A fresh baseline element: Kaiming lora_down (rank=1, in=6144) and zero lora_up (out=1536)
         baseline = Grating()
@@ -251,7 +251,7 @@ class TestLoRAEvolution(unittest.TestCase):
         ]
         genome = LoRAGenome(genes)
 
-        strategy = get_lora_mutation_strategy(noise_scale=0.1, active_flips=0.0, mutation_rate=1.0)
+        strategy = get_lora_mutation_strategy(noise_scale=0.1, mutation_rate=1.0)
 
         mutated_genome = mutate(genome, strategy)
         self.assertIsInstance(mutated_genome, LoRAGenome)
@@ -270,36 +270,21 @@ class TestLoRAEvolution(unittest.TestCase):
         # Parent tensors are never modified in place
         self.assertTrue(torch.all(genome[1].lora_up == 0.0))
 
-    def test_inactive_genes_are_frozen(self) -> None:
-        """Verify switched-off genes keep their weights, so switching back on restores the selected state."""
+    def test_mutation_never_toggles_or_perturbs_inactive_genes(self) -> None:
+        """Verify mutation keeps every gene's on/off state and leaves switched-off genes untouched."""
         random.seed(0)
         torch.manual_seed(0)
         dormant = PerturbationGene("l1", torch.full((1, 4), 0.5), torch.full((4, 1), 0.25), False)
-        genome = LoRAGenome([dormant])
+        expressed = PerturbationGene("l2", torch.full((1, 4), 0.5), torch.full((4, 1), 0.25), True)
+        genome = LoRAGenome([dormant, expressed])
 
-        # No flips: the dormant gene is shared untouched across generations
         child = genome
         for _ in range(10):
-            child = mutate(child, get_lora_mutation_strategy(noise_scale=0.5, active_flips=0.0))
+            child = mutate(child, get_lora_mutation_strategy(noise_scale=0.5))
+        self.assertEqual([g.active for g in child], [False, True])
+        # The dormant gene is shared untouched across generations; the active one drifts
         self.assertIs(child[0].lora_down, dormant.lora_down)
-        self.assertFalse(child[0].active)
-
-        # Switching it back on restores exactly the weights it was switched off with
-        revived = mutate(genome, get_lora_mutation_strategy(noise_scale=0.5, active_flips=1.0))
-        self.assertTrue(revived[0].active)
-        self.assertTrue(torch.equal(revived[0].lora_down, dormant.lora_down))
-        self.assertTrue(torch.equal(revived[0].lora_up, dormant.lora_up))
-
-        # A gene switched off in this step is frozen at its pre-step weights
-        expressed = LoRAGenome([PerturbationGene("l1", torch.full((1, 4), 0.5), torch.full((4, 1), 0.25), True)])
-        silenced = mutate(expressed, get_lora_mutation_strategy(noise_scale=0.5, active_flips=1.0))
-        self.assertFalse(silenced[0].active)
-        self.assertTrue(torch.equal(silenced[0].lora_down, expressed[0].lora_down))
-
-        # Without freezing, a switched-off gene keeps drifting
-        drifting = mutate(genome, get_lora_mutation_strategy(noise_scale=0.5, active_flips=0.0, freeze_inactive=False))
-        self.assertFalse(drifting[0].active)
-        self.assertFalse(torch.equal(drifting[0].lora_down, dormant.lora_down))
+        self.assertFalse(torch.equal(child[1].lora_down, expressed.lora_down))
 
     def test_activation_is_inherited_with_its_weights(self) -> None:
         """Verify flattened crossover moves activations like any leaf, and mutation snaps blended ones to +/-1."""
@@ -320,31 +305,44 @@ class TestLoRAEvolution(unittest.TestCase):
         blended, _ = ArithmeticCrossover(alpha=0.75)(on, off)
         self.assertAlmostEqual(blended[0].activation.item(), 0.5)
         self.assertTrue(blended[0].active)
-        snapped = mutate(blended, get_lora_mutation_strategy(noise_scale=0.0, active_flips=0.0))
+        snapped = mutate(blended, get_lora_mutation_strategy(noise_scale=0.0))
         self.assertEqual([g.activation.item() for g in snapped], [1.0, 1.0, 1.0, 1.0])
 
-    def test_active_flips_are_per_offspring(self) -> None:
-        """Verify the expected number of flips per offspring is active_flips, independent of genome size."""
+    def test_mutated_layers_are_per_offspring(self) -> None:
+        """Verify mutated_layers sets the expected number of perturbed genes, independent of genome size."""
         random.seed(0)
+        torch.manual_seed(0)
         for gene_count in (20, 400):
             genome = LoRAGenome([
                 PerturbationGene(f"l{i}", torch.ones(1, 2), torch.ones(2, 1), True) for i in range(gene_count)
             ])
-            # mutation_rate=0 isolates flipping: weights stay untouched and genes are shared
-            strategy = get_lora_mutation_strategy(noise_scale=0.1, active_flips=2.0, mutation_rate=0.0)
+            strategy = get_lora_mutation_strategy(noise_scale=0.1, mutated_layers=2.0)
             trials = 500
-            total_flips = 0
+            total = 0
             for _ in range(trials):
                 child = mutate(genome, strategy)
-                total_flips += sum(1 for g in child if not g.active)
-                for parent_gene, child_gene in zip(genome, child):
-                    self.assertIs(child_gene.lora_down, parent_gene.lora_down)
-            self.assertAlmostEqual(total_flips / trials, 2.0, delta=0.25)
+                total += sum(1 for p, c in zip(genome, child) if c.lora_down is not p.lora_down)
+            self.assertAlmostEqual(total / trials, 2.0, delta=0.25)
 
-        # More flips requested than genes: every gene flips
+        # The count is spread over the active genes only
+        mixed = LoRAGenome([
+            PerturbationGene(f"l{i}", torch.ones(1, 2), torch.ones(2, 1), i < 2) for i in range(10)
+        ])
+        child = mutate(mixed, get_lora_mutation_strategy(noise_scale=0.1, mutated_layers=2.0))
+        changed = [c.lora_down is not p.lora_down for p, c in zip(mixed, child)]
+        self.assertEqual(changed, [True, True] + [False] * 8)
+
+        # More layers requested than genes: every gene is perturbed
         small = LoRAGenome([PerturbationGene("l0", torch.ones(1, 2), torch.ones(2, 1), True)])
-        child = mutate(small, get_lora_mutation_strategy(noise_scale=0.0, active_flips=5.0))
-        self.assertFalse(child[0].active)
+        child = mutate(small, get_lora_mutation_strategy(noise_scale=0.1, mutated_layers=5.0))
+        self.assertIsNot(child[0].lora_down, small[0].lora_down)
+
+    def test_mutation_amount_must_be_given_once(self) -> None:
+        """Verify mutation_rate and mutated_layers are mutually exclusive."""
+        with self.assertRaises(ValueError):
+            get_lora_mutation_strategy(mutation_rate=0.5, mutated_layers=2.0)
+        with self.assertRaises(ValueError):
+            get_lora_mutation_strategy(mutated_layers=-1.0)
 
     def test_create_initial_population(self) -> None:
         """Verify LoRAGenome.create_initial_population generates expected copies and mutations."""
@@ -360,7 +358,6 @@ class TestLoRAEvolution(unittest.TestCase):
             base_grating=grating,
             population_size=3,
             noise_scale=0.1,
-            active_flips=0.0
         )
 
         self.assertEqual(len(population), 3)
@@ -667,8 +664,6 @@ class TestLoRAEvolution(unittest.TestCase):
                 "parents": [baseline_ind_id],
                 "offspring_size": 3,
                 "noise_scale": 0.05,
-                # Single-gene genomes would flip on every child; flips are covered by unit tests
-                "active_flips": 0.0,
                 "generation_context": {
                     "operation": "generate",
                     "prompt": "Test Prompt"
@@ -848,7 +843,6 @@ class TestLoRAEvolution(unittest.TestCase):
                 "parents": [baseline_ind_id],
                 "offspring_size": 2,
                 "noise_scale": 0.05,
-                "active_flips": 1.0
             }
             resp = client.post("/scatter_evolution", json=scatter_payload)
             self.assertEqual(resp.status_code, 202)
@@ -1036,7 +1030,6 @@ class TestLoRAEvolution(unittest.TestCase):
                 "parents": [baseline_ind_id],
                 "offspring_size": 2,
                 "noise_scale": 0.05,
-                "active_flips": 1.0
             }
             resp = client.post("/execute_operation", json=payload)
             self.assertEqual(resp.status_code, 202)
@@ -1147,13 +1140,12 @@ class TestLoRAEvolution(unittest.TestCase):
             g.add_element(parent_ind)
             g.save()
 
-            # Run scatter task with 0 noise and 0 flip prob (yielding identical genome)
+            # Run scatter task with 0 noise (yielding identical genome)
             scatter_evolution_task(
                 parent_job_id="test_dup_scatter",
                 parent_ids=[parent_uid],
                 offspring_size=2,
                 noise_scale=0.0,
-                active_flips=0.0,
                 mutation_rate=0.0,
                 generation_context={},
                 generate_exemplars=False,

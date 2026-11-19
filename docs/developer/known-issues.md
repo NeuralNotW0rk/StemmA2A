@@ -22,8 +22,6 @@ Delete each entry once it is resolved.
   | Parameter | Form | Backend |
   |---|---|---|
   | scatter offspring_size | 10 | 5 |
-  | scatter active_flips | 0.0 | 1.0 |
-  | recombine mutation_rate | 0.01 | 0.1 |
   | generate_exemplars | true | false |
 
 - **"Exemplar" has two meanings.** It is an individual's rendered output, and also Diffracture's

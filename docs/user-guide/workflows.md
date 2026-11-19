@@ -101,8 +101,6 @@ This is StemmA2A's main loop. You evolve **changes to the model**, judged by ear
 
 **Tips**
 
-- Once a lineage has some history, turn **Expected On/Off Toggles** up to about 1. Toggles switch
-  whole layers on or off, which can produce larger jumps.
 - An individual marked **[Duplicate]** produced exactly the same output as its ancestor, so its
   mutation had no audible effect.
 - Use **Utilities → Hide Evolutionary Edges** when lineage edges clutter the view. Edges still show
